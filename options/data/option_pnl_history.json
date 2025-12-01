@@ -1,0 +1,24 @@
+[
+  {
+    "symbol": "BANKNIFTY25D1901800CE",
+    "entry_premium": 99.5,
+    "exit_premium": 101.5,
+    "quantity": 1,
+    "pnl": 2.0,
+    "pnl_percent": 2.0100502512562812,
+    "duration": 0.003799,
+    "exit_reason": "TARGET",
+    "closed_at": "2025-12-01T14:05:58.818157"
+  },
+  {
+    "symbol": "BANKNIFTY25D1901800CE",
+    "entry_premium": 99.5,
+    "exit_premium": 101.5,
+    "quantity": 1,
+    "pnl": 2.0,
+    "pnl_percent": 2.0100502512562812,
+    "duration": 0.004,
+    "exit_reason": "TARGET",
+    "closed_at": "2025-12-01T14:06:21.673131"
+  }
+]

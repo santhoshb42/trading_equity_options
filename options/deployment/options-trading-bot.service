@@ -1,0 +1,53 @@
+[Unit]
+Description=Options Trading Bot with Webhook Server (Port 8081)
+Documentation=https://github.com/santhosh/options-trading-bot
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/root/santhosh/trading/options
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/options
+Environment=PATH=/root/santhosh/trading/options/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/root/santhosh/trading/options
+Environment=OPTIONS_WEBHOOK_PORT=8081
+Environment=TRADING_MODE=PAPER
+ExecStart=/usr/bin/python3 /root/santhosh/trading/options/main.py
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Make it INDESTRUCTIBLE
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=10
+
+# Resource protection
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=80%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/root/santhosh/trading/options
+ReadWritePaths=/var/log
+ReadWritePaths=/tmp
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=options-trading-bot
+
+# Auto-restart on failure
+RestartPreventExitStatus=
+SuccessExitStatus=0 1 SIGTERM SIGKILL
+
+[Install]
+WantedBy=multi-user.target
+Alias=optbot.service

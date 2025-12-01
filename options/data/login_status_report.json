@@ -1,0 +1,22 @@
+{
+  "timestamp": "2025-11-30T14:48:03.564173",
+  "bot_type": "Options Trading Bot",
+  "credentials": {
+    "api_key_set": true,
+    "client_code_set": true,
+    "password_set": true,
+    "totp_set": true
+  },
+  "trading_mode": "PAPER",
+  "webhook": {
+    "port": "8081",
+    "endpoint": "/webhook/options"
+  },
+  "capital": {
+    "max": 50000.0,
+    "per_trade": 5000.0,
+    "max_slots": 3,
+    "reserve": 5000.0
+  },
+  "authenticated": true
+}
