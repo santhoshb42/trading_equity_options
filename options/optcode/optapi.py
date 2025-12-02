@@ -147,6 +147,73 @@ def create_options_api_app():
         except Exception as e:
             return jsonify({'error': str(e)}), 500
     
+    # ==========================================================================
+    # Market Data Endpoints (NEW)
+    # ==========================================================================
+    
+    @app.route('/market/ltp/<symbol>', methods=['GET'])
+    def get_ltp_endpoint(symbol: str):
+        """Get LTP for a symbol (options contract or underlying)"""
+        try:
+            exchange = request.args.get('exchange', 'NFO')
+            ltp = state['broker'].get_ltp(symbol, exchange)
+            
+            if ltp is not None:
+                return jsonify({
+                    'symbol': symbol,
+                    'ltp': ltp,
+                    'exchange': exchange,
+                    'timestamp': datetime.now().isoformat()
+                }), 200
+            else:
+                return jsonify({'error': 'LTP not available'}), 404
+        except Exception as e:
+            logger.error(f"LTP_ENDPOINT: ERROR | {symbol} | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/market/data/<symbol>', methods=['GET'])
+    def get_market_data_endpoint(symbol: str):
+        """Get comprehensive market data for a symbol"""
+        try:
+            exchange = request.args.get('exchange', 'NFO')
+            data = state['broker'].get_market_data(symbol, exchange)
+            
+            if data:
+                return jsonify({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': data
+                }), 200
+            else:
+                return jsonify({'error': 'Market data not available'}), 404
+        except Exception as e:
+            logger.error(f"MARKET_DATA_ENDPOINT: ERROR | {symbol} | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/market/indicators/<symbol>', methods=['GET'])
+    def get_indicators_endpoint(symbol: str):
+        """Get technical indicators (RSI, ATR) for underlying symbol"""
+        try:
+            exchange = request.args.get('exchange', 'NSE')
+            period_rsi = int(request.args.get('rsi_period', 14))
+            period_atr = int(request.args.get('atr_period', 14))
+            
+            indicators = state['broker'].calculate_technical_indicators(
+                symbol, exchange, period_rsi, period_atr
+            )
+            
+            if indicators:
+                return jsonify({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'indicators': indicators
+                }), 200
+            else:
+                return jsonify({'error': 'Indicators not available'}), 404
+        except Exception as e:
+            logger.error(f"INDICATORS_ENDPOINT: ERROR | {symbol} | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
     # Store state for access in routes
     app.options_state = state
     
@@ -216,7 +283,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # Fetch option chain
         logger.debug(f"ALERT_PROCESS: FETCHING_CHAIN | underlying={underlying}")
         expiry = state['broker'].get_next_expiry(underlying)
-        chain = state['broker'].fetch_option_chain(underlying, expiry)
+        alert_price = float(alert.get('price', 0))
+        chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
         
         if not chain:
             logger.error(f"ALERT_PROCESS: CHAIN_FAILED | underlying={underlying} | expiry={expiry}")
@@ -230,8 +298,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: CHAIN_OK | contracts={len(chain.contracts)} | atm={chain.atm_strike}")
         
         # Get ATM contracts with offset
+        # Use alert's price as current price for ATM calculation (already extracted above)
         contract_type = processed['recommended_contract']
-        ce, pe = chain.get_atm_contracts(chain.atm_strike, processed['strike_offset']) or (None, None)
+        ce, pe = chain.get_atm_contracts(alert_price, processed['strike_offset']) or (None, None)
         
         if not ce or not pe:
             logger.error(f"ALERT_PROCESS: NO_ATM_CONTRACTS | symbol={symbol} | ce={ce is not None} | pe={pe is not None}")

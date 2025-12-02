@@ -16,10 +16,13 @@ from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 
 try:
-    from smartapi import SmartConnect, SmartWebSocketV2
+    from SmartApi import SmartConnect, SmartWebSocketV2
 except ImportError:
-    SmartConnect = None
-    SmartWebSocketV2 = None
+    try:
+        from smartapi import SmartConnect, SmartWebSocketV2
+    except ImportError:
+        SmartConnect = None
+        SmartWebSocketV2 = None
 
 from .optconfig import AngelOneConfig, OptionsTradingConfig, BASE_DIR, DevConfig
 from .ce_extractor import (
@@ -188,6 +191,13 @@ class AngelOneOptionsBroker:
         # CE/PE extractor for symbol generation
         self.ce_extractor = get_ce_extractor()
         
+        # Mock spot prices for paper trading
+        self.spot_prices = {
+            'BANKNIFTY': 47000,
+            'NIFTY': 23500,
+            'FINNIFTY': 22000,
+        }
+        
         # Positions tracking
         self.option_positions: Dict[str, Dict[str, Any]] = {}  # {symbol: position_data}
     
@@ -201,13 +211,11 @@ class AngelOneOptionsBroker:
             self.authenticated = True
             return True
         
-        # PAPER mode only - skip actual authentication
+        # PAPER mode: Authenticate to fetch LIVE data (LTP, IV, Greeks)
+        # Only difference: orders won't be placed to broker
         if OptionsTradingConfig.TRADING_MODE == "PAPER":
-            logger.info("BROKER_AUTHENTICATE: PAPER mode - skipping live authentication")
-            print(f"✅ Options broker: PAPER mode (simulated)")
-            self.authenticated = True
-            self.last_auth_time = datetime.now()
-            return True
+            logger.info("BROKER_AUTHENTICATE: PAPER mode - authenticating for LIVE data fetching")
+            print(f"✅ Options broker: PAPER mode (LIVE data, simulated orders)")
         
         try:
             logger.debug("BROKER_AUTHENTICATE: Starting live authentication")
@@ -247,30 +255,35 @@ class AngelOneOptionsBroker:
             print(f"❌ Options broker auth error: {str(e)}")
             return False
     
-    def fetch_option_chain(self, underlying: str, expiry: str) -> Optional[OptionChain]:
+    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
         """
         Fetch complete option chain for underlying and expiry.
         With rate limiting to prevent AngelOne API throttling.
         
         Underlying: BANKNIFTY, NIFTY, FINNIFTY
         Expiry: YYYY-MM-DD
+        Current_price: Optional current spot price to center strikes around (for PAPER mode)
         """
         # Get rate limiter instance
         rate_limiter = get_options_rate_limiter()
         
-        logger.debug(f"CHAIN_FETCH: {underlying} | expiry={expiry}")
+        logger.debug(f"CHAIN_FETCH: {underlying} | expiry={expiry} | current_price={current_price}")
         
         try:
             key = (underlying, expiry)
             
-            # Check cache (valid for 30 minutes)
-            if key in self.option_chains:
+            # In LIVE mode: cache chains for 30 minutes (broker data is static)
+            # In PAPER mode with dynamic prices: don't cache (each alert price needs fresh chain)
+            should_use_cache = OptionsTradingConfig.TRADING_MODE == "LIVE" or current_price is None
+            
+            # Check cache (valid for 30 minutes in LIVE mode)
+            if should_use_cache and key in self.option_chains:
                 last_update = self.chain_last_updated.get(key)
                 if last_update and (datetime.now() - last_update).total_seconds() < 1800:
                     logger.debug(f"CHAIN_FETCH: Using cached chain | {underlying} {expiry}")
                     return self.option_chains[key]
             
-            logger.info(f"CHAIN_FETCH: Fetching chain | {underlying} {expiry}")
+            logger.info(f"CHAIN_FETCH: Fetching chain | {underlying} {expiry} | cache_enabled={should_use_cache}")
             
             # Wait for rate limit permission (with timeout)
             if not rate_limiter.wait_for_call_permission(timeout=30.0):
@@ -296,17 +309,20 @@ class AngelOneOptionsBroker:
             
             # PAPER mode: generate mock chain
             if OptionsTradingConfig.TRADING_MODE == "PAPER":
-                chain = self._create_mock_option_chain(underlying, expiry)
+                chain = self._create_mock_option_chain(underlying, expiry, current_price)
                 logger.debug(f"CHAIN_FETCH: Generated mock chain | contracts={len(chain.contracts)}")
             else:
                 chain = self._fetch_from_angel(underlying, expiry)
                 logger.debug(f"CHAIN_FETCH: Fetched from Angel One | contracts={len(chain.contracts) if chain else 0}")
             
             if chain:
-                self.option_chains[key] = chain
-                self.chain_last_updated[key] = datetime.now()
-                self._cache_chain(chain)
-                logger.info(f"CHAIN_FETCH: SUCCESS | {underlying} | strikes={len(set(s for s, _ in chain.contracts.keys()))}")
+                # In LIVE mode: cache chain to memory for faster retrieval
+                # In PAPER mode with dynamic prices: only keep in memory for this request
+                if should_use_cache:
+                    self.option_chains[key] = chain
+                    self.chain_last_updated[key] = datetime.now()
+                    self._cache_chain(chain)
+                logger.info(f"CHAIN_FETCH: SUCCESS | {underlying} | strikes={len(set(s for s, _ in chain.contracts.keys()))} | cached={should_use_cache}")
             else:
                 logger.warning(f"CHAIN_FETCH: FAILED | {underlying} {expiry}")
                 rate_limiter.record_call("fetch_chain", False)
@@ -323,13 +339,21 @@ class AngelOneOptionsBroker:
         # For now, return None (would be implemented with real API)
         return None
     
-    def _create_mock_option_chain(self, underlying: str, expiry: str) -> OptionChain:
-        """Create mock option chain for PAPER mode testing using CE extractor"""
+    def _create_mock_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> OptionChain:
+        """Create mock option chain for PAPER mode testing using CE extractor
+        
+        Args:
+            underlying: Stock or index symbol
+            expiry: Expiry date YYYY-MM-DD
+            current_price: Current market price to center strikes around (if None, uses configured spot)
+        """
         chain = OptionChain(underlying, expiry)
         
         # Use CE extractor to generate realistic contracts
+        # Generate wider range of strikes (31 strikes) to support various alert prices
+        # In real trading, broker APIs return full chains; this simulates that
         generator = OptionChainGenerator()
-        contracts_data = generator.generate_chain(underlying, expiry, num_strikes=15)
+        contracts_data = generator.generate_chain(underlying, expiry, num_strikes=31, center_price=current_price)
         
         # Mock spot prices for reference
         spot_prices = {
@@ -348,7 +372,11 @@ class AngelOneOptionsBroker:
             'SJVN': 80,
         }
         
-        spot = spot_prices.get(underlying, 20000)
+        # Use provided current_price or fall back to configured spot price
+        if current_price and current_price > 0:
+            spot = current_price
+        else:
+            spot = spot_prices.get(underlying, 20000)
         
         # Add contracts to chain
         for contract_data in contracts_data:
@@ -459,12 +487,13 @@ class AngelOneOptionsBroker:
             # Record the API call attempt
             rate_limiter.record_call("place_order", True)
             
-            # PAPER mode: generate mock order ID
+            # PAPER mode: ONLY log order, don't place to broker
+            # Everything else (LTP, IV, Greeks, monitoring) uses LIVE data
             if OptionsTradingConfig.TRADING_MODE == "PAPER":
                 order_id = f"OPT_{int(time.time())}_{symbol}_{action}"
                 logger.info(f"ORDER_PLACE: PAPER | {symbol} | {action} | qty={quantity} | premium={price:.2f} | order_id={order_id}")
-                print(f"📝 [PAPER] Options order placed: {order_id}")
-                print(f"   Symbol: {symbol}, Action: {action}, Qty: {quantity}, Premium: ₹{price:.2f}")
+                print(f"📝 [PAPER] Options order: {action} {quantity}x {symbol} @ ₹{price:.2f}")
+                print(f"   Order ID: {order_id} (not sent to broker)")
                 log_broker_action("PLACE_ORDER", symbol, {
                     'action': action,
                     'quantity': quantity,
@@ -475,9 +504,46 @@ class AngelOneOptionsBroker:
                 })
                 return order_id
             
-            # Live trading disabled
-            logger.error(f"ORDER_PLACE: Live trading disabled | symbol={symbol}")
-            return None
+            # LIVE mode: Place actual order to broker
+            try:
+                order_params = {
+                    "variety": "NORMAL",
+                    "tradingsymbol": symbol,
+                    "symboltoken": self.get_instrument_token(symbol, "NFO"),
+                    "transactiontype": action,
+                    "exchange": "NFO",
+                    "ordertype": order_type,
+                    "producttype": product_type,
+                    "duration": "DAY",
+                    "quantity": str(quantity)
+                }
+                
+                if order_type == "LIMIT" and price > 0:
+                    order_params["price"] = str(price)
+                
+                response = self.smart_api.placeOrder(order_params)
+                
+                if response and response.get('status'):
+                    order_id = response['data']['orderid']
+                    logger.info(f"ORDER_PLACE: LIVE | {symbol} | {action} | qty={quantity} | order_id={order_id}")
+                    print(f"✅ [LIVE] Options order placed: {order_id}")
+                    log_broker_action("PLACE_ORDER", symbol, {
+                        'action': action,
+                        'quantity': quantity,
+                        'price': price,
+                        'order_id': order_id,
+                        'order_type': order_type,
+                        'rate_limited': False
+                    })
+                    return order_id
+                else:
+                    logger.error(f"ORDER_PLACE: LIVE FAILED | {symbol} | response={response}")
+                    print(f"❌ [LIVE] Order placement failed: {response.get('message')}")
+                    return None
+            except Exception as live_err:
+                logger.error(f"ORDER_PLACE: LIVE ERROR | {symbol} | {str(live_err)}")
+                print(f"❌ [LIVE] Error placing order: {str(live_err)}")
+                return None
         
         except Exception as e:
             logger.error(f"ORDER_PLACE: ERROR | {symbol} | {str(e)}", symbol=symbol, action=action)
@@ -557,6 +623,211 @@ class AngelOneOptionsBroker:
             logger.error(f"CLOSE_POSITION: ERROR | {symbol} | {str(e)}")
             print(f"❌ Error closing options position: {str(e)}")
             return False
+    
+    def get_instrument_token(self, symbol: str, exchange: str = "NFO") -> Optional[str]:
+        """Get instrument token from CE extractor's instrument.json"""
+        try:
+            # Use CE extractor to lookup token
+            instruments = self.ce_extractor.instruments
+            if symbol in instruments:
+                return instruments[symbol].get('token', '')
+            
+            # Try with -EQ suffix for equity
+            if exchange == "NSE":
+                eq_symbol = f"{symbol}-EQ"
+                if eq_symbol in instruments:
+                    return instruments[eq_symbol].get('token', '')
+            
+            logger.warning(f"TOKEN_LOOKUP: Symbol not found | {symbol} | exchange={exchange}")
+            return None
+        except Exception as e:
+            logger.error(f"TOKEN_LOOKUP: ERROR | {symbol} | {str(e)}")
+            return None
+    
+    def get_ltp(self, symbol: str, exchange: str = "NFO") -> Optional[float]:
+        """
+        Get Last Traded Price (LTP) for any symbol with rate limiting.
+        Works for both options contracts and underlying stocks.
+        Fetches LIVE data in both PAPER and LIVE modes.
+        
+        Args:
+            symbol: Symbol name (e.g., BANKNIFTY25DEC47000CE or ASIANPAINT)
+            exchange: NFO for options, NSE for stocks
+        
+        Returns:
+            LTP or None if not available
+        """
+        # In PAPER mode, still fetch LIVE LTP from broker
+        # Only order placement is simulated
+        
+        if not self.authenticated:
+            logger.warning(f"LTP_FETCH: Not authenticated | {symbol}")
+            return self._get_mock_ltp(symbol)  # Fallback to mock if not authenticated
+        
+        try:
+            # Get rate limiter
+            rate_limiter = get_options_rate_limiter()
+            
+            # Wait for rate limit permission
+            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                logger.warning(f"LTP_FETCH: RATE_LIMITED | {symbol}")
+                return None
+            
+            # Get instrument token
+            token = self.get_instrument_token(symbol, exchange)
+            if not token:
+                logger.warning(f"LTP_FETCH: No token found | {symbol}")
+                return None
+            
+            # Fetch LTP from AngelOne
+            rate_limiter.record_call("ltp_fetch", True)
+            ltp_data = self.smart_api.ltpData(exchange, symbol, token)
+            
+            if ltp_data and ltp_data.get('status'):
+                ltp = float(ltp_data['data']['ltp'])
+                logger.debug(f"LTP_FETCH: SUCCESS | {symbol} | ltp=₹{ltp:.2f}")
+                return ltp
+            else:
+                logger.warning(f"LTP_FETCH: FAILED | {symbol} | response={ltp_data}")
+                rate_limiter.record_call("ltp_fetch", False)
+                return None
+            
+        except Exception as e:
+            logger.error(f"LTP_FETCH: ERROR | {symbol} | {str(e)}")
+            rate_limiter = get_options_rate_limiter()
+            rate_limiter.record_call("ltp_fetch", False)
+            return None
+    
+    def _get_mock_ltp(self, symbol: str) -> float:
+        """Generate mock LTP for paper trading"""
+        # For options contracts, extract strike and calculate realistic premium
+        parsed = OptionSymbolFormat.parse_symbol(symbol)
+        if parsed:
+            # Options contract
+            strike = parsed['strike']
+            contract_type = parsed['contract_type']
+            underlying = parsed['underlying']
+            
+            # Get mock spot price
+            spot = self.spot_prices.get(underlying, strike)
+            
+            # Calculate ITM/OTM offset
+            if contract_type == 'CE':
+                itm_offset = max(0, spot - strike)
+            else:  # PE
+                itm_offset = max(0, strike - spot)
+            
+            # Mock premium calculation
+            intrinsic = max(0, itm_offset)
+            time_value = 50 * (1 - min(abs(spot - strike) / spot, 0.5))
+            premium = intrinsic + time_value
+            
+            return premium
+        else:
+            # Underlying stock/index - return configured spot price
+            return self.spot_prices.get(symbol, 1000.0)
+    
+    def get_market_data(self, symbol: str, exchange: str = "NFO") -> Optional[Dict[str, Any]]:
+        """
+        Get comprehensive market data including LTP, IV, OI, volume, bid/ask.
+        Fetches LIVE data in both PAPER and LIVE modes.
+        
+        Args:
+            symbol: Symbol name
+            exchange: NFO for options, NSE for stocks
+        
+        Returns:
+            Dict with market data or None
+        """
+        # In PAPER mode, still fetch LIVE market data from broker
+        # Only order placement is simulated
+        
+        if not self.authenticated:
+            logger.warning(f"MARKET_DATA: Not authenticated | {symbol}")
+            return self._get_mock_market_data(symbol)  # Fallback to mock if not authenticated
+        
+        try:
+            # Get rate limiter
+            rate_limiter = get_options_rate_limiter()
+            
+            # Wait for rate limit permission
+            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                logger.warning(f"MARKET_DATA: RATE_LIMITED | {symbol}")
+                return None
+            
+            # Get instrument token
+            token = self.get_instrument_token(symbol, exchange)
+            if not token:
+                logger.warning(f"MARKET_DATA: No token found | {symbol}")
+                return None
+            
+            # Fetch market data from AngelOne (using getMarketData or similar API)
+            rate_limiter.record_call("market_data", True)
+            
+            # Note: SmartAPI doesn't have direct getMarketData, use ltpData as fallback
+            ltp_data = self.smart_api.ltpData(exchange, symbol, token)
+            
+            if ltp_data and ltp_data.get('status'):
+                data = ltp_data['data']
+                market_data = {
+                    'ltp': float(data.get('ltp', 0)),
+                    'open': float(data.get('open', 0)),
+                    'high': float(data.get('high', 0)),
+                    'low': float(data.get('low', 0)),
+                    'close': float(data.get('close', 0)),
+                    'volume': int(data.get('volume', 0)),
+                    'timestamp': datetime.now().isoformat()
+                }
+                logger.debug(f"MARKET_DATA: SUCCESS | {symbol} | ltp=₹{market_data['ltp']:.2f}")
+                return market_data
+            else:
+                logger.warning(f"MARKET_DATA: FAILED | {symbol}")
+                rate_limiter.record_call("market_data", False)
+                return None
+            
+        except Exception as e:
+            logger.error(f"MARKET_DATA: ERROR | {symbol} | {str(e)}")
+            rate_limiter = get_options_rate_limiter()
+            rate_limiter.record_call("market_data", False)
+            return None
+    
+    def _get_mock_market_data(self, symbol: str) -> Dict[str, Any]:
+        """Generate mock market data for paper trading"""
+        ltp = self._get_mock_ltp(symbol)
+        
+        return {
+            'ltp': ltp,
+            'open': ltp * 0.99,
+            'high': ltp * 1.02,
+            'low': ltp * 0.98,
+            'close': ltp,
+            'volume': 100000,
+            'oi': 50000,  # Open Interest for options
+            'bid': ltp * 0.995,
+            'ask': ltp * 1.005,
+            'iv': 20.0,  # Mock IV of 20%
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def calculate_technical_indicators(self, symbol: str, exchange: str = "NSE", 
+                                      period_rsi: int = 14, period_atr: int = 14) -> Optional[Dict[str, float]]:
+        """
+        Calculate RSI and ATR for underlying symbol.
+        Requires historical data fetching (not implemented yet - placeholder).
+        Returns mock values until historical data API is implemented.
+        
+        Returns:
+            Dict with RSI, ATR values or None
+        """
+        logger.info(f"INDICATORS: Calculation requested | {symbol} | RSI period={period_rsi} | ATR period={period_atr}")
+        
+        # TODO: Implement historical data fetching and indicator calculation
+        # For now, return mock values (both PAPER and LIVE need historical API)
+        return {
+            'rsi': 55.0,  # Mock RSI - needs historical data API
+            'atr': 50.0,  # Mock ATR - needs historical data API
+            'calculated_at': datetime.now().isoformat()
+        }
 
 # =============================================================================
 # Global broker instance (singleton)

@@ -619,3 +619,844 @@
 2025-12-02 11:34:59,646 - werkzeug - INFO - 212.83.150.6 - - [02/Dec/2025 11:34:59] "[33mGET /admin/config.php HTTP/1.0[0m" 404 -
 2025-12-02 11:57:35,590 - werkzeug - ERROR - 79.124.40.174 - - [02/Dec/2025 11:57:35] code 400, message Bad request version ('À\x13À')
 2025-12-02 11:57:35,608 - werkzeug - INFO - 79.124.40.174 - - [02/Dec/2025 11:57:35] "[31m[1m\x16\x03\x01\x05¨\x01\x00\x05¤\x03\x03rE\x05\x15È\x040\x14eør\x98£\x84ø\x065ÃÏýö\x992´\x90y½\x8b\x1eÀ*ò z®¿¡\x9dR¥ÞoÕÁV\x0dFÇ\x0c\x09ÅÆÇÈå\x99Zs\x1bnG\x00k\x05û\x00\x1aÀ+À/À,À0Ì©Ì¨À\x09À\x13À[0m" 400 -
+2025-12-02 12:05:57,897 - werkzeug - INFO - 34.77.152.43 - - [02/Dec/2025 12:05:57] "GET / HTTP/1.1" 200 -
+2025-12-02 12:25:57,415 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 12:25:57] "GET / HTTP/1.1" 200 -
+2025-12-02 12:32:13,955 - werkzeug - INFO - 43.165.135.242 - - [02/Dec/2025 12:32:13] "GET / HTTP/1.1" 200 -
+2025-12-02 12:36:20,504 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:36:20,505 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#10)
+2025-12-02 12:36:20,506 - __main__ - INFO - ======================================================================
+2025-12-02 12:36:20,506 - __main__ - INFO - Symbol: RELIANCE
+2025-12-02 12:36:20,506 - __main__ - INFO - Action: BUY
+2025-12-02 12:36:20,506 - __main__ - INFO - Price: 2850.50
+2025-12-02 12:36:20,507 - __main__ - INFO - Timestamp: 2025-12-02T12:36:20.507180
+2025-12-02 12:36:20,508 - __main__ - INFO - Payload: {
+  "timestamp": "2025-12-02T12:36:20.486553",
+  "source": "TradingView",
+  "symbol": "RELIANCE",
+  "action": "BUY",
+  "price": "2850.50",
+  "confidence": "92.50",
+  "score": "95.00",
+  "rsi": "72.50",
+  "atr": "8.25",
+  "adx": "35.50",
+  "volume": "2500000"
+}
+2025-12-02 12:36:20,509 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:36:20,509 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:36:20,590 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:36:20,597 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:36:20,598 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:36:20,599 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:36:20] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:36:20,605 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:36:20,605 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#11)
+2025-12-02 12:36:20,606 - __main__ - INFO - ======================================================================
+2025-12-02 12:36:20,606 - __main__ - INFO - Symbol: GLENMARK
+2025-12-02 12:36:20,606 - __main__ - INFO - Action: SELL
+2025-12-02 12:36:20,607 - __main__ - INFO - Price: 1950.00
+2025-12-02 12:36:20,607 - __main__ - INFO - Timestamp: 2025-12-02T12:36:20.607079
+2025-12-02 12:36:20,608 - __main__ - INFO - Payload: {
+  "timestamp": "2025-12-02T12:36:20.486575",
+  "source": "TradingView",
+  "symbol": "GLENMARK",
+  "action": "SELL",
+  "price": "1950.00",
+  "confidence": "88.75",
+  "score": "92.00",
+  "rsi": "28.50",
+  "atr": "9.75",
+  "adx": "40.25",
+  "volume": "1800000"
+}
+2025-12-02 12:36:20,608 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:36:20,608 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:36:20,627 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 88.75% < 90%"}
+
+2025-12-02 12:36:20,633 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:36:20,634 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 12:36:20,635 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:36:20] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 12:36:24,935 - werkzeug - INFO - 103.203.57.3 - - [02/Dec/2025 12:36:24] "GET / HTTP/1.1" 200 -
+2025-12-02 12:36:59,507 - werkzeug - INFO - 193.142.147.209 - - [02/Dec/2025 12:36:59] "[33mGET /cgi-bin/luci/;stok=/locale HTTP/1.1[0m" 404 -
+2025-12-02 12:38:08,848 - werkzeug - INFO - 45.8.22.165 - - [02/Dec/2025 12:38:08] "[33mCONNECT www.google.com:443 HTTP/1.1[0m" 404 -
+2025-12-02 12:38:09,302 - werkzeug - INFO - 45.8.22.165 - - [02/Dec/2025 12:38:09] "[33mCONNECT www.google.com:443 HTTP/1.1[0m" 404 -
+2025-12-02 12:38:35,734 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:38:35] "GET /health HTTP/1.1" 200 -
+2025-12-02 12:40:47,929 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:40:47] "GET /stats HTTP/1.1" 200 -
+2025-12-02 12:44:06,814 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:44:06,815 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#12)
+2025-12-02 12:44:06,815 - __main__ - INFO - ======================================================================
+2025-12-02 12:44:06,816 - __main__ - INFO - Symbol: RELIANCE
+2025-12-02 12:44:06,816 - __main__ - INFO - Action: BUY
+2025-12-02 12:44:06,816 - __main__ - INFO - Price: 2950.0
+2025-12-02 12:44:06,817 - __main__ - INFO - Timestamp: 2025-12-02T12:44:06.817088
+2025-12-02 12:44:06,817 - __main__ - INFO - Payload: {
+  "symbol": "RELIANCE",
+  "action": "BUY",
+  "price": 2950.0,
+  "confidence": 95.5,
+  "timestamp": "2025-12-02T12:44:06.811786"
+}
+2025-12-02 12:44:06,817 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:44:06,817 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:44:06,826 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:44:06,831 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:44:06,832 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:44:06,832 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:44:06] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:44:06,837 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:44:06,837 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#13)
+2025-12-02 12:44:06,837 - __main__ - INFO - ======================================================================
+2025-12-02 12:44:06,837 - __main__ - INFO - Symbol: INFOSYS
+2025-12-02 12:44:06,837 - __main__ - INFO - Action: BUY
+2025-12-02 12:44:06,838 - __main__ - INFO - Price: 1850.5
+2025-12-02 12:44:06,838 - __main__ - INFO - Timestamp: 2025-12-02T12:44:06.838360
+2025-12-02 12:44:06,838 - __main__ - INFO - Payload: {
+  "symbol": "INFOSYS",
+  "action": "BUY",
+  "price": 1850.5,
+  "confidence": 92.3,
+  "timestamp": "2025-12-02T12:44:06.811803"
+}
+2025-12-02 12:44:06,838 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:44:06,838 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:44:06,847 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:44:06,853 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:44:06,853 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:44:06,854 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:44:06] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:47:57,841 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:47:57] "GET /health HTTP/1.1" 200 -
+2025-12-02 12:47:58,324 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:47:58,325 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#14)
+2025-12-02 12:47:58,325 - __main__ - INFO - ======================================================================
+2025-12-02 12:47:58,325 - __main__ - INFO - Symbol: NIFTY50
+2025-12-02 12:47:58,326 - __main__ - INFO - Action: BUY
+2025-12-02 12:47:58,326 - __main__ - INFO - Price: 24800.0
+2025-12-02 12:47:58,326 - __main__ - INFO - Timestamp: 2025-12-02T12:47:58.326097
+2025-12-02 12:47:58,326 - __main__ - INFO - Payload: {
+  "symbol": "NIFTY50",
+  "action": "BUY",
+  "price": 24800.0,
+  "confidence": 98.5,
+  "timestamp": "2025-12-02T12:47:58.306314"
+}
+2025-12-02 12:47:58,326 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:47:58,326 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:47:58,349 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:47:58,362 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:47:58,363 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:47:58,364 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:47:58] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:51:20,597 - werkzeug - INFO - 193.142.147.209 - - [02/Dec/2025 12:51:20] "GET / HTTP/1.1" 200 -
+2025-12-02 12:52:15,330 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:52:15,330 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#15)
+2025-12-02 12:52:15,330 - __main__ - INFO - ======================================================================
+2025-12-02 12:52:15,330 - __main__ - INFO - Symbol: RELIANCE
+2025-12-02 12:52:15,331 - __main__ - INFO - Action: BUY
+2025-12-02 12:52:15,331 - __main__ - INFO - Price: 2950.0
+2025-12-02 12:52:15,331 - __main__ - INFO - Timestamp: 2025-12-02T12:52:15.331730
+2025-12-02 12:52:15,331 - __main__ - INFO - Payload: {
+  "symbol": "RELIANCE",
+  "action": "BUY",
+  "price": 2950.0,
+  "confidence": 95.5,
+  "timestamp": "2025-12-02T12:52:15.326607"
+}
+2025-12-02 12:52:15,331 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:52:15,331 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:52:15,350 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:52:15,357 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:52:15,357 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:52:15,357 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:52:15] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:52:15,363 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:52:15,363 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#16)
+2025-12-02 12:52:15,363 - __main__ - INFO - ======================================================================
+2025-12-02 12:52:15,363 - __main__ - INFO - Symbol: INFOSYS
+2025-12-02 12:52:15,364 - __main__ - INFO - Action: BUY
+2025-12-02 12:52:15,364 - __main__ - INFO - Price: 1850.5
+2025-12-02 12:52:15,364 - __main__ - INFO - Timestamp: 2025-12-02T12:52:15.364432
+2025-12-02 12:52:15,364 - __main__ - INFO - Payload: {
+  "symbol": "INFOSYS",
+  "action": "BUY",
+  "price": 1850.5,
+  "confidence": 92.3,
+  "timestamp": "2025-12-02T12:52:15.326624"
+}
+2025-12-02 12:52:15,364 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:52:15,364 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:52:15,380 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:52:15,385 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:52:15,386 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:52:15,387 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:52:15] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:52:15,390 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:52:15,390 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#17)
+2025-12-02 12:52:15,391 - __main__ - INFO - ======================================================================
+2025-12-02 12:52:15,391 - __main__ - INFO - Symbol: NIFTY
+2025-12-02 12:52:15,391 - __main__ - INFO - Action: BUY
+2025-12-02 12:52:15,391 - __main__ - INFO - Price: 24800.0
+2025-12-02 12:52:15,391 - __main__ - INFO - Timestamp: 2025-12-02T12:52:15.391164
+2025-12-02 12:52:15,391 - __main__ - INFO - Payload: {
+  "symbol": "NIFTY",
+  "action": "BUY",
+  "price": 24800.0,
+  "confidence": 98.5,
+  "timestamp": "2025-12-02T12:52:15.326626"
+}
+2025-12-02 12:52:15,391 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:52:15,391 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:52:15,399 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:52:15,419 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:52:15,420 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:52:15,421 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:52:15] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:54:00,415 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:54:00,416 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#18)
+2025-12-02 12:54:00,416 - __main__ - INFO - ======================================================================
+2025-12-02 12:54:00,416 - __main__ - INFO - Symbol: RELIANCE
+2025-12-02 12:54:00,416 - __main__ - INFO - Action: BUY
+2025-12-02 12:54:00,416 - __main__ - INFO - Price: 2950.0
+2025-12-02 12:54:00,416 - __main__ - INFO - Timestamp: 2025-12-02T12:54:00.416199
+2025-12-02 12:54:00,416 - __main__ - INFO - Payload: {
+  "symbol": "RELIANCE",
+  "action": "BUY",
+  "price": 2950.0,
+  "confidence": 95.5,
+  "timestamp": "2025-12-02T12:54:00.412007"
+}
+2025-12-02 12:54:00,416 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:54:00,416 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:54:00,428 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:54:00,442 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:54:00,442 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:54:00,442 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:54:00] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:54:00,446 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:54:00,446 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#19)
+2025-12-02 12:54:00,447 - __main__ - INFO - ======================================================================
+2025-12-02 12:54:00,447 - __main__ - INFO - Symbol: INFOSYS
+2025-12-02 12:54:00,447 - __main__ - INFO - Action: BUY
+2025-12-02 12:54:00,447 - __main__ - INFO - Price: 1850.5
+2025-12-02 12:54:00,447 - __main__ - INFO - Timestamp: 2025-12-02T12:54:00.447809
+2025-12-02 12:54:00,448 - __main__ - INFO - Payload: {
+  "symbol": "INFOSYS",
+  "action": "BUY",
+  "price": 1850.5,
+  "confidence": 92.3,
+  "timestamp": "2025-12-02T12:54:00.412024"
+}
+2025-12-02 12:54:00,448 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:54:00,448 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:54:00,457 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:54:00,466 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:54:00,466 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:54:00,467 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:54:00] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:54:00,471 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:54:00,471 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#20)
+2025-12-02 12:54:00,472 - __main__ - INFO - ======================================================================
+2025-12-02 12:54:00,472 - __main__ - INFO - Symbol: NIFTY
+2025-12-02 12:54:00,472 - __main__ - INFO - Action: BUY
+2025-12-02 12:54:00,472 - __main__ - INFO - Price: 24800.0
+2025-12-02 12:54:00,472 - __main__ - INFO - Timestamp: 2025-12-02T12:54:00.472715
+2025-12-02 12:54:00,472 - __main__ - INFO - Payload: {
+  "symbol": "NIFTY",
+  "action": "BUY",
+  "price": 24800.0,
+  "confidence": 98.5,
+  "timestamp": "2025-12-02T12:54:00.412026"
+}
+2025-12-02 12:54:00,472 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:54:00,472 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:54:00,481 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:54:00,491 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:54:00,492 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:54:00,493 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:54:00] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:56:44,484 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:56:44,485 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#21)
+2025-12-02 12:56:44,486 - __main__ - INFO - ======================================================================
+2025-12-02 12:56:44,486 - __main__ - INFO - Symbol: TECHM
+2025-12-02 12:56:44,486 - __main__ - INFO - Action: BUY
+2025-12-02 12:56:44,486 - __main__ - INFO - Price: 1450.0
+2025-12-02 12:56:44,486 - __main__ - INFO - Timestamp: 2025-12-02T12:56:44.486201
+2025-12-02 12:56:44,486 - __main__ - INFO - Payload: {
+  "symbol": "TECHM",
+  "action": "BUY",
+  "price": 1450.0,
+  "confidence": 96.5,
+  "timestamp": "2025-12-02T12:56:44.480231"
+}
+2025-12-02 12:56:44,486 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:56:44,486 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:56:44,498 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:56:44,504 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:56:44,505 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:56:44,506 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:56:44] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 12:59:08,370 - __main__ - INFO - 
+======================================================================
+2025-12-02 12:59:08,370 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#22)
+2025-12-02 12:59:08,370 - __main__ - INFO - ======================================================================
+2025-12-02 12:59:08,370 - __main__ - INFO - Symbol: TECHM
+2025-12-02 12:59:08,370 - __main__ - INFO - Action: BUY
+2025-12-02 12:59:08,371 - __main__ - INFO - Price: 1450.0
+2025-12-02 12:59:08,371 - __main__ - INFO - Timestamp: 2025-12-02T12:59:08.371045
+2025-12-02 12:59:08,371 - __main__ - INFO - Payload: {
+  "symbol": "TECHM",
+  "action": "BUY",
+  "price": 1450.0,
+  "confidence": 96.5,
+  "timestamp": "2025-12-02T12:59:08.367502"
+}
+2025-12-02 12:59:08,371 - __main__ - INFO - ======================================================================
+
+2025-12-02 12:59:08,371 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 12:59:08,384 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 12:59:08,397 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 12:59:08,397 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 12:59:08,397 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 12:59:08] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 13:01:05,437 - werkzeug - INFO - 188.40.122.81 - - [02/Dec/2025 13:01:05] "GET / HTTP/1.1" 200 -
+2025-12-02 13:01:05,721 - werkzeug - INFO - 188.40.122.81 - - [02/Dec/2025 13:01:05] "GET / HTTP/1.1" 200 -
+2025-12-02 13:01:06,010 - werkzeug - INFO - 188.40.122.81 - - [02/Dec/2025 13:01:06] "GET / HTTP/1.1" 200 -
+2025-12-02 13:31:05,960 - __main__ - INFO - 
+======================================================================
+2025-12-02 13:31:05,972 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#23)
+2025-12-02 13:31:05,973 - __main__ - INFO - ======================================================================
+2025-12-02 13:31:05,973 - __main__ - INFO - Symbol: TECHM
+2025-12-02 13:31:05,973 - __main__ - INFO - Action: BUY
+2025-12-02 13:31:05,973 - __main__ - INFO - Price: 1460.0
+2025-12-02 13:31:05,973 - __main__ - INFO - Timestamp: 2025-12-02T13:31:05.973947
+2025-12-02 13:31:05,975 - __main__ - INFO - Payload: {
+  "symbol": "TECHM",
+  "action": "BUY",
+  "price": 1460.0,
+  "confidence": 96.5,
+  "timestamp": "2025-12-02T13:31:05.820183"
+}
+2025-12-02 13:31:05,976 - __main__ - INFO - ======================================================================
+
+2025-12-02 13:31:05,976 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 13:31:06,054 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 13:31:06,072 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 13:31:06,072 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 13:31:06,087 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 13:31:06] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 13:37:48,892 - __main__ - INFO - 
+======================================================================
+2025-12-02 13:37:48,894 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#24)
+2025-12-02 13:37:48,894 - __main__ - INFO - ======================================================================
+2025-12-02 13:37:48,894 - __main__ - INFO - Symbol: TECHM
+2025-12-02 13:37:48,894 - __main__ - INFO - Action: BUY
+2025-12-02 13:37:48,894 - __main__ - INFO - Price: 1460.0
+2025-12-02 13:37:48,894 - __main__ - INFO - Timestamp: 2025-12-02T13:37:48.894761
+2025-12-02 13:37:48,894 - __main__ - INFO - Payload: {
+  "symbol": "TECHM",
+  "action": "BUY",
+  "price": 1460.0,
+  "confidence": 96.5,
+  "timestamp": "2025-12-02T13:37:48.885568"
+}
+2025-12-02 13:37:48,894 - __main__ - INFO - ======================================================================
+
+2025-12-02 13:37:48,894 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 13:37:48,915 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 13:37:48,934 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 13:37:48,935 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 13:37:48,936 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 13:37:48] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 13:43:33,816 - __main__ - INFO - 
+======================================================================
+2025-12-02 13:43:33,817 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#25)
+2025-12-02 13:43:33,817 - __main__ - INFO - ======================================================================
+2025-12-02 13:43:33,817 - __main__ - INFO - Symbol: TECHM
+2025-12-02 13:43:33,817 - __main__ - INFO - Action: BUY
+2025-12-02 13:43:33,817 - __main__ - INFO - Price: N/A
+2025-12-02 13:43:33,817 - __main__ - INFO - Timestamp: 2025-12-02T13:43:33.817863
+2025-12-02 13:43:33,818 - __main__ - INFO - Payload: {
+  "alert_id": "TECHM_LIVE_TEST_1764663213",
+  "symbol": "TECHM",
+  "action": "BUY",
+  "entry_price": 1460.0,
+  "confidence": 96.5,
+  "strategy": "LIVE_MODE_VERIFICATION"
+}
+2025-12-02 13:43:33,819 - __main__ - INFO - ======================================================================
+
+2025-12-02 13:43:33,819 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 13:43:33,827 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Invalid price: 0.0"}
+
+2025-12-02 13:43:33,850 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 13:43:33,850 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 13:43:33,851 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 13:43:33] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 13:49:57,231 - __main__ - INFO - 
+======================================================================
+2025-12-02 13:49:57,233 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#26)
+2025-12-02 13:49:57,234 - __main__ - INFO - ======================================================================
+2025-12-02 13:49:57,234 - __main__ - INFO - Symbol: TECHM
+2025-12-02 13:49:57,234 - __main__ - INFO - Action: BUY
+2025-12-02 13:49:57,234 - __main__ - INFO - Price: N/A
+2025-12-02 13:49:57,234 - __main__ - INFO - Timestamp: 2025-12-02T13:49:57.234327
+2025-12-02 13:49:57,234 - __main__ - INFO - Payload: {
+  "alert_id": "TECHM_LIVE_TEST_1764663597",
+  "symbol": "TECHM",
+  "action": "BUY",
+  "entry_price": 1460.0,
+  "confidence": 96.5,
+  "strategy": "LIVE_MODE_VERIFICATION"
+}
+2025-12-02 13:49:57,234 - __main__ - INFO - ======================================================================
+
+2025-12-02 13:49:57,234 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 13:49:57,246 - __main__ - ERROR - ✗ Error forwarding to EQUITY BOT: HTTPConnectionPool(host='127.0.0.1', port=8080): Max retries exceeded with url: /webhook (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7b411feef110>: Failed to establish a new connection: [Errno 111] Connection refused'))
+2025-12-02 13:49:57,250 - __main__ - ERROR - ✗ Error forwarding to OPTIONS BOT: HTTPConnectionPool(host='127.0.0.1', port=8081): Max retries exceeded with url: /webhook/options (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7b411fec1640>: Failed to establish a new connection: [Errno 111] Connection refused'))
+2025-12-02 13:49:57,251 - __main__ - ERROR - ⚠️  Alert failed to forward to both bots!
+2025-12-02 13:49:57,252 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 13:49:57] "[35m[1mPOST /webhook HTTP/1.1[0m" 503 -
+2025-12-02 13:50:29,335 - __main__ - INFO - 
+======================================================================
+2025-12-02 13:50:29,335 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#27)
+2025-12-02 13:50:29,335 - __main__ - INFO - ======================================================================
+2025-12-02 13:50:29,335 - __main__ - INFO - Symbol: TECHM
+2025-12-02 13:50:29,335 - __main__ - INFO - Action: BUY
+2025-12-02 13:50:29,335 - __main__ - INFO - Price: N/A
+2025-12-02 13:50:29,335 - __main__ - INFO - Timestamp: 2025-12-02T13:50:29.335882
+2025-12-02 13:50:29,335 - __main__ - INFO - Payload: {
+  "alert_id": "TECHM_LIVE_1764663629",
+  "symbol": "TECHM",
+  "action": "BUY",
+  "entry_price": 1460.0,
+  "confidence": 96.5
+}
+2025-12-02 13:50:29,335 - __main__ - INFO - ======================================================================
+
+2025-12-02 13:50:29,336 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 13:50:29,344 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Invalid price: 0.0"}
+
+2025-12-02 13:50:29,360 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 13:50:29,360 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 13:50:29,362 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 13:50:29] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 13:51:12,621 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 13:51:12] "GET / HTTP/1.1" 200 -
+2025-12-02 14:13:27,916 - werkzeug - INFO - 192.159.99.180 - - [02/Dec/2025 14:13:27] "GET / HTTP/1.1" 200 -
+2025-12-02 14:41:27,384 - werkzeug - INFO - 161.248.178.208 - - [02/Dec/2025 14:41:27] "[33mGET /.env HTTP/1.1[0m" 404 -
+2025-12-02 14:41:27,560 - werkzeug - INFO - 161.248.178.208 - - [02/Dec/2025 14:41:27] "[31m[1mPOST / HTTP/1.1[0m" 405 -
+2025-12-02 14:43:23,928 - werkzeug - INFO - 193.142.147.209 - - [02/Dec/2025 14:43:23] "[33mGET /cgi-bin/luci/;stok=/locale HTTP/1.1[0m" 404 -
+2025-12-02 14:53:13,274 - werkzeug - ERROR - 93.174.93.12 - - [02/Dec/2025 14:53:13] code 400, message Bad request version ("¯nãY»bhlÿ(=':©\x82ÙoÈ¢×\x93\x98´ï\x80å¹\x90\x00(À")
+2025-12-02 14:53:13,275 - werkzeug - INFO - 93.174.93.12 - - [02/Dec/2025 14:53:13] "[31m[1m\x16\x03\x02\x01o\x01\x00\x01k\x03\x02RHÅ\x1a#÷:Nßâ´\x82/ÿ\x09T\x9f§Äy°hÆ\x13\x8c¤\x1c="á\x1a\x98 \x84´,\x85¯nãY»bhlÿ(=':©\x82ÙoÈ¢×\x93\x98´ï\x80å¹\x90\x00(À[0m" 400 -
+2025-12-02 15:06:47,342 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 15:06:47] "GET / HTTP/1.1" 200 -
+2025-12-02 15:33:42,724 - werkzeug - INFO - 103.99.196.17 - - [02/Dec/2025 15:33:42] "[33mGET /boaform/admin/formLogin?username=ec8&psd=ec8 HTTP/1.0[0m" 404 -
+2025-12-02 15:47:13,747 - werkzeug - ERROR - 64.62.197.47 - - [02/Dec/2025 15:47:13] code 400, message Bad HTTP/0.9 request type ('\x16\x03\x01\x00{\x01\x00\x00w\x03\x03¢TÞH\x97ÿv\x19Êê´\x8f½\x9bðv\x16V"6ä<+\'\x8c{\x99¿\x98í\x8a«\x00\x00\x1aÀ/À+À\x11À\x07À\x13À')
+2025-12-02 15:47:13,748 - werkzeug - INFO - 64.62.197.47 - - [02/Dec/2025 15:47:13] "[31m[1m\x16\x03\x01\x00{\x01\x00\x00w\x03\x03¢TÞH\x97ÿv\x19Êê´\x8f½\x9bðv\x16V"6ä<+'\x8c{\x99¿\x98í\x8a«\x00\x00\x1aÀ/À+À\x11À\x07À\x13À\x09À\x14À[0m" 400 -
+2025-12-02 15:58:22,354 - werkzeug - INFO - 213.209.157.254 - - [02/Dec/2025 15:58:22] "[33mGET /.git/index HTTP/1.1[0m" 404 -
+2025-12-02 16:21:35,092 - werkzeug - INFO - 192.159.99.101 - - [02/Dec/2025 16:21:35] "GET / HTTP/1.1" 200 -
+2025-12-02 16:22:55,565 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 16:22:55] "GET / HTTP/1.1" 200 -
+2025-12-02 16:24:35,051 - werkzeug - INFO - 185.242.226.112 - - [02/Dec/2025 16:24:35] "GET / HTTP/1.1" 200 -
+2025-12-02 17:39:09,599 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 17:39:09] "GET / HTTP/1.1" 200 -
+2025-12-02 17:43:29,687 - werkzeug - INFO - 20.65.193.234 - - [02/Dec/2025 17:43:29] "[33mGET /actuator/health HTTP/1.1[0m" 404 -
+2025-12-02 17:52:03,989 - werkzeug - INFO - 20.98.128.249 - - [02/Dec/2025 17:52:03] "GET / HTTP/1.1" 200 -
+2025-12-02 17:55:36,382 - __main__ - INFO - 
+======================================================================
+2025-12-02 17:55:36,382 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#28)
+2025-12-02 17:55:36,382 - __main__ - INFO - ======================================================================
+2025-12-02 17:55:36,382 - __main__ - INFO - Symbol: RELIANCE
+2025-12-02 17:55:36,382 - __main__ - INFO - Action: BUY
+2025-12-02 17:55:36,382 - __main__ - INFO - Price: N/A
+2025-12-02 17:55:36,383 - __main__ - INFO - Timestamp: 2025-12-02T17:55:36.383015
+2025-12-02 17:55:36,383 - __main__ - INFO - Payload: {
+  "alert_id": "LIVE_TEST_1764678336",
+  "symbol": "RELIANCE",
+  "action": "BUY",
+  "entry_price": 2900.0,
+  "confidence": 97.5,
+  "strategy": "LIVE_PAPER_VERIFICATION"
+}
+2025-12-02 17:55:36,383 - __main__ - INFO - ======================================================================
+
+2025-12-02 17:55:36,384 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 17:55:36,442 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Invalid price: 0.0"}
+
+2025-12-02 17:55:36,482 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 17:55:36,483 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 17:55:36,485 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 17:55:36] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 17:59:03,732 - __main__ - INFO - 
+======================================================================
+2025-12-02 17:59:03,733 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#29)
+2025-12-02 17:59:03,733 - __main__ - INFO - ======================================================================
+2025-12-02 17:59:03,733 - __main__ - INFO - Symbol: SBIN
+2025-12-02 17:59:03,733 - __main__ - INFO - Action: BUY
+2025-12-02 17:59:03,733 - __main__ - INFO - Price: N/A
+2025-12-02 17:59:03,733 - __main__ - INFO - Timestamp: 2025-12-02T17:59:03.733431
+2025-12-02 17:59:03,735 - __main__ - INFO - Payload: {
+  "alert_id": "FINAL_TEST_1764678543",
+  "symbol": "SBIN",
+  "action": "BUY",
+  "entry_price": 750.0,
+  "confidence": 95.0,
+  "strategy": "LIVE_MODE_TEST"
+}
+2025-12-02 17:59:03,737 - __main__ - INFO - ======================================================================
+
+2025-12-02 17:59:03,737 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 17:59:03,752 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Invalid price: 0.0"}
+
+2025-12-02 17:59:03,759 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 17:59:03,760 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 17:59:03,761 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 17:59:03] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:18:58,730 - werkzeug - INFO - 46.246.206.62 - - [02/Dec/2025 18:18:58] "GET / HTTP/1.1" 200 -
+2025-12-02 18:24:22,747 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:24:22] "[33mGET /status HTTP/1.1[0m" 404 -
+2025-12-02 18:24:34,048 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:24:34] "[33mGET /status HTTP/1.1[0m" 404 -
+2025-12-02 18:24:48,217 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:24:48] "GET /health HTTP/1.1" 200 -
+2025-12-02 18:25:13,393 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:25:13] "[33mGET /config HTTP/1.1[0m" 404 -
+2025-12-02 18:25:23,260 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:25:23] "[33mGET /config HTTP/1.1[0m" 404 -
+2025-12-02 18:40:40,665 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:40:40] "GET / HTTP/1.1" 200 -
+2025-12-02 18:40:50,282 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:40:50] "[33mGET /license.txt HTTP/1.1[0m" 404 -
+2025-12-02 18:41:05,105 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:41:05] "[33mGET /wp-json HTTP/1.1[0m" 404 -
+2025-12-02 18:41:21,078 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:41:21] "[33mGET /solr/ HTTP/1.1[0m" 404 -
+2025-12-02 18:41:34,707 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:41:34] "GET / HTTP/1.1" 200 -
+2025-12-02 18:41:35,217 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:41:35] "[33mGET /partymgr/control/main HTTP/1.1[0m" 404 -
+2025-12-02 18:41:40,725 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:41:40] "[33mGET /identity HTTP/1.1[0m" 404 -
+2025-12-02 18:41:44,580 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:41:44] "[33mGET /showLogin.cc HTTP/1.1[0m" 404 -
+2025-12-02 18:41:47,967 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:41:47] "[33mGET /static/historypage.js HTTP/1.1[0m" 404 -
+2025-12-02 18:41:50,601 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:41:50] "[33mGET /login.html HTTP/1.1[0m" 404 -
+2025-12-02 18:41:53,602 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:41:53] "[33mGET /jasperserver/login.html HTTP/1.1[0m" 404 -
+2025-12-02 18:41:56,171 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:41:56] "[33mGET /jasperserver-pro/login.html HTTP/1.1[0m" 404 -
+2025-12-02 18:41:58,861 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:41:58] "[33mGET /jasperserverTest/login.html HTTP/1.1[0m" 404 -
+2025-12-02 18:42:01,576 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:01] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2025-12-02 18:42:02,203 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:02] "[33mGET /OA_HTML/AppsLocalLogin.jsp HTTP/1.1[0m" 404 -
+2025-12-02 18:42:05,929 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:05] "[33mGET /zabbix/favicon.ico HTTP/1.1[0m" 404 -
+2025-12-02 18:42:09,648 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:09] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2025-12-02 18:42:13,633 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:13] "[33mGET /Telerik.Web.UI.WebResource.axd?type=rau HTTP/1.1[0m" 404 -
+2025-12-02 18:42:18,213 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:42:18] "GET / HTTP/1.1" 200 -
+2025-12-02 18:42:18,737 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:42:18] "[33mGET /cgi-bin/main.pl HTTP/1.1[0m" 404 -
+2025-12-02 18:42:19,347 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:19] "[33mGET /progs/homepage HTTP/1.1[0m" 404 -
+2025-12-02 18:42:19,859 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:42:19] "[33mGET /sugar_version.json HTTP/1.1[0m" 404 -
+2025-12-02 18:42:20,556 - werkzeug - INFO - 43.131.36.84 - - [02/Dec/2025 18:42:20] "GET / HTTP/1.1" 200 -
+2025-12-02 18:42:23,196 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:23] "[33mGET /cf_scripts/scripts/ajax/ckeditor/ckeditor.js HTTP/1.1[0m" 404 -
+2025-12-02 18:42:23,753 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:42:23] "[33mGET /js/NewWindow_2_all.js HTTP/1.1[0m" 404 -
+2025-12-02 18:42:24,386 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:42:24] "[33mGET /api/session/properties HTTP/1.1[0m" 404 -
+2025-12-02 18:42:28,077 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:42:28] "[33mGET /cgi-bin/authLogin.cgi HTTP/1.1[0m" 404 -
+2025-12-02 18:42:31,100 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:42:31] "[33mGET /admin/ HTTP/1.1[0m" 404 -
+2025-12-02 18:42:31,627 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:42:31] "[33mGET /login.do HTTP/1.1[0m" 404 -
+2025-12-02 18:42:36,861 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:36] "[33mGET /webfig/ HTTP/1.1[0m" 404 -
+2025-12-02 18:42:40,006 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:40] "[33mGET /xmldata?item=all HTTP/1.1[0m" 404 -
+2025-12-02 18:42:40,549 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:42:40] "[33mGET /css/images/PTZOptics_powerby.png HTTP/1.1[0m" 404 -
+2025-12-02 18:42:41,052 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:41] "[33mGET /aspera/faspex/ HTTP/1.1[0m" 404 -
+2025-12-02 18:42:41,600 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:41] "[33mGET /internal_forms_authentication HTTP/1.1[0m" 404 -
+2025-12-02 18:42:45,071 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:45] "[33mGET /helpdesk/WebObjects/Helpdesk.woa HTTP/1.1[0m" 404 -
+2025-12-02 18:42:48,135 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:48] "[33mGET /favicon-32x32.png HTTP/1.1[0m" 404 -
+2025-12-02 18:42:48,677 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:48] "[33mGET /index.jsp HTTP/1.1[0m" 404 -
+2025-12-02 18:42:53,594 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:53] "[33mGET /sitecore/shell/sitecore.version.xml HTTP/1.1[0m" 404 -
+2025-12-02 18:42:56,301 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:42:56] "[33mGET /Web/Auth HTTP/1.1[0m" 404 -
+2025-12-02 18:42:59,011 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:42:59] "[33mGET /ssi.cgi/Login.htm HTTP/1.1[0m" 404 -
+2025-12-02 18:43:02,570 - werkzeug - INFO - 185.180.141.68 - - [02/Dec/2025 18:43:02] "[33mGET /console HTTP/1.1[0m" 404 -
+2025-12-02 18:43:04,710 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:43:04] "[33mGET /ext-js/app/common/zld_product_spec.js HTTP/1.1[0m" 404 -
+2025-12-02 18:43:05,222 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:43:05] "[33mGET /login/login HTTP/1.1[0m" 404 -
+2025-12-02 18:43:05,985 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:43:05] "GET / HTTP/1.1" 200 -
+2025-12-02 18:43:06,559 - werkzeug - INFO - 185.180.141.67 - - [02/Dec/2025 18:43:06] "[33mGET /WebInterface/ HTTP/1.1[0m" 404 -
+2025-12-02 18:43:09,397 - werkzeug - INFO - 185.180.141.69 - - [02/Dec/2025 18:43:09] "[33mGET /owncloud/status.php HTTP/1.1[0m" 404 -
+2025-12-02 18:43:14,282 - werkzeug - INFO - 185.180.141.70 - - [02/Dec/2025 18:43:14] "[33mGET /status.php HTTP/1.1[0m" 404 -
+2025-12-02 18:43:59,631 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:43:59,632 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#30)
+2025-12-02 18:43:59,632 - __main__ - INFO - ======================================================================
+2025-12-02 18:43:59,632 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:43:59,632 - __main__ - INFO - Action: BUY
+2025-12-02 18:43:59,632 - __main__ - INFO - Price: 2955
+2025-12-02 18:43:59,632 - __main__ - INFO - Timestamp: 2025-12-02T18:43:59.632404
+2025-12-02 18:43:59,634 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955,
+  "timestamp": "2025-12-02T18:42:00Z",
+  "strategy": "Breakout",
+  "timeframe": "15m"
+}
+2025-12-02 18:43:59,634 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:43:59,634 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:43:59,719 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:43:59,729 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:43:59,729 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:43:59,731 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:43:59] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:44:09,110 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:44:09,111 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#31)
+2025-12-02 18:44:09,111 - __main__ - INFO - ======================================================================
+2025-12-02 18:44:09,111 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:44:09,111 - __main__ - INFO - Action: BUY
+2025-12-02 18:44:09,111 - __main__ - INFO - Price: 2955
+2025-12-02 18:44:09,111 - __main__ - INFO - Timestamp: 2025-12-02T18:44:09.111408
+2025-12-02 18:44:09,111 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955,
+  "timestamp": "2025-12-02T18:42:00Z",
+  "strategy": "Breakout",
+  "timeframe": "15m"
+}
+2025-12-02 18:44:09,111 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:44:09,111 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:44:09,119 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:44:09,125 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:44:09,126 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:44:09,127 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:44:09] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:47:04,668 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:47:04,670 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#32)
+2025-12-02 18:47:04,670 - __main__ - INFO - ======================================================================
+2025-12-02 18:47:04,670 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:47:04,671 - __main__ - INFO - Action: BUY
+2025-12-02 18:47:04,671 - __main__ - INFO - Price: 2955
+2025-12-02 18:47:04,671 - __main__ - INFO - Timestamp: 2025-12-02T18:47:04.671120
+2025-12-02 18:47:04,671 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955,
+  "timestamp": "2025-12-02T18:47:00Z"
+}
+2025-12-02 18:47:04,671 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:47:04,671 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:47:04,686 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:47:04,697 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:47:04,698 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:47:04,699 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:47:04] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:47:10,006 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:47:10,007 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#33)
+2025-12-02 18:47:10,007 - __main__ - INFO - ======================================================================
+2025-12-02 18:47:10,007 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:47:10,007 - __main__ - INFO - Action: BUY
+2025-12-02 18:47:10,007 - __main__ - INFO - Price: 2955
+2025-12-02 18:47:10,007 - __main__ - INFO - Timestamp: 2025-12-02T18:47:10.007323
+2025-12-02 18:47:10,007 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955
+}
+2025-12-02 18:47:10,007 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:47:10,007 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:47:10,015 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:47:10,020 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:47:10,020 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:47:10,021 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:47:10] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:48:14,893 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:48:14,895 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#34)
+2025-12-02 18:48:14,895 - __main__ - INFO - ======================================================================
+2025-12-02 18:48:14,895 - __main__ - INFO - Symbol: BANKNIFTY
+2025-12-02 18:48:14,895 - __main__ - INFO - Action: BUY
+2025-12-02 18:48:14,895 - __main__ - INFO - Price: 48000
+2025-12-02 18:48:14,895 - __main__ - INFO - Timestamp: 2025-12-02T18:48:14.895478
+2025-12-02 18:48:14,895 - __main__ - INFO - Payload: {
+  "symbol": "BANKNIFTY",
+  "action": "BUY",
+  "price": 48000
+}
+2025-12-02 18:48:14,895 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:48:14,895 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:48:14,908 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:48:14,918 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:48:14,918 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:48:14,919 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:48:14] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:48:23,960 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:48:23,960 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#35)
+2025-12-02 18:48:23,960 - __main__ - INFO - ======================================================================
+2025-12-02 18:48:23,960 - __main__ - INFO - Symbol: BANKNIFTY
+2025-12-02 18:48:23,960 - __main__ - INFO - Action: BUY
+2025-12-02 18:48:23,960 - __main__ - INFO - Price: 48000
+2025-12-02 18:48:23,960 - __main__ - INFO - Timestamp: 2025-12-02T18:48:23.960711
+2025-12-02 18:48:23,960 - __main__ - INFO - Payload: {
+  "symbol": "BANKNIFTY",
+  "action": "BUY",
+  "price": 48000
+}
+2025-12-02 18:48:23,960 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:48:23,960 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:48:23,970 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:48:23,976 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:48:23,977 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:48:23,977 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:48:23] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:51:27,001 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 18:51:27] "GET / HTTP/1.1" 200 -
+2025-12-02 18:52:11,939 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:52:11,940 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#36)
+2025-12-02 18:52:11,940 - __main__ - INFO - ======================================================================
+2025-12-02 18:52:11,941 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:52:11,941 - __main__ - INFO - Action: BUY
+2025-12-02 18:52:11,941 - __main__ - INFO - Price: 2955
+2025-12-02 18:52:11,941 - __main__ - INFO - Timestamp: 2025-12-02T18:52:11.941897
+2025-12-02 18:52:11,941 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955
+}
+2025-12-02 18:52:11,942 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:52:11,942 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:52:11,954 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:52:11,964 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:52:11,964 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:52:11,964 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:52:11] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:52:14,639 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:52:14,639 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#37)
+2025-12-02 18:52:14,639 - __main__ - INFO - ======================================================================
+2025-12-02 18:52:14,639 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:52:14,639 - __main__ - INFO - Action: BUY
+2025-12-02 18:52:14,639 - __main__ - INFO - Price: 2955
+2025-12-02 18:52:14,640 - __main__ - INFO - Timestamp: 2025-12-02T18:52:14.640498
+2025-12-02 18:52:14,640 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955
+}
+2025-12-02 18:52:14,640 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:52:14,640 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:52:14,650 - __main__ - ERROR - ✗ EQUITY BOT returned status 400: {"error":"Signal quality filter: Low confidence 0.0% < 90%"}
+
+2025-12-02 18:52:14,656 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:52:14,656 - __main__ - WARNING - ⚠️  Alert forwarded to only 1 bot
+2025-12-02 18:52:14,657 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:52:14] "[35m[1mPOST /webhook HTTP/1.1[0m" 206 -
+2025-12-02 18:54:03,775 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:54:03,776 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#38)
+2025-12-02 18:54:03,776 - __main__ - INFO - ======================================================================
+2025-12-02 18:54:03,776 - __main__ - INFO - Symbol: INOXWIND
+2025-12-02 18:54:03,776 - __main__ - INFO - Action: BUY
+2025-12-02 18:54:03,777 - __main__ - INFO - Price: 133.12
+2025-12-02 18:54:03,777 - __main__ - INFO - Timestamp: 2025-12-02T18:54:03.777567
+2025-12-02 18:54:03,777 - __main__ - INFO - Payload: {
+  "symbol": "INOXWIND",
+  "action": "BUY",
+  "price": 133.12,
+  "score": 100.0,
+  "confidence": 95.0,
+  "verdict": "1.00",
+  "vwap": "132.39",
+  "rsi": "64.94",
+  "atr": "0.24",
+  "adx": "27.18",
+  "volume": "917083.00",
+  "volume_sma20": "132.64",
+  "ema20": "132.58",
+  "pdh": "135.79",
+  "ema_gap_pct": "0.36",
+  "vwap_lead_pct": "0.55",
+  "atr_pct": "0.18",
+  "vol_z": "3.11",
+  "z_rsi": "3.17",
+  "heat_ok": "1.00",
+  "body_ratio": "0.84",
+  "open_gap_pct": "0.00",
+  "volume_sma5": "0.50",
+  "below_close_to_high": "83.58",
+  "atr_jump": "0.02",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 18:54:03,778 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:54:03,778 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:54:03,836 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 18:54:03,846 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:54:03,846 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 18:54:03,847 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:54:03] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 18:58:34,470 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:58:34,471 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#39)
+2025-12-02 18:58:34,471 - __main__ - INFO - ======================================================================
+2025-12-02 18:58:34,471 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:58:34,471 - __main__ - INFO - Action: BUY
+2025-12-02 18:58:34,471 - __main__ - INFO - Price: 2955
+2025-12-02 18:58:34,471 - __main__ - INFO - Timestamp: 2025-12-02T18:58:34.471804
+2025-12-02 18:58:34,471 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955,
+  "confidence": 95,
+  "score": 100
+}
+2025-12-02 18:58:34,471 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:58:34,471 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:58:34,481 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 18:58:34,489 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:58:34,489 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 18:58:34,490 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:58:34] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 18:58:48,363 - __main__ - INFO - 
+======================================================================
+2025-12-02 18:58:48,363 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#40)
+2025-12-02 18:58:48,364 - __main__ - INFO - ======================================================================
+2025-12-02 18:58:48,364 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 18:58:48,364 - __main__ - INFO - Action: BUY
+2025-12-02 18:58:48,364 - __main__ - INFO - Price: 2955
+2025-12-02 18:58:48,364 - __main__ - INFO - Timestamp: 2025-12-02T18:58:48.364857
+2025-12-02 18:58:48,364 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955,
+  "confidence": 95,
+  "score": 100
+}
+2025-12-02 18:58:48,365 - __main__ - INFO - ======================================================================
+
+2025-12-02 18:58:48,365 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 18:58:48,373 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 18:58:48,380 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 18:58:48,380 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 18:58:48,381 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 18:58:48] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 19:02:09,510 - __main__ - INFO - 
+======================================================================
+2025-12-02 19:02:09,510 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#41)
+2025-12-02 19:02:09,511 - __main__ - INFO - ======================================================================
+2025-12-02 19:02:09,511 - __main__ - INFO - Symbol: ASIANPAINT
+2025-12-02 19:02:09,511 - __main__ - INFO - Action: BUY
+2025-12-02 19:02:09,511 - __main__ - INFO - Price: 2955
+2025-12-02 19:02:09,511 - __main__ - INFO - Timestamp: 2025-12-02T19:02:09.511147
+2025-12-02 19:02:09,511 - __main__ - INFO - Payload: {
+  "symbol": "ASIANPAINT",
+  "action": "BUY",
+  "price": 2955,
+  "confidence": 95,
+  "score": 100
+}
+2025-12-02 19:02:09,511 - __main__ - INFO - ======================================================================
+
+2025-12-02 19:02:09,511 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 19:02:09,526 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 19:02:09,552 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 19:02:09,553 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 19:02:09,554 - werkzeug - INFO - 127.0.0.1 - - [02/Dec/2025 19:02:09] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 19:07:05,600 - werkzeug - INFO - 193.142.147.209 - - [02/Dec/2025 19:07:05] "[33mGET /cgi-bin/luci/;stok=/locale HTTP/1.1[0m" 404 -
+2025-12-02 19:09:28,206 - werkzeug - INFO - 91.232.238.112 - - [02/Dec/2025 19:09:28] "[33mGET /admin/config.php HTTP/1.0[0m" 404 -
+2025-12-02 19:15:02,944 - werkzeug - ERROR - 185.242.226.112 - - [02/Dec/2025 19:15:02] code 400, message Bad HTTP/0.9 request type ('\x16\x03\x01\x00\x8d\x01\x00\x00\x89\x03\x03ïó3~QZ§GW\x07{¾ç\x83¸\x8eÛÒÑ9tI2ÂÈk·tßÇq´\x00\x00\x1aÀ/À+À\x11À\x07À\x13À')
+2025-12-02 19:15:02,945 - werkzeug - INFO - 185.242.226.112 - - [02/Dec/2025 19:15:02] "[31m[1m\x16\x03\x01\x00\x8d\x01\x00\x00\x89\x03\x03ïó3~QZ§GW\x07{¾ç\x83¸\x8eÛÒÑ9tI2ÂÈk·tßÇq´\x00\x00\x1aÀ/À+À\x11À\x07À\x13À\x09À\x14À[0m" 400 -
+2025-12-02 19:29:50,818 - werkzeug - INFO - 78.153.140.148 - - [02/Dec/2025 19:29:50] "[33mGET /.env HTTP/1.1[0m" 404 -
+2025-12-02 19:29:51,198 - werkzeug - INFO - 78.153.140.148 - - [02/Dec/2025 19:29:51] "[31m[1mPOST / HTTP/1.1[0m" 405 -

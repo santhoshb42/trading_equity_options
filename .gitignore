@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Data files (exclude backups and generated data)
+*.backup.*
+*.startup_*
+equity/data/positions.json.backup*
+equity/data/positions.json.startup*
+equity/data/dummy_trades.csv
+equity/data/missed_trades.jsonl
+options/data/positions.json.backup*
+options/data/trades.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+nohup.out

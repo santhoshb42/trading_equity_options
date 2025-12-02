@@ -12,10 +12,12 @@ Validates TradingView alerts for options trading:
 import json
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
+from pathlib import Path
 
 from .optconfig import OptionsTradingConfig
 from .optlogging import logger, log_event, log_signal_validation
 from .fake_move_detector import get_fake_move_detector
+from .ce_extractor import get_ce_extractor
 
 # =============================================================================
 # Options Signal Validator
@@ -35,8 +37,9 @@ class OptionsSignalValidator:
             # Extract basic fields
             symbol = alert.get('symbol', '').upper().strip()
             action = alert.get('action', '').upper()
-            score = float(alert.get('score', 0))
             confidence = float(alert.get('confidence', 0))
+            # Use score if provided, otherwise use confidence as fallback
+            score = float(alert.get('score', confidence))
             verdict = alert.get('verdict', 0)
             
             logger.debug(f"SIGNAL_VALIDATE: START | symbol={symbol} | action={action} | conf={confidence}% | score={score}")
@@ -48,18 +51,14 @@ class OptionsSignalValidator:
                 log_signal_validation(symbol, False, message, action=action)
                 return False, message, None
             
-            # Validation 2: Signal quality thresholds - confidence
-            if confidence < OptionsTradingConfig.MIN_CONFIDENCE:
-                message = f"Low confidence: {confidence}% < {OptionsTradingConfig.MIN_CONFIDENCE}%"
+            # Validation 2: Signal quality thresholds - use combined confidence/score check
+            # If confidence is above threshold, accept (can override low score from external tools)
+            # If both are low, reject
+            signal_quality = max(confidence, score)
+            if signal_quality < OptionsTradingConfig.MIN_CONFIDENCE:
+                message = f"Low signal quality: {signal_quality}% < {OptionsTradingConfig.MIN_CONFIDENCE}%"
                 logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
-                log_signal_validation(symbol, False, "Low confidence", confidence=confidence, min_conf=OptionsTradingConfig.MIN_CONFIDENCE)
-                return False, message, None
-            
-            # Validation 3: Signal quality thresholds - score
-            if score < OptionsTradingConfig.MIN_SIGNAL_QUALITY:
-                message = f"Low signal quality: {score} < {OptionsTradingConfig.MIN_SIGNAL_QUALITY}"
-                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
-                log_signal_validation(symbol, False, "Low signal quality", score=score, min_score=OptionsTradingConfig.MIN_SIGNAL_QUALITY)
+                log_signal_validation(symbol, False, "Low signal quality", confidence=confidence, score=score, min_quality=OptionsTradingConfig.MIN_CONFIDENCE)
                 return False, message, None
             
             logger.debug(f"SIGNAL_VALIDATE: QUALITY_OK | symbol={symbol} | conf={confidence}% | score={score}")
@@ -72,19 +71,13 @@ class OptionsSignalValidator:
                 log_signal_validation(symbol, False, "Unsupported symbol", underlying=underlying)
                 return False, message, None
             
-            # Check if it's a valid index or known stock
+            # Dynamic validation: Accept ALL F&O symbols
+            # The CE extractor will determine if options exist when generating the chain
             SUPPORTED_INDICES = OptionsTradingConfig.UNDERLYING_INDEXES
-            SUPPORTED_STOCKS = {"ANGELONE", "BALKRISIND", "BSOFT", "CYIENT", 
-                               "GLENMARK", "INOXWIND", "PAGEIND", "PGEL", "SJVN"}
-            
-            if underlying not in SUPPORTED_INDICES and underlying not in SUPPORTED_STOCKS:
-                message = f"Underlying '{underlying}' not in supported list"
-                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message}")
-                return False, message, None
             
             # Log the mapping if it's an equity symbol
             if underlying not in SUPPORTED_INDICES:
-                logger.info(f"SIGNAL_VALIDATE: EQUITY_SYMBOL | symbol={symbol} → underlying={underlying}")
+                logger.info(f"SIGNAL_VALIDATE: EQUITY_SYMBOL | symbol={symbol} → underlying={underlying} | will check F&O availability dynamically")
             
             logger.debug(f"SIGNAL_VALIDATE: UNDERLYING_OK | symbol={symbol} | underlying={underlying}")
             
@@ -190,18 +183,10 @@ class OptionsSignalValidator:
             if underlying in symbol_upper:
                 return underlying
         
-        # Stocks with F&O options - return the stock symbol itself (not an index)
-        # These will be handled by a separate equity-specific contract generator
-        STOCKS_WITH_FO = {
-            "ANGELONE", "BALKRISIND", "BSOFT", "CYIENT", 
-            "GLENMARK", "INOXWIND", "PAGEIND", "PGEL", "SJVN"
-        }
-        
-        if symbol_upper in STOCKS_WITH_FO:
-            return symbol_upper  # Return stock symbol itself (e.g., GLENMARK)
-        
-        # Unknown symbol - cannot map
-        return None
+        # Accept ALL symbols as potential F&O stocks
+        # The broker will determine if options are available during chain fetch
+        # Return the symbol itself for equity stocks with potential F&O
+        return symbol_upper  # Return symbol itself (e.g., ASIANPAINT, GLENMARK, etc.)
     
     @staticmethod
     def _check_iv_conditions(underlying: str) -> Tuple[bool, str]:

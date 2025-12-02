@@ -117,55 +117,74 @@ class OptionChainGenerator:
     """Generates realistic option chains for indexes and equity stocks"""
     
     def __init__(self):
+        # Default spot prices - will be overridden by LTP when available
         self.spot_prices = {
             # Index underlyings
             'BANKNIFTY': 47000,
             'NIFTY': 23500,
             'FINNIFTY': 22000,
-            # Equity stocks with F&O
-            'ANGELONE': 1600,
-            'BALKRISIND': 2500,
-            'BSOFT': 650,
-            'CYIENT': 1800,
-            'GLENMARK': 1960,
-            'INOXWIND': 350,
-            'PAGEIND': 3200,
-            'PGEL': 280,
-            'SJVN': 80,
         }
+        
+        # Dynamic strike intervals based on price range
+        # Will be auto-calculated if not specified
         self.strike_intervals = {
             # Index underlyings
             'BANKNIFTY': 100,
             'NIFTY': 50,
             'FINNIFTY': 100,
-            # Equity stocks - smaller strike intervals
-            'ANGELONE': 10,
-            'BALKRISIND': 10,
-            'BSOFT': 5,
-            'CYIENT': 10,
-            'GLENMARK': 10,
-            'INOXWIND': 5,
-            'PAGEIND': 20,
-            'PGEL': 5,
-            'SJVN': 2,
         }
+    
+    def _get_strike_interval(self, underlying: str, price: float) -> int:
+        """
+        Calculate appropriate strike interval based on symbol and price.
+        
+        Rules:
+        - Indexes: Fixed (NIFTY=50, BANKNIFTY=100, FINNIFTY=100)
+        - Stocks:
+          - Price < 100: interval = 5
+          - Price < 500: interval = 10
+          - Price < 2000: interval = 20
+          - Price >= 2000: interval = 50
+        """
+        # Check if it's a known index
+        if underlying in self.strike_intervals:
+            return self.strike_intervals[underlying]
+        
+        # For stocks, calculate based on price
+        if price < 100:
+            return 5
+        elif price < 500:
+            return 10
+        elif price < 2000:
+            return 20
+        else:
+            return 50
     
     def generate_chain(self, 
                       underlying: str, 
                       expiry: str,
-                      num_strikes: int = 15) -> List[Dict[str, str]]:
+                      num_strikes: int = 15,
+                      center_price: float = None) -> List[Dict[str, str]]:
         """
         Generate option chain for underlying and expiry.
+        Dynamically supports ANY F&O symbol by calculating strikes based on LTP.
         
         Args:
-            underlying: BANKNIFTY, NIFTY, or FINNIFTY
+            underlying: Any F&O symbol (ASIANPAINT, BANKNIFTY, RELIANCE, etc.)
             expiry: Expiry date YYYY-MM-DD
             num_strikes: Number of strikes to generate (centered on ATM)
+            center_price: LTP to center strikes around (REQUIRED for non-index symbols)
         
         Returns: List of option contract symbols (CE and PE)
         """
-        spot = self.spot_prices.get(underlying, 20000)
-        interval = self.strike_intervals.get(underlying, 100)
+        # Use provided center_price (LTP from alert) or fall back to configured spot
+        if center_price and center_price > 0:
+            spot = center_price
+        else:
+            spot = self.spot_prices.get(underlying, 1000)  # Default fallback
+        
+        # Calculate strike interval dynamically based on price
+        interval = self._get_strike_interval(underlying, spot)
         
         # Generate strikes around ATM
         atm_strike = (int(spot) // interval) * interval
