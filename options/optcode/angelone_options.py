@@ -335,7 +335,17 @@ class AngelOneOptionsBroker:
         spot_prices = {
             'BANKNIFTY': 47000,
             'NIFTY': 23500,
-            'FINNIFTY': 22000
+            'FINNIFTY': 22000,
+            # Equity stocks with F&O
+            'ANGELONE': 1600,
+            'BALKRISIND': 2500,
+            'BSOFT': 650,
+            'CYIENT': 1800,
+            'GLENMARK': 1960,
+            'INOXWIND': 350,
+            'PAGEIND': 3200,
+            'PGEL': 280,
+            'SJVN': 80,
         }
         
         spot = spot_prices.get(underlying, 20000)

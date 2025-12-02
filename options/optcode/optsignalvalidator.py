@@ -66,11 +66,25 @@ class OptionsSignalValidator:
             
             # Validation 4: Underlying availability
             underlying = OptionsSignalValidator._derive_underlying(symbol)
-            if underlying not in OptionsTradingConfig.UNDERLYING_INDEXES:
-                message = f"Underlying {underlying} not supported"
+            if underlying is None:
+                message = f"Symbol '{symbol}' is not supported (no F&O options available)"
                 logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
-                log_signal_validation(symbol, False, "Unsupported underlying", underlying=underlying)
+                log_signal_validation(symbol, False, "Unsupported symbol", underlying=underlying)
                 return False, message, None
+            
+            # Check if it's a valid index or known stock
+            SUPPORTED_INDICES = OptionsTradingConfig.UNDERLYING_INDEXES
+            SUPPORTED_STOCKS = {"ANGELONE", "BALKRISIND", "BSOFT", "CYIENT", 
+                               "GLENMARK", "INOXWIND", "PAGEIND", "PGEL", "SJVN"}
+            
+            if underlying not in SUPPORTED_INDICES and underlying not in SUPPORTED_STOCKS:
+                message = f"Underlying '{underlying}' not in supported list"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message}")
+                return False, message, None
+            
+            # Log the mapping if it's an equity symbol
+            if underlying not in SUPPORTED_INDICES:
+                logger.info(f"SIGNAL_VALIDATE: EQUITY_SYMBOL | symbol={symbol} → underlying={underlying}")
             
             logger.debug(f"SIGNAL_VALIDATE: UNDERLYING_OK | symbol={symbol} | underlying={underlying}")
             
@@ -161,18 +175,33 @@ class OptionsSignalValidator:
             return False, message, None
     
     @staticmethod
-    def _derive_underlying(symbol: str) -> str:
-        """Derive underlying from symbol"""
-        # BANKNIFTY, NIFTY, FINNIFTY symbols should be derivable from context
-        # For now, try to match against known underlyings
+    def _derive_underlying(symbol: str) -> Optional[str]:
+        """
+        Derive underlying from symbol.
+        
+        If symbol is an index (BANKNIFTY, NIFTY, FINNIFTY), use it directly.
+        If symbol is an equity stock with F&O, map it to its symbol.
+        Returns None if symbol cannot be mapped.
+        """
         symbol_upper = symbol.upper()
         
+        # Check if it's already an index
         for underlying in OptionsTradingConfig.UNDERLYING_INDEXES:
             if underlying in symbol_upper:
                 return underlying
         
-        # Default to BANKNIFTY if derivation fails
-        return "BANKNIFTY"
+        # Stocks with F&O options - return the stock symbol itself (not an index)
+        # These will be handled by a separate equity-specific contract generator
+        STOCKS_WITH_FO = {
+            "ANGELONE", "BALKRISIND", "BSOFT", "CYIENT", 
+            "GLENMARK", "INOXWIND", "PAGEIND", "PGEL", "SJVN"
+        }
+        
+        if symbol_upper in STOCKS_WITH_FO:
+            return symbol_upper  # Return stock symbol itself (e.g., GLENMARK)
+        
+        # Unknown symbol - cannot map
+        return None
     
     @staticmethod
     def _check_iv_conditions(underlying: str) -> Tuple[bool, str]:

@@ -114,18 +114,40 @@ class OptionSymbolFormat:
 # =============================================================================
 
 class OptionChainGenerator:
-    """Generates realistic option chains for indexes"""
+    """Generates realistic option chains for indexes and equity stocks"""
     
     def __init__(self):
         self.spot_prices = {
+            # Index underlyings
             'BANKNIFTY': 47000,
             'NIFTY': 23500,
-            'FINNIFTY': 22000
+            'FINNIFTY': 22000,
+            # Equity stocks with F&O
+            'ANGELONE': 1600,
+            'BALKRISIND': 2500,
+            'BSOFT': 650,
+            'CYIENT': 1800,
+            'GLENMARK': 1960,
+            'INOXWIND': 350,
+            'PAGEIND': 3200,
+            'PGEL': 280,
+            'SJVN': 80,
         }
         self.strike_intervals = {
+            # Index underlyings
             'BANKNIFTY': 100,
             'NIFTY': 50,
-            'FINNIFTY': 100
+            'FINNIFTY': 100,
+            # Equity stocks - smaller strike intervals
+            'ANGELONE': 10,
+            'BALKRISIND': 10,
+            'BSOFT': 5,
+            'CYIENT': 10,
+            'GLENMARK': 10,
+            'INOXWIND': 5,
+            'PAGEIND': 20,
+            'PGEL': 5,
+            'SJVN': 2,
         }
     
     def generate_chain(self, 

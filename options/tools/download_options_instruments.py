@@ -57,14 +57,16 @@ def download_options_instruments():
         
         logger.info(f"✅ Found {len(nfo_instruments)} NFO contracts")
         
-        # Further filter for our underlyings
-        underlyings = ['BANKNIFTY', 'NIFTY', 'FINNIFTY']
+        # Filter for our underlyings (indices + stocks with F&O)
+        underlyings = ['BANKNIFTY', 'NIFTY', 'FINNIFTY', 
+                       'ANGELONE', 'BALKRISIND', 'BSOFT', 'CYIENT', 
+                       'GLENMARK', 'INOXWIND', 'PAGEIND', 'PGEL', 'SJVN']
         options_contracts = [
             inst for inst in nfo_instruments
             if any(underlying in inst.get('symbol', '') for underlying in underlyings)
         ]
         
-        logger.info(f"✅ Found {len(options_contracts)} option contracts for {underlyings}")
+        logger.info(f"✅ Found {len(options_contracts)} option contracts for indices & stocks")
         
         # Save to file
         output_path = Path(__file__).parent / "instrument.json"
