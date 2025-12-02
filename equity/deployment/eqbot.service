@@ -1,0 +1,40 @@
+[Unit]
+Description=Equity Trading Bot - Indestructible Service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/equity
+ExecStart=/bin/bash /root/santhosh/trading/equity/run_bot.sh
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=eqbot
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/root/santhosh/trading/equity
+ReadWritePaths=/var/log/eqbot
+ReadWritePaths=/var/lib/eqbot
+PrivateTmp=true
+
+# Environment
+Environment=PYTHONPATH=/root/santhosh/trading/equity
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Kolkata
+
+[Install]
+WantedBy=multi-user.target

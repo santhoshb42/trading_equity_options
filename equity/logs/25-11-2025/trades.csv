@@ -1,0 +1,3 @@
+date,time,symbol,action,quantity,entry_price,exit_price,capital_used,sl_price,pnl,status
+2025-11-25,11:09:46,HINDALCO-EQ,SELL,12,788.20,784.00,9458.40,784.26,-50.40,CLOSED
+2025-11-25,13:45:26,ABCAPITAL-EQ,SELL,29,338.10,342.85,9804.90,343.17,+137.75,CLOSED

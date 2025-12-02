@@ -1,0 +1,12 @@
+{
+  "deployment_date": "2025-11-16",
+  "deployment_type": "option_a",
+  "ml_enabled": true,
+  "regime_adapter_enabled": false,
+  "eod_scheduler_time": "15:30",
+  "real_paper_split": "10/40",
+  "expected_win_rate": "55-60%",
+  "expected_daily_profit": "2600-2900",
+  "monitoring_required": true,
+  "rollback_available": true
+}

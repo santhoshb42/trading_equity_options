@@ -1,0 +1,1046 @@
+timestamp,source,symbol,action,price,confidence,score,validation_status,rejection_reason
+2025-11-30T11:00:24.592749,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.79% < 90%
+2025-11-30T11:00:24.594302,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:24.598417,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:24.601045,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:00:24.605259,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:00:24.607624,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:00:26.574549,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:26.908057,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.77% < 90%
+2025-11-30T11:00:27.253139,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.74% < 90%
+2025-11-30T11:00:27.578142,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.89% < 90%
+2025-11-30T11:00:27.894621,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:28.159534,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.73% < 90%
+2025-11-30T11:00:28.484419,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:00:28.688421,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:28.937950,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.71% < 90%
+2025-11-30T11:00:29.124390,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.88% < 90%
+2025-11-30T11:00:29.459250,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:00:29.755796,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:00:30.094268,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.84% < 90%
+2025-11-30T11:00:30.209737,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:00:30.379258,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:00:30.666470,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:30.862313,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:00:31.161055,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:00:31.505658,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:00:31.852718,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.88% < 90%
+2025-11-30T11:00:32.155986,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.77% < 90%
+2025-11-30T11:00:32.284287,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:00:32.627772,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:00:32.925021,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:00:33.145737,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.69% < 90%
+2025-11-30T11:00:33.265973,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.81% < 90%
+2025-11-30T11:00:33.560435,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:33.685441,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.6% < 90%
+2025-11-30T11:00:34.017962,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.6% < 90%
+2025-11-30T11:00:34.199331,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:00:34.456288,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:34.644684,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:00:34.977747,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.72% < 90%
+2025-11-30T11:00:35.129747,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.78% < 90%
+2025-11-30T11:00:35.442551,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.61% < 90%
+2025-11-30T11:00:35.666180,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:00:35.948415,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.81% < 90%
+2025-11-30T11:00:36.253309,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:00:36.378241,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.64% < 90%
+2025-11-30T11:00:36.533190,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:00:36.730633,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:00:37.024826,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.77% < 90%
+2025-11-30T11:00:37.286302,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:37.577810,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.79% < 90%
+2025-11-30T11:00:37.791806,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:00:37.963692,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.62% < 90%
+2025-11-30T11:00:38.307495,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:00:38.490370,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.57% < 90%
+2025-11-30T11:00:38.675488,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:38.957547,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.64% < 90%
+2025-11-30T11:00:39.286431,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:39.621936,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.88% < 90%
+2025-11-30T11:00:39.783666,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.71% < 90%
+2025-11-30T11:00:39.940546,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:40.180374,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:40.434819,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.57% < 90%
+2025-11-30T11:00:40.590522,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.89% < 90%
+2025-11-30T11:00:40.870947,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:00:41.156981,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.89% < 90%
+2025-11-30T11:00:41.313964,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:41.657347,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:00:41.837435,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.55% < 90%
+2025-11-30T11:00:42.172840,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.77% < 90%
+2025-11-30T11:00:42.362977,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.69% < 90%
+2025-11-30T11:00:42.562133,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:00:42.875616,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.66% < 90%
+2025-11-30T11:00:43.199264,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.71% < 90%
+2025-11-30T11:00:43.403041,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:00:43.655399,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.84% < 90%
+2025-11-30T11:00:43.841729,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.76% < 90%
+2025-11-30T11:00:44.016975,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.76% < 90%
+2025-11-30T11:00:44.304066,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.81% < 90%
+2025-11-30T11:00:44.405492,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:44.638904,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:44.900310,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:45.036690,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:00:45.169569,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:00:45.469733,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:00:45.659719,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:00:45.894119,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:46.044960,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:00:46.245695,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:00:46.550341,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:00:46.757492,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.64% < 90%
+2025-11-30T11:00:46.888048,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:47.009088,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.69% < 90%
+2025-11-30T11:00:47.291453,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.76% < 90%
+2025-11-30T11:00:47.465270,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:47.626550,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.69% < 90%
+2025-11-30T11:00:47.815732,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:00:47.952456,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.79% < 90%
+2025-11-30T11:00:48.267413,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:00:48.391417,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.62% < 90%
+2025-11-30T11:00:48.714902,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.64% < 90%
+2025-11-30T11:00:48.864209,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:49.032223,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.87% < 90%
+2025-11-30T11:00:49.219092,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:00:49.320293,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:00:49.451249,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.59% < 90%
+2025-11-30T11:00:49.657944,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.69% < 90%
+2025-11-30T11:00:49.780966,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.84% < 90%
+2025-11-30T11:00:49.880467,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:00:50.154572,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.89% < 90%
+2025-11-30T11:00:50.366021,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.66% < 90%
+2025-11-30T11:00:50.626557,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.57% < 90%
+2025-11-30T11:00:50.772682,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.72% < 90%
+2025-11-30T11:00:50.906751,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.81% < 90%
+2025-11-30T11:00:51.237879,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.61% < 90%
+2025-11-30T11:00:51.482285,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:51.794442,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:00:52.076063,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:00:52.249284,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.72% < 90%
+2025-11-30T11:00:52.552716,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:00:52.740542,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:00:53.048334,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.61% < 90%
+2025-11-30T11:00:53.226205,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.7% < 90%
+2025-11-30T11:00:53.433187,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:00:53.594076,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.79% < 90%
+2025-11-30T11:00:53.858087,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.62% < 90%
+2025-11-30T11:00:54.092987,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:54.351900,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:00:54.641318,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:54.882974,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:00:54.983242,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.7% < 90%
+2025-11-30T11:00:55.320262,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:00:55.645514,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:00:55.865961,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.61% < 90%
+2025-11-30T11:00:56.036773,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.74% < 90%
+2025-11-30T11:00:56.314096,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.74% < 90%
+2025-11-30T11:00:56.602632,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.61% < 90%
+2025-11-30T11:00:56.736538,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.56% < 90%
+2025-11-30T11:00:57.075013,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:00:57.217167,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:57.443081,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.59% < 90%
+2025-11-30T11:00:57.588670,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.88% < 90%
+2025-11-30T11:00:57.802813,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:00:58.102813,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.79% < 90%
+2025-11-30T11:00:58.288849,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.77% < 90%
+2025-11-30T11:00:58.433222,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.84% < 90%
+2025-11-30T11:00:58.621070,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.7% < 90%
+2025-11-30T11:00:58.861677,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.78% < 90%
+2025-11-30T11:00:59.208261,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.75% < 90%
+2025-11-30T11:00:59.368198,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:00:59.567722,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.61% < 90%
+2025-11-30T11:00:59.852044,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.76% < 90%
+2025-11-30T11:01:00.186423,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.73% < 90%
+2025-11-30T11:01:00.296429,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.62% < 90%
+2025-11-30T11:01:00.619620,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.62% < 90%
+2025-11-30T11:01:00.801170,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:01:00.939574,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.56% < 90%
+2025-11-30T11:01:01.101781,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:01:01.271043,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.81% < 90%
+2025-11-30T11:01:01.428314,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:01:01.566847,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.84% < 90%
+2025-11-30T11:01:01.786051,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:01:02.060091,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.66% < 90%
+2025-11-30T11:01:02.253426,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.56% < 90%
+2025-11-30T11:01:02.463159,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.72% < 90%
+2025-11-30T11:01:02.651250,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:01:02.914031,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:01:03.252283,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.66% < 90%
+2025-11-30T11:01:03.364068,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:01:03.550753,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:01:03.701320,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.7% < 90%
+2025-11-30T11:01:03.999585,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.85% < 90%
+2025-11-30T11:01:04.109031,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:01:04.387619,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:01:04.735512,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:01:04.920310,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:01:05.217707,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:01:05.468539,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.72% < 90%
+2025-11-30T11:01:05.762901,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.74% < 90%
+2025-11-30T11:01:06.000476,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.78% < 90%
+2025-11-30T11:01:06.117911,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.6% < 90%
+2025-11-30T11:01:06.397897,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.72% < 90%
+2025-11-30T11:01:06.707309,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:01:06.985539,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.62% < 90%
+2025-11-30T11:01:07.220411,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.71% < 90%
+2025-11-30T11:01:07.492631,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.86% < 90%
+2025-11-30T11:01:07.633531,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.74% < 90%
+2025-11-30T11:01:07.801340,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:01:08.027877,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.65% < 90%
+2025-11-30T11:01:08.250214,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.89% < 90%
+2025-11-30T11:01:08.384982,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.55% < 90%
+2025-11-30T11:01:08.668184,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:01:08.868844,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.71% < 90%
+2025-11-30T11:01:09.108179,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.82% < 90%
+2025-11-30T11:01:09.109694,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.83% < 90%
+2025-11-30T11:01:09.111040,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.88% < 90%
+2025-11-30T11:01:09.118467,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.63% < 90%
+2025-11-30T11:01:09.120726,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.56% < 90%
+2025-11-30T11:01:09.121609,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.68% < 90%
+2025-11-30T11:01:09.123945,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.7% < 90%
+2025-11-30T11:01:09.124766,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.67% < 90%
+2025-11-30T11:01:09.138466,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.76% < 90%
+2025-11-30T11:01:09.142071,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.74% < 90%
+2025-11-30T11:02:32.070413,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:32.074861,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:02:32.079551,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:32.086288,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:32.088334,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:32.089872,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:34.048501,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:34.175187,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:34.411039,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:34.550822,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:02:34.703321,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:34.898166,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:35.200293,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:35.374681,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:35.665199,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:35.803139,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:36.102064,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:36.257554,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:36.468266,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:36.656231,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:36.936701,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:37.234089,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.9% < 90%
+2025-11-30T11:02:37.467409,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:37.807337,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:38.151815,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:38.480349,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:38.720114,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:38.971682,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:39.320411,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:39.609623,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:39.731081,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:39.845710,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:40.092300,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:40.437542,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:40.622077,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:40.736297,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:40.892524,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:41.019583,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:41.358918,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:41.478114,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:41.577484,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:41.921161,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:42.068572,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:42.316640,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:42.428705,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:44.841417,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:44.843126,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:44.855222,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:44.857106,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:44.857730,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:44.862032,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:46.816136,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:46.975638,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:47.204084,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:47.485960,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:47.664435,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:47.839227,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:47.983735,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:48.255681,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:48.467917,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:48.793271,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:49.122958,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:49.301993,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:49.620322,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:49.913969,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:50.021280,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:50.357972,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:50.546670,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:50.893615,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:51.175419,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:51.517954,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:51.678249,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:51.884051,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:52.232493,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:52.357143,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:52.458907,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:52.602861,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:52.901325,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:02:53.241939,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:53.549497,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:53.739243,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:53.880913,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:54.153956,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:54.387251,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:54.702321,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:54.971547,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:55.130850,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:55.274078,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:55.437962,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:55.677602,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:55.782009,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:55.991089,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:56.196505,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:56.300699,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:56.620868,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:56.750290,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:02:56.852505,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:57.151843,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:57.409102,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:57.723116,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:58.042412,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:02:58.297150,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:02:58.567594,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.97% < 90%
+2025-11-30T11:02:58.724381,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:02:59.001833,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:02:59.338344,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:02:59.665615,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:02:59.981224,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.96% < 90%
+2025-11-30T11:03:00.206455,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:03:00.418922,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:03:00.563808,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:03:00.669423,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.95% < 90%
+2025-11-30T11:03:00.880086,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.94% < 90%
+2025-11-30T11:03:01.132277,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:03:01.426283,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:03:01.654069,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.93% < 90%
+2025-11-30T11:03:01.899158,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.92% < 90%
+2025-11-30T11:03:02.139427,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.91% < 90%
+2025-11-30T11:03:02.485444,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:03:02.717689,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.98% < 90%
+2025-11-30T11:03:02.942168,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.99% < 90%
+2025-11-30T11:03:03.431711,TradingView,HDFC-EQ,BUY,1111.93,94.00,62.00,ACCEPTED,
+2025-11-30T11:03:03.439493,TradingView,KOTAKBANK-EQ,BUY,164.49,92.00,70.00,ACCEPTED,
+2025-11-30T11:03:03.443231,TradingView,HDFCBANK-EQ,BUY,726.28,95.00,63.00,ACCEPTED,
+2025-11-30T11:03:03.447452,TradingView,BAJFINANCE-EQ,BUY,127.93,99.00,75.00,ACCEPTED,
+2025-11-30T11:03:03.447837,TradingView,INFY-EQ,BUY,1849.01,91.00,61.00,ACCEPTED,
+2025-11-30T11:03:03.452259,TradingView,TITAN-EQ,BUY,415.40,98.00,68.00,ACCEPTED,
+2025-11-30T11:03:05.416251,TradingView,RELIANCE-EQ,SELL,1226.91,97.00,66.00,ACCEPTED,
+2025-11-30T11:03:05.683555,TradingView,LT-EQ,BUY,1858.80,95.00,73.00,ACCEPTED,
+2025-11-30T11:03:05.972212,TradingView,RELIANCE-EQ,SELL,1227.94,93.00,56.00,ACCEPTED,
+2025-11-30T11:03:06.214759,TradingView,M&M-EQ,BUY,1662.44,95.00,81.00,ACCEPTED,
+2025-11-30T11:03:06.537687,TradingView,M&M-EQ,SELL,1652.38,98.00,75.00,ACCEPTED,
+2025-11-30T11:03:06.758263,TradingView,MARUTI-EQ,BUY,2434.67,97.00,61.00,ACCEPTED,
+2025-11-30T11:03:06.886538,TradingView,ULTRACEMCO-EQ,SELL,710.44,95.00,76.00,ACCEPTED,
+2025-11-30T11:03:07.045728,TradingView,ULTRACEMCO-EQ,BUY,715.59,91.00,86.00,ACCEPTED,
+2025-11-30T11:03:07.278620,TradingView,NESTLEIND-EQ,BUY,457.64,95.00,73.00,ACCEPTED,
+2025-11-30T11:03:07.617896,TradingView,ITC-EQ,SELL,1296.10,95.00,69.00,ACCEPTED,
+2025-11-30T11:03:07.781108,TradingView,ITC-EQ,SELL,1295.77,90.00,69.00,ACCEPTED,
+2025-11-30T11:03:07.966381,TradingView,LT-EQ,SELL,1846.72,92.00,58.00,ACCEPTED,
+2025-11-30T11:03:08.202159,TradingView,M&M-EQ,BUY,1662.59,99.00,78.00,ACCEPTED,
+2025-11-30T11:03:08.441051,TradingView,M&M-EQ,BUY,1663.16,92.00,72.00,ACCEPTED,
+2025-11-30T11:03:08.556017,TradingView,MARUTI-EQ,SELL,2420.36,93.00,64.00,ACCEPTED,
+2025-11-30T11:03:08.751617,TradingView,MARUTI-EQ,SELL,2419.64,94.00,81.00,ACCEPTED,
+2025-11-30T11:03:08.900948,TradingView,LT-EQ,BUY,1858.69,92.00,69.00,ACCEPTED,
+2025-11-30T11:03:09.077599,TradingView,ULTRACEMCO-EQ,BUY,714.82,95.00,60.00,ACCEPTED,
+2025-11-30T11:03:09.215144,TradingView,LT-EQ,BUY,1859.17,91.00,61.00,ACCEPTED,
+2025-11-30T11:03:09.562345,TradingView,ULTRACEMCO-EQ,BUY,715.71,94.00,63.00,ACCEPTED,
+2025-11-30T11:03:09.752978,TradingView,ITC-EQ,SELL,1295.47,90.00,82.00,ACCEPTED,
+2025-11-30T11:03:09.964630,TradingView,ULTRACEMCO-EQ,SELL,710.06,92.00,69.00,ACCEPTED,
+2025-11-30T11:03:10.133454,TradingView,HDFCBANK-EQ,BUY,726.95,96.00,81.00,ACCEPTED,
+2025-11-30T11:03:10.477600,TradingView,ITC-EQ,BUY,1303.89,92.00,77.00,ACCEPTED,
+2025-11-30T11:03:10.736122,TradingView,KOTAKBANK-EQ,SELL,162.79,93.00,79.00,ACCEPTED,
+2025-11-30T11:03:11.081040,TradingView,LT-EQ,SELL,1847.42,99.00,57.00,ACCEPTED,
+2025-11-30T11:03:11.284481,TradingView,ICICIBANK-EQ,SELL,2119.03,97.00,76.00,ACCEPTED,
+2025-11-30T11:03:11.567143,TradingView,ICICIBANK-EQ,BUY,2130.91,90.00,85.00,ACCEPTED,
+2025-11-30T11:03:11.909629,TradingView,NESTLEIND-EQ,SELL,454.34,98.00,60.00,ACCEPTED,
+2025-11-30T11:03:12.085705,TradingView,RELIANCE-EQ,SELL,1227.49,91.00,75.00,ACCEPTED,
+2025-11-30T11:03:12.277231,TradingView,NESTLEIND-EQ,BUY,457.68,99.00,90.00,ACCEPTED,
+2025-11-30T11:03:12.392631,TradingView,NESTLEIND-EQ,SELL,454.39,94.00,72.00,ACCEPTED,
+2025-11-30T11:03:12.710267,TradingView,KOTAKBANK-EQ,BUY,165.08,92.00,79.00,ACCEPTED,
+2025-11-30T11:03:12.977426,TradingView,HDFCBANK-EQ,SELL,722.29,90.00,81.00,ACCEPTED,
+2025-11-30T11:03:13.225328,TradingView,LT-EQ,SELL,1847.70,92.00,69.00,ACCEPTED,
+2025-11-30T11:03:13.386770,TradingView,ULTRACEMCO-EQ,BUY,714.76,90.00,73.00,ACCEPTED,
+2025-11-30T11:03:13.698179,TradingView,AXISBANK-EQ,SELL,1849.13,97.00,72.00,ACCEPTED,
+2025-11-30T11:03:13.963549,TradingView,NESTLEIND-EQ,BUY,457.09,90.00,65.00,ACCEPTED,
+2025-11-30T11:03:14.088775,TradingView,KOTAKBANK-EQ,BUY,164.61,94.00,66.00,ACCEPTED,
+2025-11-30T11:03:14.206788,TradingView,BAJFINANCE-EQ,BUY,127.66,96.00,86.00,ACCEPTED,
+2025-11-30T11:03:14.426698,TradingView,NESTLEIND-EQ,BUY,457.22,97.00,82.00,ACCEPTED,
+2025-11-30T11:03:14.647156,TradingView,MARUTI-EQ,SELL,2418.86,95.00,76.00,ACCEPTED,
+2025-11-30T11:03:14.850507,TradingView,NESTLEIND-EQ,BUY,456.88,97.00,66.00,ACCEPTED,
+2025-11-30T11:03:15.008358,TradingView,M&M-EQ,SELL,1653.09,98.00,83.00,ACCEPTED,
+2025-11-30T11:03:15.294406,TradingView,KOTAKBANK-EQ,BUY,165.15,95.00,63.00,ACCEPTED,
+2025-11-30T11:03:15.403057,TradingView,ICICIBANK-EQ,BUY,2131.95,99.00,89.00,ACCEPTED,
+2025-11-30T11:03:15.567663,TradingView,NESTLEIND-EQ,BUY,457.94,90.00,62.00,ACCEPTED,
+2025-11-30T11:03:15.822295,TradingView,LT-EQ,BUY,1859.08,98.00,66.00,ACCEPTED,
+2025-11-30T11:03:15.956816,TradingView,LT-EQ,BUY,1857.80,97.00,87.00,ACCEPTED,
+2025-11-30T11:03:16.216059,TradingView,M&M-EQ,BUY,1662.15,96.00,69.00,ACCEPTED,
+2025-11-30T11:03:16.404397,TradingView,HDFCBANK-EQ,SELL,723.18,96.00,57.00,ACCEPTED,
+2025-11-30T11:03:16.567138,TradingView,ITC-EQ,SELL,1295.30,96.00,84.00,ACCEPTED,
+2025-11-30T11:03:16.861790,TradingView,BAJFINANCE-EQ,BUY,127.27,92.00,72.00,ACCEPTED,
+2025-11-30T11:03:16.968668,TradingView,RELIANCE-EQ,BUY,1235.15,90.00,82.00,ACCEPTED,
+2025-11-30T11:03:17.248414,TradingView,M&M-EQ,SELL,1652.96,90.00,81.00,ACCEPTED,
+2025-11-30T11:03:17.435261,TradingView,RELIANCE-EQ,SELL,1226.68,99.00,61.00,ACCEPTED,
+2025-11-30T11:03:17.705442,TradingView,KOTAKBANK-EQ,BUY,164.87,90.00,88.00,ACCEPTED,
+2025-11-30T11:03:18.009626,TradingView,AXISBANK-EQ,SELL,1849.14,97.00,76.00,ACCEPTED,
+2025-11-30T11:03:18.202068,TradingView,AXISBANK-EQ,SELL,1849.37,98.00,73.00,ACCEPTED,
+2025-11-30T11:03:18.454976,TradingView,ICICIBANK-EQ,BUY,2131.04,98.00,61.00,ACCEPTED,
+2025-11-30T11:03:18.656494,TradingView,RELIANCE-EQ,BUY,1234.10,92.00,69.00,ACCEPTED,
+2025-11-30T11:03:19.004744,TradingView,MARUTI-EQ,BUY,2434.29,92.00,62.00,ACCEPTED,
+2025-11-30T11:03:19.278271,TradingView,BAJFINANCE-EQ,SELL,127.85,97.00,80.00,ACCEPTED,
+2025-11-30T11:03:19.425891,TradingView,ULTRACEMCO-EQ,SELL,710.32,93.00,79.00,ACCEPTED,
+2025-11-30T11:03:19.687246,TradingView,ICICIBANK-EQ,SELL,2118.37,95.00,65.00,ACCEPTED,
+2025-11-30T11:03:19.975263,TradingView,ICICIBANK-EQ,BUY,2131.51,92.00,89.00,ACCEPTED,
+2025-11-30T11:03:20.210577,TradingView,RELIANCE-EQ,BUY,1234.87,95.00,69.00,ACCEPTED,
+2025-11-30T11:03:20.528164,TradingView,NESTLEIND-EQ,BUY,457.26,90.00,81.00,ACCEPTED,
+2025-11-30T11:03:20.677507,TradingView,TCS-EQ,BUY,464.20,97.00,84.00,ACCEPTED,
+2025-11-30T11:03:20.869028,TradingView,SUNPHARMA-EQ,BUY,2287.76,91.00,82.00,ACCEPTED,
+2025-11-30T11:03:21.190778,TradingView,BAJFINANCE-EQ,BUY,128.09,99.00,64.00,ACCEPTED,
+2025-11-30T11:03:21.438754,TradingView,AXISBANK-EQ,SELL,1849.97,95.00,85.00,ACCEPTED,
+2025-11-30T11:03:21.760624,TradingView,HDFC-EQ,BUY,1111.34,94.00,64.00,ACCEPTED,
+2025-11-30T11:03:22.087467,TradingView,TITAN-EQ,SELL,412.10,99.00,65.00,ACCEPTED,
+2025-11-30T11:03:22.302403,TradingView,NESTLEIND-EQ,BUY,456.75,91.00,62.00,ACCEPTED,
+2025-11-30T11:03:22.604423,TradingView,TITAN-EQ,BUY,414.71,96.00,76.00,ACCEPTED,
+2025-11-30T11:03:22.930372,TradingView,BAJFINANCE-EQ,BUY,128.78,91.00,74.00,ACCEPTED,
+2025-11-30T11:03:23.145950,TradingView,BAJFINANCE-EQ,BUY,127.57,97.00,73.00,ACCEPTED,
+2025-11-30T11:03:23.321168,TradingView,BAJFINANCE-EQ,BUY,128.75,92.00,67.00,ACCEPTED,
+2025-11-30T11:03:23.668728,TradingView,AXISBANK-EQ,SELL,1850.19,98.00,62.00,ACCEPTED,
+2025-11-30T11:03:23.892887,TradingView,HDFC-EQ,SELL,1104.83,99.00,62.00,ACCEPTED,
+2025-11-30T11:03:24.189702,TradingView,NESTLEIND-EQ,BUY,457.84,91.00,60.00,ACCEPTED,
+2025-11-30T11:03:24.463628,TradingView,AXISBANK-EQ,SELL,1850.01,99.00,84.00,ACCEPTED,
+2025-11-30T11:03:24.739291,TradingView,HDFC-EQ,BUY,1110.67,91.00,82.00,ACCEPTED,
+2025-11-30T11:03:25.014498,TradingView,M&M-EQ,SELL,1653.31,95.00,62.00,ACCEPTED,
+2025-11-30T11:03:25.179595,TradingView,TITAN-EQ,BUY,415.81,99.00,63.00,ACCEPTED,
+2025-11-30T11:03:25.318593,TradingView,AXISBANK-EQ,SELL,1850.07,91.00,59.00,ACCEPTED,
+2025-11-30T11:03:25.645159,TradingView,BAJFINANCE-EQ,BUY,128.56,95.00,63.00,ACCEPTED,
+2025-11-30T11:03:25.846733,TradingView,NESTLEIND-EQ,SELL,454.49,97.00,77.00,ACCEPTED,
+2025-11-30T11:03:26.060299,TradingView,NESTLEIND-EQ,BUY,458.16,99.00,62.00,ACCEPTED,
+2025-11-30T11:03:26.336464,TradingView,BAJFINANCE-EQ,SELL,126.96,98.00,72.00,ACCEPTED,
+2025-11-30T11:03:26.453348,TradingView,BAJFINANCE-EQ,SELL,127.58,98.00,64.00,ACCEPTED,
+2025-11-30T11:03:26.658950,TradingView,SUNPHARMA-EQ,SELL,2273.98,92.00,78.00,ACCEPTED,
+2025-11-30T11:03:26.816484,TradingView,SUNPHARMA-EQ,SELL,2273.18,95.00,66.00,ACCEPTED,
+2025-11-30T11:03:27.128246,TradingView,SUNPHARMA-EQ,SELL,2273.42,99.00,55.00,ACCEPTED,
+2025-11-30T11:03:27.471973,TradingView,M&M-EQ,SELL,1652.53,90.00,76.00,ACCEPTED,
+2025-11-30T11:03:27.796676,TradingView,HDFC-EQ,SELL,1104.40,92.00,55.00,ACCEPTED,
+2025-11-30T11:03:27.955512,TradingView,AXISBANK-EQ,BUY,1860.63,90.00,63.00,ACCEPTED,
+2025-11-30T11:03:28.280942,TradingView,TITAN-EQ,SELL,413.36,90.00,79.00,ACCEPTED,
+2025-11-30T11:03:28.383615,TradingView,HDFC-EQ,SELL,1104.73,95.00,79.00,ACCEPTED,
+2025-11-30T11:03:28.622180,TradingView,BAJFINANCE-EQ,SELL,126.79,92.00,77.00,ACCEPTED,
+2025-11-30T11:03:28.769200,TradingView,M&M-EQ,BUY,1662.04,94.00,82.00,ACCEPTED,
+2025-11-30T11:03:29.063925,TradingView,M&M-EQ,BUY,1663.01,94.00,67.00,ACCEPTED,
+2025-11-30T11:03:29.272808,TradingView,SUNPHARMA-EQ,BUY,2287.13,91.00,90.00,ACCEPTED,
+2025-11-30T11:03:29.429391,TradingView,M&M-EQ,BUY,1662.89,92.00,71.00,ACCEPTED,
+2025-11-30T11:03:29.624973,TradingView,SUNPHARMA-EQ,BUY,2288.19,97.00,74.00,ACCEPTED,
+2025-11-30T11:03:29.858990,TradingView,HDFC-EQ,BUY,1111.29,95.00,63.00,ACCEPTED,
+2025-11-30T11:03:29.993499,TradingView,NESTLEIND-EQ,SELL,454.42,92.00,75.00,ACCEPTED,
+2025-11-30T11:03:30.298610,TradingView,BAJFINANCE-EQ,BUY,128.77,96.00,76.00,ACCEPTED,
+2025-11-30T11:03:30.608214,TradingView,BAJFINANCE-EQ,BUY,128.33,98.00,66.00,ACCEPTED,
+2025-11-30T11:03:30.929149,TradingView,HDFC-EQ,BUY,1110.91,97.00,65.00,ACCEPTED,
+2025-11-30T11:03:31.047742,TradingView,TITAN-EQ,BUY,414.49,96.00,62.00,ACCEPTED,
+2025-11-30T11:03:31.324333,TradingView,SUNPHARMA-EQ,BUY,2287.97,99.00,60.00,ACCEPTED,
+2025-11-30T11:03:31.593616,TradingView,BAJFINANCE-EQ,SELL,127.11,97.00,83.00,ACCEPTED,
+2025-11-30T11:03:31.714907,TradingView,AXISBANK-EQ,BUY,1861.28,96.00,65.00,ACCEPTED,
+2025-11-30T11:03:31.893570,TradingView,HDFC-EQ,BUY,1110.67,91.00,89.00,ACCEPTED,
+2025-11-30T11:03:32.234964,TradingView,TITAN-EQ,BUY,415.44,92.00,65.00,ACCEPTED,
+2025-11-30T11:03:32.576475,TradingView,LT-EQ,BUY,1859.02,97.00,75.00,ACCEPTED,
+2025-11-30T11:03:32.828450,TradingView,INFY-EQ,BUY,1848.46,91.00,63.00,ACCEPTED,
+2025-11-30T11:03:32.928185,TradingView,AXISBANK-EQ,SELL,1849.71,94.00,80.00,ACCEPTED,
+2025-11-30T11:03:33.152934,TradingView,LT-EQ,BUY,1858.90,91.00,63.00,ACCEPTED,
+2025-11-30T11:03:33.332840,TradingView,RELIANCE-EQ,SELL,1227.21,90.00,83.00,ACCEPTED,
+2025-11-30T11:03:33.546856,TradingView,ICICIBANK-EQ,SELL,2118.35,91.00,75.00,ACCEPTED,
+2025-11-30T11:03:33.858586,TradingView,ICICIBANK-EQ,BUY,2130.42,93.00,76.00,ACCEPTED,
+2025-11-30T11:03:34.159536,TradingView,ICICIBANK-EQ,BUY,2130.50,95.00,61.00,ACCEPTED,
+2025-11-30T11:03:34.431886,TradingView,HDFCBANK-EQ,BUY,727.48,98.00,79.00,ACCEPTED,
+2025-11-30T11:03:34.738205,TradingView,AXISBANK-EQ,SELL,1848.87,98.00,85.00,ACCEPTED,
+2025-11-30T11:03:34.948452,TradingView,ICICIBANK-EQ,BUY,2130.48,97.00,78.00,ACCEPTED,
+2025-11-30T11:03:35.053459,TradingView,AXISBANK-EQ,BUY,1860.26,98.00,70.00,ACCEPTED,
+2025-11-30T11:03:35.365816,TradingView,ONGC-EQ,SELL,1290.84,93.00,69.00,ACCEPTED,
+2025-11-30T11:03:35.551875,TradingView,INFY-EQ,BUY,1847.86,94.00,75.00,ACCEPTED,
+2025-11-30T11:03:35.803218,TradingView,RELIANCE-EQ,BUY,1234.20,99.00,82.00,ACCEPTED,
+2025-11-30T11:03:35.935957,TradingView,LT-EQ,BUY,1858.49,91.00,88.00,ACCEPTED,
+2025-11-30T11:03:36.034753,TradingView,HDFCBANK-EQ,BUY,726.43,99.00,68.00,ACCEPTED,
+2025-11-30T11:03:36.182571,TradingView,ICICIBANK-EQ,BUY,2130.68,99.00,68.00,ACCEPTED,
+2025-11-30T11:03:36.391818,TradingView,AXISBANK-EQ,BUY,1861.12,99.00,66.00,ACCEPTED,
+2025-11-30T11:03:36.711513,TradingView,ONGC-EQ,SELL,1290.33,91.00,85.00,ACCEPTED,
+2025-11-30T11:03:36.827603,TradingView,LT-EQ,BUY,1858.18,98.00,88.00,ACCEPTED,
+2025-11-30T11:03:37.028169,TradingView,LT-EQ,BUY,1858.33,95.00,62.00,ACCEPTED,
+2025-11-30T11:03:37.345590,TradingView,AXISBANK-EQ,SELL,1849.75,96.00,66.00,ACCEPTED,
+2025-11-30T11:03:37.556855,TradingView,ULTRACEMCO-EQ,BUY,715.23,95.00,79.00,ACCEPTED,
+2025-11-30T11:03:37.721473,TradingView,HDFCBANK-EQ,BUY,726.29,94.00,81.00,ACCEPTED,
+2025-11-30T11:03:37.881202,TradingView,ICICIBANK-EQ,BUY,2131.87,92.00,64.00,ACCEPTED,
+2025-11-30T11:03:38.012863,TradingView,INFY-EQ,BUY,1848.51,98.00,72.00,ACCEPTED,
+2025-11-30T11:03:38.160835,TradingView,ULTRACEMCO-EQ,BUY,714.89,99.00,64.00,ACCEPTED,
+2025-11-30T11:03:38.359247,TradingView,AXISBANK-EQ,BUY,1860.29,94.00,77.00,ACCEPTED,
+2025-11-30T11:03:38.606554,TradingView,ONGC-EQ,BUY,1298.74,91.00,63.00,ACCEPTED,
+2025-11-30T11:03:38.922791,TradingView,INFY-EQ,BUY,1847.95,94.00,78.00,ACCEPTED,
+2025-11-30T11:03:39.220412,TradingView,LT-EQ,SELL,1847.35,90.00,56.00,ACCEPTED,
+2025-11-30T11:03:39.400562,TradingView,ITC-EQ,BUY,1304.35,98.00,90.00,ACCEPTED,
+2025-11-30T11:03:39.687241,TradingView,LT-EQ,SELL,1847.63,93.00,80.00,ACCEPTED,
+2025-11-30T11:03:39.864113,TradingView,ONGC-EQ,BUY,1299.06,97.00,78.00,ACCEPTED,
+2025-11-30T11:03:39.990174,TradingView,ONGC-EQ,SELL,1291.50,93.00,66.00,ACCEPTED,
+2025-11-30T11:03:40.271815,TradingView,HDFCBANK-EQ,SELL,722.12,98.00,56.00,ACCEPTED,
+2025-11-30T11:03:40.553084,TradingView,ONGC-EQ,SELL,1290.28,93.00,62.00,ACCEPTED,
+2025-11-30T11:03:40.711326,TradingView,LT-EQ,BUY,1857.91,93.00,66.00,ACCEPTED,
+2025-11-30T11:03:40.946024,TradingView,ITC-EQ,BUY,1303.36,92.00,67.00,ACCEPTED,
+2025-11-30T11:03:41.085448,TradingView,ULTRACEMCO-EQ,SELL,711.42,92.00,71.00,ACCEPTED,
+2025-11-30T11:03:41.252641,TradingView,HDFCBANK-EQ,BUY,726.83,95.00,80.00,ACCEPTED,
+2025-11-30T11:03:41.556066,TradingView,ONGC-EQ,BUY,1298.12,90.00,67.00,ACCEPTED,
+2025-11-30T11:03:41.672169,TradingView,KOTAKBANK-EQ,SELL,163.99,90.00,66.00,ACCEPTED,
+2025-11-30T11:03:42.006850,TradingView,HDFCBANK-EQ,BUY,726.44,94.00,81.00,ACCEPTED,
+2025-11-30T11:03:42.310295,TradingView,ICICIBANK-EQ,BUY,2131.54,90.00,76.00,ACCEPTED,
+2025-11-30T11:03:42.479296,TradingView,LT-EQ,BUY,1858.71,91.00,60.00,ACCEPTED,
+2025-11-30T11:03:42.782797,TradingView,ONGC-EQ,SELL,1290.30,92.00,75.00,ACCEPTED,
+2025-11-30T11:03:42.971983,TradingView,ULTRACEMCO-EQ,BUY,714.55,99.00,60.00,ACCEPTED,
+2025-11-30T11:03:43.093988,TradingView,AXISBANK-EQ,SELL,1850.05,98.00,66.00,ACCEPTED,
+2025-11-30T11:03:43.197360,TradingView,RELIANCE-EQ,BUY,1235.36,99.00,69.00,ACCEPTED,
+2025-11-30T11:03:43.511986,TradingView,ONGC-EQ,SELL,1291.77,98.00,73.00,ACCEPTED,
+2025-11-30T11:03:43.778944,TradingView,ITC-EQ,SELL,1295.61,90.00,57.00,ACCEPTED,
+2025-11-30T11:03:44.041956,TradingView,HDFCBANK-EQ,BUY,726.64,93.00,71.00,ACCEPTED,
+2025-11-30T11:03:44.144877,TradingView,ULTRACEMCO-EQ,BUY,715.42,93.00,84.00,ACCEPTED,
+2025-11-30T11:03:44.272884,TradingView,LT-EQ,SELL,1848.10,92.00,82.00,ACCEPTED,
+2025-11-30T11:03:44.399745,TradingView,KOTAKBANK-EQ,BUY,164.04,96.00,62.00,ACCEPTED,
+2025-11-30T11:03:44.689556,TradingView,ONGC-EQ,SELL,1290.93,91.00,79.00,ACCEPTED,
+2025-11-30T11:03:45.016857,TradingView,INFY-EQ,BUY,1848.40,90.00,73.00,ACCEPTED,
+2025-11-30T11:03:45.118130,TradingView,HDFCBANK-EQ,BUY,726.27,94.00,75.00,ACCEPTED,
+2025-11-30T11:03:45.305488,TradingView,ICICIBANK-EQ,SELL,2117.94,93.00,70.00,ACCEPTED,
+2025-11-30T11:03:45.493463,TradingView,LT-EQ,SELL,1847.79,92.00,68.00,ACCEPTED,
+2025-11-30T11:03:45.693603,TradingView,KOTAKBANK-EQ,BUY,164.10,90.00,80.00,ACCEPTED,
+2025-11-30T11:03:45.857760,TradingView,RELIANCE-EQ,SELL,1226.52,94.00,75.00,ACCEPTED,
+2025-11-30T11:03:46.024910,TradingView,AXISBANK-EQ,BUY,1859.79,95.00,84.00,ACCEPTED,
+2025-11-30T11:03:46.287054,TradingView,ITC-EQ,BUY,1304.36,90.00,68.00,ACCEPTED,
+2025-11-30T11:03:46.587405,TradingView,ONGC-EQ,SELL,1291.56,92.00,59.00,ACCEPTED,
+2025-11-30T11:03:46.880452,TradingView,ONGC-EQ,BUY,1298.37,92.00,72.00,ACCEPTED,
+2025-11-30T11:03:47.094657,TradingView,RELIANCE-EQ,SELL,1227.26,92.00,60.00,ACCEPTED,
+2025-11-30T11:03:47.382667,TradingView,LT-EQ,BUY,1858.41,96.00,79.00,ACCEPTED,
+2025-11-30T11:03:47.675807,TradingView,ITC-EQ,SELL,1310.80,93.00,62.00,ACCEPTED,
+2025-11-30T11:03:47.683552,TradingView,TITAN-EQ,SELL,417.89,95.00,72.00,ACCEPTED,
+2025-11-30T11:03:47.684215,TradingView,ULTRACEMCO-EQ,SELL,719.97,92.00,63.00,ACCEPTED,
+2025-11-30T11:03:47.686867,TradingView,ONGC-EQ,SELL,1306.95,97.00,65.00,ACCEPTED,
+2025-11-30T11:03:47.688793,TradingView,SBIN-EQ,SELL,685.41,96.00,77.00,ACCEPTED,
+2025-11-30T11:03:47.689405,TradingView,AXISBANK-EQ,SELL,1872.22,99.00,57.00,ACCEPTED,
+2025-11-30T11:03:47.727951,TradingView,NESTLEIND-EQ,SELL,461.02,90.00,73.00,ACCEPTED,
+2025-11-30T11:03:47.741074,TradingView,BAJFINANCE-EQ,SELL,128.91,97.00,78.00,ACCEPTED,
+2025-11-30T11:03:47.741733,TradingView,MARUTI-EQ,SELL,2448.38,96.00,57.00,ACCEPTED,
+2025-11-30T11:03:47.744766,TradingView,TCS-EQ,SELL,466.03,95.00,62.00,ACCEPTED,
+2025-11-30T11:09:42.247071,TradingView,ITC-EQ,BUY,773.43,98.00,95.00,ACCEPTED,
+2025-11-30T11:09:42.249788,TradingView,ICICIBANK-EQ,BUY,2039.51,95.00,95.00,ACCEPTED,
+2025-11-30T11:09:42.254436,TradingView,SBIN-EQ,BUY,2223.57,98.00,95.00,ACCEPTED,
+2025-11-30T11:09:42.255298,TradingView,BAJFINANCE-EQ,BUY,1703.58,95.00,92.00,ACCEPTED,
+2025-11-30T11:09:42.256268,TradingView,KOTAKBANK-EQ,BUY,151.41,97.00,93.00,ACCEPTED,
+2025-11-30T11:09:42.256377,TradingView,MARUTI-EQ,BUY,854.02,94.00,91.00,ACCEPTED,
+2025-11-30T11:09:44.237988,TradingView,BAJFINANCE-EQ,BUY,1704.07,94.00,95.00,ACCEPTED,
+2025-11-30T11:09:44.525075,TradingView,TITAN-EQ,BUY,968.79,94.00,92.00,ACCEPTED,
+2025-11-30T11:09:44.820596,TradingView,ITC-EQ,BUY,773.47,97.00,91.00,ACCEPTED,
+2025-11-30T11:09:45.121078,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:09:45.376888,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 81.0 < 85
+2025-11-30T11:09:45.501396,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 65.0 < 85
+2025-11-30T11:09:45.686632,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 70.0 < 85
+2025-11-30T11:09:45.871179,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:09:46.036372,TradingView,BAJFINANCE-EQ,BUY,1703.72,95.00,93.00,ACCEPTED,
+2025-11-30T11:09:46.364911,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 59.0 < 85
+2025-11-30T11:09:46.656197,TradingView,NTPC-EQ,BUY,695.14,99.00,93.00,ACCEPTED,
+2025-11-30T11:09:46.965436,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 55.0 < 85
+2025-11-30T11:09:47.064449,TradingView,M&M-EQ,BUY,1872.63,99.00,95.00,ACCEPTED,
+2025-11-30T11:09:47.371269,TradingView,ITC-EQ,BUY,773.07,98.00,95.00,ACCEPTED,
+2025-11-30T11:09:47.534290,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 77.0 < 85
+2025-11-30T11:09:47.748455,TradingView,INFY-EQ,BUY,2333.26,94.00,91.00,ACCEPTED,
+2025-11-30T11:09:47.899495,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 59.0 < 85
+2025-11-30T11:09:48.028632,TradingView,AXISBANK-EQ,BUY,1574.41,98.00,95.00,ACCEPTED,
+2025-11-30T11:09:48.185375,TradingView,INFY-EQ,BUY,2334.08,94.00,95.00,ACCEPTED,
+2025-11-30T11:09:48.352524,TradingView,AXISBANK-EQ,BUY,1574.02,98.00,93.00,ACCEPTED,
+2025-11-30T11:09:48.602625,TradingView,HDFC-EQ,BUY,423.72,96.00,95.00,ACCEPTED,
+2025-11-30T11:09:48.829433,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 56.0 < 85
+2025-11-30T11:09:49.059019,TradingView,TCS-EQ,BUY,376.18,99.00,95.00,ACCEPTED,
+2025-11-30T11:09:49.250399,TradingView,ONGC-EQ,BUY,1195.60,98.00,93.00,ACCEPTED,
+2025-11-30T11:09:49.397660,TradingView,TITAN-EQ,BUY,967.61,95.00,94.00,ACCEPTED,
+2025-11-30T11:09:49.541012,TradingView,ITC-EQ,BUY,772.12,98.00,94.00,ACCEPTED,
+2025-11-30T11:09:49.827802,TradingView,ONGC-EQ,BUY,1196.27,98.00,91.00,ACCEPTED,
+2025-11-30T11:09:50.049579,TradingView,TCS-EQ,BUY,377.50,95.00,91.00,ACCEPTED,
+2025-11-30T11:09:50.260423,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 82.0 < 85
+2025-11-30T11:09:50.390642,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:09:50.685494,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 82.0 < 85
+2025-11-30T11:09:50.818853,TradingView,NTPC-EQ,BUY,695.34,94.00,95.00,ACCEPTED,
+2025-11-30T11:09:50.988493,TradingView,LT-EQ,BUY,492.00,94.00,94.00,ACCEPTED,
+2025-11-30T11:09:51.170048,TradingView,RELIANCE-EQ,BUY,1079.43,99.00,90.00,ACCEPTED,
+2025-11-30T11:09:51.401568,TradingView,M&M-EQ,BUY,1872.56,97.00,94.00,ACCEPTED,
+2025-11-30T11:09:51.529065,TradingView,ITC-EQ,BUY,772.04,99.00,90.00,ACCEPTED,
+2025-11-30T11:09:51.845075,TradingView,LT-EQ,BUY,491.76,95.00,91.00,ACCEPTED,
+2025-11-30T11:09:52.110100,TradingView,LT-EQ,BUY,491.99,96.00,94.00,ACCEPTED,
+2025-11-30T11:09:52.219003,TradingView,ONGC-EQ,BUY,1196.93,94.00,91.00,ACCEPTED,
+2025-11-30T11:09:52.402235,TradingView,NTPC-EQ,BUY,695.41,95.00,95.00,ACCEPTED,
+2025-11-30T11:09:52.711372,TradingView,AXISBANK-EQ,BUY,1575.42,97.00,93.00,ACCEPTED,
+2025-11-30T11:09:52.911008,TradingView,ITC-EQ,BUY,772.45,96.00,91.00,ACCEPTED,
+2025-11-30T11:09:53.225997,TradingView,NTPC-EQ,BUY,694.65,99.00,93.00,ACCEPTED,
+2025-11-30T11:09:53.441548,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:09:53.781508,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 82.0 < 85
+2025-11-30T11:09:54.083830,TradingView,HDFC-EQ,BUY,423.29,98.00,93.00,ACCEPTED,
+2025-11-30T11:09:54.370140,TradingView,BAJFINANCE-EQ,BUY,1703.70,98.00,92.00,ACCEPTED,
+2025-11-30T11:09:54.478358,TradingView,M&M-EQ,BUY,1871.88,98.00,92.00,ACCEPTED,
+2025-11-30T11:09:54.737448,TradingView,M&M-EQ,BUY,1871.28,94.00,95.00,ACCEPTED,
+2025-11-30T11:09:54.856723,TradingView,TITAN-EQ,BUY,968.46,96.00,90.00,ACCEPTED,
+2025-11-30T11:09:55.189579,TradingView,HDFC-EQ,BUY,423.00,96.00,92.00,ACCEPTED,
+2025-11-30T11:09:55.403165,TradingView,M&M-EQ,BUY,1872.45,95.00,95.00,ACCEPTED,
+2025-11-30T11:09:55.631398,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 70.0 < 85
+2025-11-30T11:09:55.928257,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 78.0 < 85
+2025-11-30T11:09:56.214638,TradingView,ITC-EQ,BUY,773.55,94.00,94.00,ACCEPTED,
+2025-11-30T11:09:56.514144,TradingView,HDFC-EQ,BUY,423.26,97.00,94.00,ACCEPTED,
+2025-11-30T11:09:56.634022,TradingView,M&M-EQ,BUY,1871.35,95.00,90.00,ACCEPTED,
+2025-11-30T11:09:56.939326,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:09:57.092072,TradingView,TCS-EQ,BUY,377.50,98.00,91.00,ACCEPTED,
+2025-11-30T11:09:57.346275,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 84.0 < 85
+2025-11-30T11:09:57.587243,TradingView,TCS-EQ,BUY,377.41,96.00,94.00,ACCEPTED,
+2025-11-30T11:09:57.850156,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 66.0 < 85
+2025-11-30T11:09:58.088258,TradingView,BAJFINANCE-EQ,BUY,1703.11,95.00,91.00,ACCEPTED,
+2025-11-30T11:09:58.190632,TradingView,NTPC-EQ,BUY,695.55,97.00,91.00,ACCEPTED,
+2025-11-30T11:09:58.403576,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 72.0 < 85
+2025-11-30T11:09:58.614702,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 79.0 < 85
+2025-11-30T11:09:58.920854,TradingView,BAJFINANCE-EQ,BUY,1703.69,94.00,91.00,ACCEPTED,
+2025-11-30T11:09:59.102042,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:09:59.322240,TradingView,RELIANCE-EQ,BUY,1080.14,98.00,92.00,ACCEPTED,
+2025-11-30T11:09:59.627618,TradingView,BAJFINANCE-EQ,BUY,1703.76,98.00,90.00,ACCEPTED,
+2025-11-30T11:09:59.741384,TradingView,TCS-EQ,SELL,374.71,94.00,85.00,ACCEPTED,
+2025-11-30T11:10:00.000700,TradingView,ICICIBANK-EQ,BUY,2038.74,95.00,94.00,ACCEPTED,
+2025-11-30T11:10:00.324479,TradingView,ICICIBANK-EQ,BUY,2039.71,99.00,95.00,ACCEPTED,
+2025-11-30T11:10:00.425216,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 65.0 < 85
+2025-11-30T11:10:00.571707,TradingView,BAJFINANCE-EQ,BUY,1702.92,97.00,95.00,ACCEPTED,
+2025-11-30T11:10:00.910399,TradingView,AXISBANK-EQ,BUY,1574.60,99.00,93.00,ACCEPTED,
+2025-11-30T11:10:01.093952,TradingView,BAJFINANCE-EQ,BUY,1703.49,98.00,95.00,ACCEPTED,
+2025-11-30T11:10:01.384034,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 67.0 < 85
+2025-11-30T11:10:01.594901,TradingView,ICICIBANK-EQ,BUY,2039.50,95.00,93.00,ACCEPTED,
+2025-11-30T11:10:01.849480,TradingView,ITC-EQ,BUY,772.03,96.00,91.00,ACCEPTED,
+2025-11-30T11:10:02.172017,TradingView,AXISBANK-EQ,BUY,1575.44,95.00,95.00,ACCEPTED,
+2025-11-30T11:10:02.430110,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 56.0 < 85
+2025-11-30T11:10:02.586590,TradingView,ITC-EQ,BUY,772.67,99.00,91.00,ACCEPTED,
+2025-11-30T11:10:02.847879,TradingView,BAJFINANCE-EQ,BUY,1704.04,94.00,95.00,ACCEPTED,
+2025-11-30T11:10:03.087876,TradingView,ONGC-EQ,BUY,1195.62,98.00,90.00,ACCEPTED,
+2025-11-30T11:10:03.385110,TradingView,ITC-EQ,BUY,772.09,94.00,90.00,ACCEPTED,
+2025-11-30T11:10:03.646134,TradingView,ITC-EQ,BUY,772.54,97.00,95.00,ACCEPTED,
+2025-11-30T11:10:03.918051,TradingView,BAJFINANCE-EQ,BUY,1704.24,94.00,95.00,ACCEPTED,
+2025-11-30T11:10:04.215780,TradingView,ITC-EQ,BUY,773.07,96.00,92.00,ACCEPTED,
+2025-11-30T11:10:04.367107,TradingView,RELIANCE-EQ,BUY,1079.63,95.00,94.00,ACCEPTED,
+2025-11-30T11:10:04.678012,TradingView,ONGC-EQ,BUY,1195.70,96.00,91.00,ACCEPTED,
+2025-11-30T11:10:05.015094,TradingView,AXISBANK-EQ,BUY,1575.10,95.00,92.00,ACCEPTED,
+2025-11-30T11:10:05.271388,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:10:05.546410,TradingView,AXISBANK-EQ,BUY,1575.38,94.00,95.00,ACCEPTED,
+2025-11-30T11:10:05.890857,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 84.0 < 85
+2025-11-30T11:10:06.207280,TradingView,AXISBANK-EQ,BUY,1574.01,97.00,94.00,ACCEPTED,
+2025-11-30T11:10:06.364942,TradingView,ONGC-EQ,BUY,1196.25,99.00,95.00,ACCEPTED,
+2025-11-30T11:10:06.622270,TradingView,AXISBANK-EQ,BUY,1575.15,99.00,90.00,ACCEPTED,
+2025-11-30T11:10:06.741998,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:04.121601,TradingView,BHARTIARTL-EQ,BUY,1055.42,98.00,91.00,ACCEPTED,
+2025-11-30T11:12:04.132808,TradingView,ONGC-EQ,BUY,1194.29,96.00,92.00,ACCEPTED,
+2025-11-30T11:12:04.133178,TradingView,NTPC-EQ,BUY,137.93,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:04.134061,TradingView,ULTRACEMCO-EQ,BUY,810.42,99.00,92.00,ACCEPTED,
+2025-11-30T11:12:04.134984,TradingView,LT-EQ,BUY,1045.15,94.00,93.00,ACCEPTED,
+2025-11-30T11:12:04.136089,TradingView,INFY-EQ,BUY,2366.31,99.00,95.00,ACCEPTED,
+2025-11-30T11:12:06.098342,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 84.0 < 85
+2025-11-30T11:12:06.430588,TradingView,M&M-EQ,BUY,338.29,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:06.757338,TradingView,ADANIENT-EQ,BUY,1420.67,98.00,94.00,ACCEPTED,
+2025-11-30T11:12:07.001830,TradingView,ADANIPORTS-EQ,BUY,1913.91,97.00,95.00,ACCEPTED,
+2025-11-30T11:12:07.177410,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 78.0 < 85
+2025-11-30T11:12:07.504627,TradingView,AXISBANK-EQ,BUY,1385.81,98.00,93.00,ACCEPTED,
+2025-11-30T11:12:07.698442,TradingView,AXISBANK-EQ,BUY,1385.71,97.00,94.00,ACCEPTED,
+2025-11-30T11:12:07.916467,TradingView,ONGC-EQ,BUY,1194.81,97.00,92.00,ACCEPTED,
+2025-11-30T11:12:08.191944,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:12:08.317469,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 79.0 < 85
+2025-11-30T11:12:08.502881,TradingView,ADANIPORTS-EQ,BUY,1913.48,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:08.705393,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 82.0 < 85
+2025-11-30T11:12:08.891279,TradingView,AXISBANK-EQ,BUY,1386.68,96.00,91.00,ACCEPTED,
+2025-11-30T11:12:09.179514,TradingView,NTPC-EQ,BUY,138.08,96.00,95.00,ACCEPTED,
+2025-11-30T11:12:09.520021,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 76.0 < 85
+2025-11-30T11:12:09.827389,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:12:09.976336,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 70.0 < 85
+2025-11-30T11:12:10.252799,TradingView,NTPC-EQ,BUY,137.88,97.00,94.00,ACCEPTED,
+2025-11-30T11:12:10.367798,TradingView,NTPC-EQ,BUY,137.80,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:10.693239,TradingView,HDFCBANK-EQ,BUY,1208.08,98.00,92.00,ACCEPTED,
+2025-11-30T11:12:10.908582,TradingView,ADANIENT-EQ,BUY,1420.92,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:11.037821,TradingView,HDFCBANK-EQ,BUY,1207.70,95.00,95.00,ACCEPTED,
+2025-11-30T11:12:11.337715,TradingView,AXISBANK-EQ,BUY,1386.00,99.00,90.00,ACCEPTED,
+2025-11-30T11:12:11.601513,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:12:11.800027,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 72.0 < 85
+2025-11-30T11:12:11.920215,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:12:12.175924,TradingView,TITAN-EQ,BUY,693.07,96.00,93.00,ACCEPTED,
+2025-11-30T11:12:12.489936,TradingView,ADANIENT-EQ,BUY,1421.43,98.00,94.00,ACCEPTED,
+2025-11-30T11:12:12.672674,TradingView,M&M-EQ,BUY,337.27,97.00,92.00,ACCEPTED,
+2025-11-30T11:12:12.982602,TradingView,POWERGRID-EQ,BUY,2298.50,94.00,91.00,ACCEPTED,
+2025-11-30T11:12:13.292528,TradingView,POWERGRID-EQ,SELL,2285.49,95.00,87.00,ACCEPTED,
+2025-11-30T11:12:13.498139,TradingView,POWERGRID-EQ,BUY,2298.40,94.00,90.00,ACCEPTED,
+2025-11-30T11:12:13.781307,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 79.0 < 85
+2025-11-30T11:12:13.892876,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 83.0 < 85
+2025-11-30T11:12:14.118449,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 84.0 < 85
+2025-11-30T11:12:14.351668,TradingView,POWERGRID-EQ,BUY,2298.01,97.00,90.00,ACCEPTED,
+2025-11-30T11:12:14.615253,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:12:14.935195,TradingView,NTPC-EQ,SELL,137.14,94.00,88.00,ACCEPTED,
+2025-11-30T11:12:15.227131,TradingView,NTPC-EQ,BUY,137.31,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:15.344743,TradingView,POWERGRID-EQ,BUY,2297.80,97.00,95.00,ACCEPTED,
+2025-11-30T11:12:15.505993,TradingView,POWERGRID-EQ,BUY,2297.78,96.00,93.00,ACCEPTED,
+2025-11-30T11:12:15.687767,TradingView,AXISBANK-EQ,SELL,1377.77,95.00,89.00,ACCEPTED,
+2025-11-30T11:12:16.030958,TradingView,ONGC-EQ,BUY,1195.15,98.00,92.00,ACCEPTED,
+2025-11-30T11:12:16.347852,TradingView,WIPRO-EQ,SELL,307.46,90.00,85.00,ACCEPTED,
+2025-11-30T11:12:16.488543,TradingView,ADANIPORTS-EQ,BUY,1914.33,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:16.626400,TradingView,POWERGRID-EQ,SELL,2284.80,91.00,87.00,ACCEPTED,
+2025-11-30T11:12:16.865674,TradingView,M&M-EQ,BUY,337.96,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:17.171947,TradingView,TITAN-EQ,BUY,692.46,99.00,93.00,ACCEPTED,
+2025-11-30T11:12:17.329552,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 79.0 < 85
+2025-11-30T11:12:17.619516,TradingView,NTPC-EQ,BUY,137.41,98.00,90.00,ACCEPTED,
+2025-11-30T11:12:17.780396,TradingView,WIPRO-EQ,BUY,308.44,97.00,92.00,ACCEPTED,
+2025-11-30T11:12:17.915438,TradingView,AXISBANK-EQ,BUY,1386.59,94.00,91.00,ACCEPTED,
+2025-11-30T11:12:18.029303,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 77.0 < 85
+2025-11-30T11:12:18.331523,TradingView,POWERGRID-EQ,BUY,2299.20,96.00,91.00,ACCEPTED,
+2025-11-30T11:12:18.441443,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:12:18.561046,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:18.667399,TradingView,POWERGRID-EQ,BUY,2299.03,95.00,95.00,ACCEPTED,
+2025-11-30T11:12:18.978490,TradingView,POWERGRID-EQ,BUY,2298.86,94.00,93.00,ACCEPTED,
+2025-11-30T11:12:19.221382,TradingView,ADANIENT-EQ,BUY,1421.14,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:19.497936,TradingView,POWERGRID-EQ,BUY,2298.07,97.00,92.00,ACCEPTED,
+2025-11-30T11:12:19.693182,TradingView,WIPRO-EQ,BUY,308.59,98.00,90.00,ACCEPTED,
+2025-11-30T11:12:19.982283,TradingView,AXISBANK-EQ,BUY,1385.86,95.00,90.00,ACCEPTED,
+2025-11-30T11:12:20.168044,TradingView,ADANIENT-EQ,BUY,1421.32,94.00,95.00,ACCEPTED,
+2025-11-30T11:12:20.452476,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 82.0 < 85
+2025-11-30T11:12:20.584346,TradingView,ADANIENT-EQ,BUY,1420.79,94.00,94.00,ACCEPTED,
+2025-11-30T11:12:20.830414,TradingView,ONGC-EQ,BUY,1195.11,96.00,93.00,ACCEPTED,
+2025-11-30T11:12:21.010873,TradingView,HDFCBANK-EQ,BUY,1208.01,95.00,90.00,ACCEPTED,
+2025-11-30T11:12:21.319427,TradingView,BAJFINANCE-EQ,BUY,535.90,97.00,93.00,ACCEPTED,
+2025-11-30T11:12:21.481024,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 76.0 < 85
+2025-11-30T11:12:21.723095,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:12:21.914933,TradingView,HINDUNILVR-EQ,BUY,818.63,97.00,90.00,ACCEPTED,
+2025-11-30T11:12:22.145315,TradingView,LT-EQ,BUY,1045.19,95.00,90.00,ACCEPTED,
+2025-11-30T11:12:22.462387,TradingView,COALINDIA-EQ,BUY,427.80,97.00,92.00,ACCEPTED,
+2025-11-30T11:12:22.621949,TradingView,BEL-EQ,BUY,823.39,97.00,93.00,ACCEPTED,
+2025-11-30T11:12:22.837456,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 84.0 < 85
+2025-11-30T11:12:22.977087,TradingView,COALINDIA-EQ,BUY,427.96,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:23.211274,TradingView,BAJFINANCE-EQ,BUY,536.20,99.00,95.00,ACCEPTED,
+2025-11-30T11:12:23.482876,TradingView,MARUTI-EQ,BUY,1953.47,99.00,95.00,ACCEPTED,
+2025-11-30T11:12:23.701500,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 72.0 < 85
+2025-11-30T11:12:23.865257,TradingView,BHARTIARTL-EQ,BUY,1055.12,95.00,91.00,ACCEPTED,
+2025-11-30T11:12:24.034398,TradingView,BHARTIARTL-EQ,BUY,1055.75,95.00,93.00,ACCEPTED,
+2025-11-30T11:12:24.342397,TradingView,NESTLEIND-EQ,BUY,1786.52,97.00,94.00,ACCEPTED,
+2025-11-30T11:12:24.585496,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 71.0 < 85
+2025-11-30T11:12:24.756834,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 79.0 < 85
+2025-11-30T11:12:24.967810,TradingView,BEL-EQ,BUY,824.47,97.00,90.00,ACCEPTED,
+2025-11-30T11:12:25.192981,TradingView,LT-EQ,BUY,1044.80,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:25.414388,TradingView,MARUTI-EQ,BUY,1953.63,96.00,94.00,ACCEPTED,
+2025-11-30T11:12:25.666224,TradingView,COALINDIA-EQ,SELL,425.69,95.00,85.00,ACCEPTED,
+2025-11-30T11:12:25.868509,TradingView,LT-EQ,BUY,1043.94,96.00,90.00,ACCEPTED,
+2025-11-30T11:12:26.076533,TradingView,COALINDIA-EQ,BUY,428.36,94.00,94.00,ACCEPTED,
+2025-11-30T11:12:26.388206,TradingView,LT-EQ,BUY,1044.18,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:26.598418,TradingView,LT-EQ,BUY,1044.30,96.00,90.00,ACCEPTED,
+2025-11-30T11:12:26.869850,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:27.030904,TradingView,MARUTI-EQ,SELL,1942.84,91.00,89.00,ACCEPTED,
+2025-11-30T11:12:27.136726,TradingView,BEL-EQ,BUY,823.95,98.00,93.00,ACCEPTED,
+2025-11-30T11:12:27.239351,TradingView,BHARTIARTL-EQ,BUY,1056.11,99.00,95.00,ACCEPTED,
+2025-11-30T11:12:27.489540,TradingView,MARUTI-EQ,BUY,1953.79,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:27.658263,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:27.915562,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:28.191777,TradingView,NESTLEIND-EQ,BUY,1786.63,99.00,92.00,ACCEPTED,
+2025-11-30T11:12:28.357333,TradingView,BEL-EQ,SELL,819.51,94.00,88.00,ACCEPTED,
+2025-11-30T11:12:28.671318,TradingView,HINDUNILVR-EQ,BUY,819.32,94.00,91.00,ACCEPTED,
+2025-11-30T11:12:29.003142,TradingView,COALINDIA-EQ,BUY,427.98,99.00,92.00,ACCEPTED,
+2025-11-30T11:12:29.142179,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:29.353822,TradingView,BHARTIARTL-EQ,BUY,1055.17,96.00,92.00,ACCEPTED,
+2025-11-30T11:12:29.667964,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:29.991516,TradingView,COALINDIA-EQ,BUY,427.17,98.00,91.00,ACCEPTED,
+2025-11-30T11:12:30.338343,TradingView,NESTLEIND-EQ,BUY,1787.40,94.00,95.00,ACCEPTED,
+2025-11-30T11:12:30.625070,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:12:30.827599,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 79.0 < 85
+2025-11-30T11:12:30.992124,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 76.0 < 85
+2025-11-30T11:12:31.263767,TradingView,HINDUNILVR-EQ,SELL,814.05,94.00,88.00,ACCEPTED,
+2025-11-30T11:12:31.599769,TradingView,NESTLEIND-EQ,BUY,1786.11,97.00,90.00,ACCEPTED,
+2025-11-30T11:12:31.704179,TradingView,NESTLEIND-EQ,BUY,1785.92,96.00,95.00,ACCEPTED,
+2025-11-30T11:12:31.923315,TradingView,COALINDIA-EQ,BUY,428.17,99.00,92.00,ACCEPTED,
+2025-11-30T11:12:32.203971,TradingView,MARUTI-EQ,BUY,1953.53,95.00,92.00,ACCEPTED,
+2025-11-30T11:12:32.473281,TradingView,LT-EQ,SELL,1038.69,94.00,85.00,ACCEPTED,
+2025-11-30T11:12:32.748314,TradingView,BAJFINANCE-EQ,BUY,536.02,98.00,95.00,ACCEPTED,
+2025-11-30T11:12:33.088096,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 77.0 < 85
+2025-11-30T11:12:33.314771,TradingView,BHARTIARTL-EQ,BUY,1055.19,98.00,95.00,ACCEPTED,
+2025-11-30T11:12:33.520781,TradingView,ICICIBANK-EQ,BUY,478.32,96.00,94.00,ACCEPTED,
+2025-11-30T11:12:33.718041,TradingView,TCS-EQ,BUY,2241.53,96.00,90.00,ACCEPTED,
+2025-11-30T11:12:34.013941,TradingView,ICICIBANK-EQ,BUY,478.93,94.00,95.00,ACCEPTED,
+2025-11-30T11:12:34.220602,TradingView,KOTAKBANK-EQ,BUY,2429.06,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:34.458854,TradingView,SUNPHARMA-EQ,BUY,484.24,98.00,90.00,ACCEPTED,
+2025-11-30T11:12:34.655963,TradingView,KOTAKBANK-EQ,SELL,2415.07,93.00,89.00,ACCEPTED,
+2025-11-30T11:12:34.932855,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 82.0 < 85
+2025-11-30T11:12:35.271230,TradingView,TCS-EQ,BUY,2242.61,99.00,95.00,ACCEPTED,
+2025-11-30T11:12:35.512314,TradingView,BHARTIARTL-EQ,BUY,1055.93,99.00,93.00,ACCEPTED,
+2025-11-30T11:12:35.759207,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:35.909581,TradingView,ICICIBANK-EQ,BUY,479.03,95.00,90.00,ACCEPTED,
+2025-11-30T11:12:36.220417,TradingView,TCS-EQ,BUY,2242.54,97.00,90.00,ACCEPTED,
+2025-11-30T11:12:36.445807,TradingView,ICICIBANK-EQ,BUY,478.44,95.00,93.00,ACCEPTED,
+2025-11-30T11:12:36.667499,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 72.0 < 85
+2025-11-30T11:12:37.014775,TradingView,ICICIBANK-EQ,BUY,477.85,98.00,92.00,ACCEPTED,
+2025-11-30T11:12:37.189892,TradingView,SUNPHARMA-EQ,SELL,481.21,96.00,88.00,ACCEPTED,
+2025-11-30T11:12:37.321803,TradingView,BHARTIARTL-EQ,BUY,1055.44,94.00,94.00,ACCEPTED,
+2025-11-30T11:12:37.622864,TradingView,BHARTIARTL-EQ,BUY,1055.50,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:37.914371,TradingView,COALINDIA-EQ,BUY,427.65,94.00,95.00,ACCEPTED,
+2025-11-30T11:12:38.202500,TradingView,M&M-EQ,BUY,337.69,95.00,91.00,ACCEPTED,
+2025-11-30T11:12:38.327545,TradingView,MARUTI-EQ,BUY,1954.66,95.00,92.00,ACCEPTED,
+2025-11-30T11:12:38.495518,TradingView,POWERGRID-EQ,BUY,2298.12,99.00,91.00,ACCEPTED,
+2025-11-30T11:12:38.781847,TradingView,MARUTI-EQ,BUY,1953.57,99.00,90.00,ACCEPTED,
+2025-11-30T11:12:38.978796,TradingView,ICICIBANK-EQ,BUY,479.01,95.00,92.00,ACCEPTED,
+2025-11-30T11:12:39.183732,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 76.0 < 85
+2025-11-30T11:12:39.510011,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 72.0 < 85
+2025-11-30T11:12:39.830547,TradingView,TCS-EQ,BUY,2241.44,96.00,95.00,ACCEPTED,
+2025-11-30T11:12:39.937569,TradingView,MARUTI-EQ,BUY,1954.71,95.00,92.00,ACCEPTED,
+2025-11-30T11:12:40.076798,TradingView,SUNPHARMA-EQ,BUY,483.44,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:40.422575,TradingView,M&M-EQ,BUY,337.67,99.00,91.00,ACCEPTED,
+2025-11-30T11:12:40.631471,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 75.0 < 85
+2025-11-30T11:12:40.784984,TradingView,BHARTIARTL-EQ,BUY,1054.83,98.00,95.00,ACCEPTED,
+2025-11-30T11:12:40.933928,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:12:41.041639,TradingView,ICICIBANK-EQ,BUY,478.67,94.00,94.00,ACCEPTED,
+2025-11-30T11:12:41.330934,TradingView,POWERGRID-EQ,BUY,2298.55,95.00,90.00,ACCEPTED,
+2025-11-30T11:12:41.489001,TradingView,MARUTI-EQ,BUY,1954.43,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:41.680350,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:12:41.943711,TradingView,ICICIBANK-EQ,BUY,479.38,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:42.153188,TradingView,KOTAKBANK-EQ,BUY,2428.93,94.00,92.00,ACCEPTED,
+2025-11-30T11:12:42.451459,TradingView,ICICIBANK-EQ,BUY,478.43,97.00,95.00,ACCEPTED,
+2025-11-30T11:12:42.553274,TradingView,MARUTI-EQ,BUY,1954.25,95.00,93.00,ACCEPTED,
+2025-11-30T11:12:42.786082,TradingView,TCS-EQ,BUY,2241.71,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:42.993607,TradingView,ICICIBANK-EQ,BUY,478.53,94.00,94.00,ACCEPTED,
+2025-11-30T11:12:43.281307,TradingView,WIPRO-EQ,BUY,308.54,97.00,92.00,ACCEPTED,
+2025-11-30T11:12:43.529825,TradingView,M&M-EQ,SELL,335.57,92.00,88.00,ACCEPTED,
+2025-11-30T11:12:43.857358,TradingView,KOTAKBANK-EQ,BUY,2429.32,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:44.014313,TradingView,COALINDIA-EQ,SELL,425.34,93.00,86.00,ACCEPTED,
+2025-11-30T11:12:44.185366,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:12:44.377501,TradingView,KOTAKBANK-EQ,SELL,2414.26,95.00,89.00,ACCEPTED,
+2025-11-30T11:12:44.651573,TradingView,WIPRO-EQ,BUY,308.50,96.00,94.00,ACCEPTED,
+2025-11-30T11:12:44.855673,TradingView,KOTAKBANK-EQ,BUY,2428.72,99.00,94.00,ACCEPTED,
+2025-11-30T11:12:45.093611,TradingView,ICICIBANK-EQ,BUY,478.29,96.00,92.00,ACCEPTED,
+2025-11-30T11:12:45.326397,TradingView,ICICIBANK-EQ,BUY,478.29,97.00,93.00,ACCEPTED,
+2025-11-30T11:12:45.607450,TradingView,SUNPHARMA-EQ,BUY,484.20,95.00,92.00,ACCEPTED,
+2025-11-30T11:12:45.894471,TradingView,COALINDIA-EQ,BUY,428.08,97.00,95.00,ACCEPTED,
+2025-11-30T11:12:46.037847,TradingView,POWERGRID-EQ,BUY,2297.80,94.00,95.00,ACCEPTED,
+2025-11-30T11:12:46.274317,TradingView,M&M-EQ,BUY,337.89,99.00,95.00,ACCEPTED,
+2025-11-30T11:12:46.400979,TradingView,BHARTIARTL-EQ,BUY,1055.69,96.00,95.00,ACCEPTED,
+2025-11-30T11:12:46.640048,TradingView,M&M-EQ,BUY,337.45,95.00,92.00,ACCEPTED,
+2025-11-30T11:12:46.771833,TradingView,M&M-EQ,BUY,337.00,99.00,91.00,ACCEPTED,
+2025-11-30T11:12:47.002379,TradingView,SUNPHARMA-EQ,BUY,483.97,99.00,90.00,ACCEPTED,
+2025-11-30T11:12:47.172166,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 70.0 < 85
+2025-11-30T11:12:47.329585,TradingView,BHARTIARTL-EQ,BUY,1054.88,95.00,90.00,ACCEPTED,
+2025-11-30T11:12:47.536605,TradingView,MARUTI-EQ,BUY,1954.88,97.00,95.00,ACCEPTED,
+2025-11-30T11:12:47.780157,TradingView,TCS-EQ,BUY,2242.12,98.00,92.00,ACCEPTED,
+2025-11-30T11:12:47.978496,TradingView,SUNPHARMA-EQ,BUY,483.59,97.00,91.00,ACCEPTED,
+2025-11-30T11:12:48.198616,TradingView,POWERGRID-EQ,BUY,2299.01,98.00,90.00,ACCEPTED,
+2025-11-30T11:12:48.351621,TradingView,M&M-EQ,BUY,337.12,95.00,94.00,ACCEPTED,
+2025-11-30T11:12:48.500423,TradingView,M&M-EQ,BUY,337.59,97.00,93.00,ACCEPTED,
+2025-11-30T11:12:48.878691,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:12:48.880105,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:12:48.886636,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 73.0 < 85
+2025-11-30T11:12:48.887956,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 76.0 < 85
+2025-11-30T11:12:48.889336,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 83.0 < 85
+2025-11-30T11:12:48.892076,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 81.0 < 85
+2025-11-30T11:12:48.894891,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 80.0 < 85
+2025-11-30T11:12:48.901782,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 70.0 < 85
+2025-11-30T11:12:48.903177,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 77.0 < 85
+2025-11-30T11:12:48.904092,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,SELL alert quality too low: score 74.0 < 85
+2025-11-30T11:13:27.673885,TradingView,ADANIPORTS-EQ,BUY,949.72,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:27.676297,TradingView,SUNPHARMA-EQ,BUY,1405.09,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:27.676623,TradingView,WIPRO-EQ,BUY,2397.33,99.00,90.00,ACCEPTED,
+2025-11-30T11:13:27.683680,TradingView,NESTLEIND-EQ,BUY,1852.74,97.00,91.00,ACCEPTED,
+2025-11-30T11:13:27.684973,TradingView,BHARTIARTL-EQ,BUY,1281.29,98.00,94.00,ACCEPTED,
+2025-11-30T11:13:27.688539,TradingView,COALINDIA-EQ,BUY,1393.76,97.00,94.00,ACCEPTED,
+2025-11-30T11:13:29.664589,TradingView,BHARTIARTL-EQ,SELL,1274.84,95.00,95.00,ACCEPTED,
+2025-11-30T11:13:29.827043,TradingView,HDFCBANK-EQ,BUY,892.02,95.00,90.00,ACCEPTED,
+2025-11-30T11:13:30.101569,TradingView,POWERGRID-EQ,BUY,984.46,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:30.242058,TradingView,M&M-EQ,SELL,506.62,93.00,97.00,ACCEPTED,
+2025-11-30T11:13:30.362857,TradingView,POWERGRID-EQ,BUY,984.67,94.00,92.00,ACCEPTED,
+2025-11-30T11:13:30.464059,TradingView,RELIANCE-EQ,SELL,1138.98,91.00,94.00,ACCEPTED,
+2025-11-30T11:13:30.565012,TradingView,BHARTIARTL-EQ,BUY,1281.95,98.00,90.00,ACCEPTED,
+2025-11-30T11:13:30.746410,TradingView,WIPRO-EQ,SELL,2382.05,93.00,94.00,ACCEPTED,
+2025-11-30T11:13:31.091270,TradingView,HDFC-EQ,BUY,1809.81,95.00,93.00,ACCEPTED,
+2025-11-30T11:13:31.280264,TradingView,M&M-EQ,BUY,508.95,99.00,94.00,ACCEPTED,
+2025-11-30T11:13:31.530361,TradingView,M&M-EQ,BUY,509.74,99.00,94.00,ACCEPTED,
+2025-11-30T11:13:31.821158,TradingView,M&M-EQ,BUY,508.32,96.00,95.00,ACCEPTED,
+2025-11-30T11:13:32.018538,TradingView,POWERGRID-EQ,SELL,978.58,94.00,98.00,ACCEPTED,
+2025-11-30T11:13:32.232494,TradingView,TECHM-EQ,SELL,253.21,91.00,96.00,ACCEPTED,
+2025-11-30T11:13:32.432585,TradingView,BHARTIARTL-EQ,SELL,1274.21,95.00,98.00,ACCEPTED,
+2025-11-30T11:13:32.738475,TradingView,SUNPHARMA-EQ,BUY,1405.30,96.00,95.00,ACCEPTED,
+2025-11-30T11:13:32.891034,TradingView,SBIN-EQ,BUY,1164.65,97.00,93.00,ACCEPTED,
+2025-11-30T11:13:33.198748,TradingView,BHARTIARTL-EQ,BUY,1282.45,95.00,91.00,ACCEPTED,
+2025-11-30T11:13:33.372578,TradingView,BEL-EQ,BUY,2134.79,98.00,91.00,ACCEPTED,
+2025-11-30T11:13:33.671735,TradingView,BEL-EQ,BUY,2135.04,96.00,92.00,ACCEPTED,
+2025-11-30T11:13:33.942986,TradingView,M&M-EQ,BUY,509.44,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:34.263403,TradingView,HDFC-EQ,SELL,1798.49,96.00,90.00,ACCEPTED,
+2025-11-30T11:13:34.403633,TradingView,POWERGRID-EQ,BUY,985.16,97.00,94.00,ACCEPTED,
+2025-11-30T11:13:34.647463,TradingView,BEL-EQ,BUY,2134.35,94.00,90.00,ACCEPTED,
+2025-11-30T11:13:34.825137,TradingView,POWERGRID-EQ,BUY,985.70,97.00,94.00,ACCEPTED,
+2025-11-30T11:13:35.147007,TradingView,HDFCBANK-EQ,BUY,891.00,98.00,95.00,ACCEPTED,
+2025-11-30T11:13:35.399083,TradingView,POWERGRID-EQ,SELL,979.24,90.00,93.00,ACCEPTED,
+2025-11-30T11:13:35.689312,TradingView,HDFCBANK-EQ,SELL,886.18,94.00,98.00,ACCEPTED,
+2025-11-30T11:13:35.812356,TradingView,SUNPHARMA-EQ,BUY,1405.83,98.00,95.00,ACCEPTED,
+2025-11-30T11:13:36.158006,TradingView,M&M-EQ,SELL,505.56,91.00,99.00,ACCEPTED,
+2025-11-30T11:13:36.465590,TradingView,TECHM-EQ,SELL,252.96,91.00,98.00,ACCEPTED,
+2025-11-30T11:13:36.768403,TradingView,BHARTIARTL-EQ,BUY,1281.43,98.00,91.00,ACCEPTED,
+2025-11-30T11:13:36.961526,TradingView,BHARTIARTL-EQ,BUY,1282.09,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:37.162701,TradingView,SUNPHARMA-EQ,BUY,1405.72,96.00,90.00,ACCEPTED,
+2025-11-30T11:13:37.349337,TradingView,SBIN-EQ,BUY,1165.07,97.00,91.00,ACCEPTED,
+2025-11-30T11:13:37.473599,TradingView,POWERGRID-EQ,SELL,979.23,93.00,98.00,ACCEPTED,
+2025-11-30T11:13:37.821413,TradingView,RELIANCE-EQ,SELL,1139.06,90.00,99.00,ACCEPTED,
+2025-11-30T11:13:38.095862,TradingView,RELIANCE-EQ,BUY,1146.53,97.00,91.00,ACCEPTED,
+2025-11-30T11:13:38.261353,TradingView,BEL-EQ,SELL,2122.31,92.00,94.00,ACCEPTED,
+2025-11-30T11:13:38.518860,TradingView,M&M-EQ,BUY,509.52,99.00,94.00,ACCEPTED,
+2025-11-30T11:13:38.857415,TradingView,BEL-EQ,BUY,2133.80,98.00,94.00,ACCEPTED,
+2025-11-30T11:13:39.045059,TradingView,ONGC-EQ,BUY,2135.03,97.00,93.00,ACCEPTED,
+2025-11-30T11:13:39.149955,TradingView,BHARTIARTL-EQ,SELL,1273.90,96.00,89.00,ACCEPTED,
+2025-11-30T11:13:39.449023,TradingView,POWERGRID-EQ,BUY,984.42,98.00,95.00,ACCEPTED,
+2025-11-30T11:13:39.549513,TradingView,SBIN-EQ,SELL,1156.95,92.00,94.00,ACCEPTED,
+2025-11-30T11:13:39.834529,TradingView,TECHM-EQ,BUY,255.28,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:39.974866,TradingView,TECHM-EQ,SELL,252.82,94.00,93.00,ACCEPTED,
+2025-11-30T11:13:40.131045,TradingView,BEL-EQ,BUY,2134.00,95.00,90.00,ACCEPTED,
+2025-11-30T11:13:40.308805,TradingView,HDFCBANK-EQ,SELL,885.83,90.00,96.00,ACCEPTED,
+2025-11-30T11:13:40.514195,TradingView,RELIANCE-EQ,BUY,1145.21,99.00,92.00,ACCEPTED,
+2025-11-30T11:13:40.810582,TradingView,TECHM-EQ,BUY,254.77,95.00,90.00,ACCEPTED,
+2025-11-30T11:13:40.973783,TradingView,HDFCBANK-EQ,BUY,891.74,94.00,92.00,ACCEPTED,
+2025-11-30T11:13:41.075383,TradingView,TECHM-EQ,BUY,254.91,97.00,91.00,ACCEPTED,
+2025-11-30T11:13:41.230589,TradingView,SUNPHARMA-EQ,BUY,1405.22,99.00,91.00,ACCEPTED,
+2025-11-30T11:13:41.547054,TradingView,HDFCBANK-EQ,BUY,891.23,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:41.809964,TradingView,SUNPHARMA-EQ,BUY,1404.86,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:42.029920,TradingView,SBIN-EQ,BUY,1163.89,98.00,90.00,ACCEPTED,
+2025-11-30T11:13:42.218843,TradingView,SBIN-EQ,BUY,1164.16,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:42.459359,TradingView,BEL-EQ,BUY,2134.85,96.00,91.00,ACCEPTED,
+2025-11-30T11:13:42.642340,TradingView,BHARTIARTL-EQ,BUY,1281.32,95.00,90.00,ACCEPTED,
+2025-11-30T11:13:42.874661,TradingView,ONGC-EQ,BUY,2134.34,98.00,94.00,ACCEPTED,
+2025-11-30T11:13:43.165047,TradingView,HDFCBANK-EQ,BUY,891.77,99.00,91.00,ACCEPTED,
+2025-11-30T11:13:43.314659,TradingView,POWERGRID-EQ,BUY,985.73,97.00,95.00,ACCEPTED,
+2025-11-30T11:13:43.614528,TradingView,POWERGRID-EQ,BUY,984.50,94.00,91.00,ACCEPTED,
+2025-11-30T11:13:43.952247,TradingView,TECHM-EQ,SELL,253.72,91.00,95.00,ACCEPTED,
+2025-11-30T11:13:44.298099,TradingView,M&M-EQ,BUY,509.52,96.00,93.00,ACCEPTED,
+2025-11-30T11:13:44.586231,TradingView,BEL-EQ,BUY,2134.46,98.00,90.00,ACCEPTED,
+2025-11-30T11:13:44.829150,TradingView,INFY-EQ,SELL,1765.95,90.00,97.00,ACCEPTED,
+2025-11-30T11:13:45.038288,TradingView,BEL-EQ,BUY,2134.38,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:45.288895,TradingView,NTPC-EQ,SELL,2203.43,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:45.396822,TradingView,BEL-EQ,SELL,2122.32,91.00,96.00,ACCEPTED,
+2025-11-30T11:13:45.683001,TradingView,SBIN-EQ,BUY,1164.77,97.00,92.00,ACCEPTED,
+2025-11-30T11:13:45.941635,TradingView,BEL-EQ,SELL,2122.43,90.00,89.00,ACCEPTED,
+2025-11-30T11:13:46.096306,TradingView,INFY-EQ,BUY,1776.71,98.00,94.00,ACCEPTED,
+2025-11-30T11:13:46.270619,TradingView,NTPC-EQ,BUY,2217.93,98.00,92.00,ACCEPTED,
+2025-11-30T11:13:46.565388,TradingView,ITC-EQ,BUY,1178.45,99.00,91.00,ACCEPTED,
+2025-11-30T11:13:46.800600,TradingView,ADANIPORTS-EQ,BUY,949.51,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:47.101029,TradingView,BHARTIARTL-EQ,BUY,1280.99,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:47.438391,TradingView,INFY-EQ,BUY,1778.12,96.00,93.00,ACCEPTED,
+2025-11-30T11:13:47.665594,TradingView,BHARTIARTL-EQ,BUY,1281.74,94.00,92.00,ACCEPTED,
+2025-11-30T11:13:47.914632,TradingView,INFY-EQ,BUY,1777.59,97.00,92.00,ACCEPTED,
+2025-11-30T11:13:48.064772,TradingView,ITC-EQ,BUY,1177.23,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:48.329542,TradingView,BHARTIARTL-EQ,SELL,1274.12,90.00,87.00,ACCEPTED,
+2025-11-30T11:13:48.494963,TradingView,ADANIPORTS-EQ,SELL,944.01,90.00,99.00,ACCEPTED,
+2025-11-30T11:13:48.835404,TradingView,INFY-EQ,SELL,1766.09,90.00,90.00,ACCEPTED,
+2025-11-30T11:13:49.130238,TradingView,NTPC-EQ,BUY,2218.03,96.00,94.00,ACCEPTED,
+2025-11-30T11:13:49.405502,TradingView,KOTAKBANK-EQ,BUY,339.21,99.00,95.00,ACCEPTED,
+2025-11-30T11:13:49.664917,TradingView,SBIN-EQ,SELL,1158.31,92.00,90.00,ACCEPTED,
+2025-11-30T11:13:49.893399,TradingView,BEL-EQ,SELL,2122.14,93.00,91.00,ACCEPTED,
+2025-11-30T11:13:50.166262,TradingView,ITC-EQ,SELL,1171.43,96.00,95.00,ACCEPTED,
+2025-11-30T11:13:50.479803,TradingView,SBIN-EQ,SELL,1157.48,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:50.695791,TradingView,BEL-EQ,BUY,2134.58,96.00,95.00,ACCEPTED,
+2025-11-30T11:13:50.808787,TradingView,ADANIPORTS-EQ,BUY,949.20,97.00,94.00,ACCEPTED,
+2025-11-30T11:13:50.957127,TradingView,SBIN-EQ,BUY,1164.90,99.00,93.00,ACCEPTED,
+2025-11-30T11:13:51.252254,TradingView,NTPC-EQ,BUY,2216.62,96.00,92.00,ACCEPTED,
+2025-11-30T11:13:51.579911,TradingView,INFY-EQ,BUY,1777.13,99.00,93.00,ACCEPTED,
+2025-11-30T11:13:51.794158,TradingView,BHARTIARTL-EQ,SELL,1274.19,92.00,91.00,ACCEPTED,
+2025-11-30T11:13:52.005417,TradingView,INFY-EQ,BUY,1777.04,95.00,93.00,ACCEPTED,
+2025-11-30T11:13:52.125780,TradingView,NTPC-EQ,BUY,2217.47,99.00,93.00,ACCEPTED,
+2025-11-30T11:13:52.379378,TradingView,NTPC-EQ,SELL,2204.73,93.00,87.00,ACCEPTED,
+2025-11-30T11:13:52.520341,TradingView,ADANIPORTS-EQ,SELL,943.78,91.00,88.00,ACCEPTED,
+2025-11-30T11:13:52.778354,TradingView,NTPC-EQ,BUY,2217.99,94.00,94.00,ACCEPTED,
+2025-11-30T11:13:53.006782,TradingView,INFY-EQ,SELL,1766.27,92.00,96.00,ACCEPTED,
+2025-11-30T11:13:53.248454,TradingView,NTPC-EQ,SELL,2203.42,90.00,94.00,ACCEPTED,
+2025-11-30T11:13:53.539143,TradingView,BHARTIARTL-EQ,BUY,1282.14,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:53.730801,TradingView,ITC-EQ,SELL,1170.38,96.00,91.00,ACCEPTED,
+2025-11-30T11:13:53.836249,TradingView,INFY-EQ,BUY,1777.19,94.00,90.00,ACCEPTED,
+2025-11-30T11:13:53.970536,TradingView,INFY-EQ,BUY,1777.89,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:54.074256,TradingView,SBIN-EQ,SELL,1156.82,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:54.250349,TradingView,NTPC-EQ,SELL,2204.47,95.00,92.00,ACCEPTED,
+2025-11-30T11:13:54.428601,TradingView,KOTAKBANK-EQ,BUY,339.71,96.00,94.00,ACCEPTED,
+2025-11-30T11:13:54.770416,TradingView,BHARTIARTL-EQ,BUY,1281.85,99.00,94.00,ACCEPTED,
+2025-11-30T11:13:54.962734,TradingView,ITC-EQ,SELL,1170.45,93.00,94.00,ACCEPTED,
+2025-11-30T11:13:55.135197,TradingView,BHARTIARTL-EQ,BUY,1280.98,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:55.352260,TradingView,KOTAKBANK-EQ,BUY,339.50,96.00,95.00,ACCEPTED,
+2025-11-30T11:13:55.494419,TradingView,BEL-EQ,BUY,2133.66,95.00,92.00,ACCEPTED,
+2025-11-30T11:13:55.813944,TradingView,BHARTIARTL-EQ,BUY,1280.97,96.00,94.00,ACCEPTED,
+2025-11-30T11:13:56.116689,TradingView,SBIN-EQ,BUY,1164.17,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:56.349021,TradingView,ADANIPORTS-EQ,BUY,949.66,99.00,94.00,ACCEPTED,
+2025-11-30T11:13:56.570179,TradingView,SBIN-EQ,SELL,1158.28,91.00,98.00,ACCEPTED,
+2025-11-30T11:13:56.903491,TradingView,SUNPHARMA-EQ,BUY,1405.09,97.00,91.00,ACCEPTED,
+2025-11-30T11:13:57.207958,TradingView,ITC-EQ,BUY,1177.13,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:57.477584,TradingView,SBIN-EQ,BUY,1164.46,97.00,90.00,ACCEPTED,
+2025-11-30T11:13:57.620037,TradingView,BEL-EQ,SELL,2121.71,94.00,90.00,ACCEPTED,
+2025-11-30T11:13:57.734827,TradingView,TCS-EQ,SELL,2373.38,90.00,94.00,ACCEPTED,
+2025-11-30T11:13:58.040462,TradingView,TCS-EQ,SELL,2372.81,94.00,90.00,ACCEPTED,
+2025-11-30T11:13:58.374437,TradingView,TCS-EQ,BUY,2386.87,96.00,94.00,ACCEPTED,
+2025-11-30T11:13:58.635446,TradingView,ASIANPAINT-EQ,BUY,727.38,96.00,95.00,ACCEPTED,
+2025-11-30T11:13:58.864583,TradingView,ASIANPAINT-EQ,BUY,727.09,99.00,93.00,ACCEPTED,
+2025-11-30T11:13:58.994221,TradingView,ADANIENT-EQ,BUY,722.58,94.00,94.00,ACCEPTED,
+2025-11-30T11:13:59.310478,TradingView,ADANIENT-EQ,BUY,722.41,94.00,94.00,ACCEPTED,
+2025-11-30T11:13:59.541448,TradingView,BEL-EQ,BUY,2134.82,94.00,95.00,ACCEPTED,
+2025-11-30T11:13:59.698797,TradingView,SBIN-EQ,BUY,1164.28,95.00,94.00,ACCEPTED,
+2025-11-30T11:13:59.920558,TradingView,POWERGRID-EQ,BUY,984.47,95.00,91.00,ACCEPTED,
+2025-11-30T11:14:00.081108,TradingView,SUNPHARMA-EQ,BUY,1406.01,99.00,94.00,ACCEPTED,
+2025-11-30T11:14:00.408998,TradingView,BAJFINANCE-EQ,BUY,1666.86,94.00,95.00,ACCEPTED,
+2025-11-30T11:14:00.558265,TradingView,SBIN-EQ,SELL,1157.72,95.00,88.00,ACCEPTED,
+2025-11-30T11:14:00.774809,TradingView,SUNPHARMA-EQ,BUY,1404.84,95.00,90.00,ACCEPTED,
+2025-11-30T11:14:00.936564,TradingView,ASIANPAINT-EQ,BUY,726.62,94.00,92.00,ACCEPTED,
+2025-11-30T11:14:01.228849,TradingView,ASIANPAINT-EQ,BUY,726.77,99.00,95.00,ACCEPTED,
+2025-11-30T11:14:01.525342,TradingView,POWERGRID-EQ,BUY,984.87,97.00,95.00,ACCEPTED,
+2025-11-30T11:14:01.715947,TradingView,AXISBANK-EQ,SELL,861.10,91.00,88.00,ACCEPTED,
+2025-11-30T11:14:01.882851,TradingView,POWERGRID-EQ,SELL,979.03,90.00,92.00,ACCEPTED,
+2025-11-30T11:14:02.206867,TradingView,ADANIENT-EQ,BUY,723.22,97.00,90.00,ACCEPTED,
+2025-11-30T11:14:02.326592,TradingView,TCS-EQ,BUY,2387.14,95.00,90.00,ACCEPTED,
+2025-11-30T11:14:02.473712,TradingView,BEL-EQ,SELL,2121.60,94.00,87.00,ACCEPTED,
+2025-11-30T11:14:02.722169,TradingView,AXISBANK-EQ,BUY,866.40,94.00,95.00,ACCEPTED,
+2025-11-30T11:14:02.835195,TradingView,AXISBANK-EQ,BUY,866.37,96.00,90.00,ACCEPTED,
+2025-11-30T11:14:03.070040,TradingView,ADANIENT-EQ,BUY,723.27,98.00,94.00,ACCEPTED,
+2025-11-30T11:14:03.398734,TradingView,ITC-EQ,BUY,1178.29,99.00,93.00,ACCEPTED,
+2025-11-30T11:14:03.548642,TradingView,ASIANPAINT-EQ,BUY,726.24,97.00,90.00,ACCEPTED,
+2025-11-30T11:14:03.738477,TradingView,ASIANPAINT-EQ,SELL,722.90,95.00,85.00,ACCEPTED,
+2025-11-30T11:14:03.893356,TradingView,TCS-EQ,BUY,2388.05,95.00,95.00,ACCEPTED,
+2025-11-30T11:14:04.112945,TradingView,ASIANPAINT-EQ,SELL,722.63,90.00,98.00,ACCEPTED,
+2025-11-30T11:14:04.323071,TradingView,POWERGRID-EQ,BUY,984.30,95.00,92.00,ACCEPTED,
+2025-11-30T11:14:04.616795,TradingView,ASIANPAINT-EQ,SELL,722.49,96.00,86.00,ACCEPTED,
+2025-11-30T11:14:04.733926,TradingView,BEL-EQ,BUY,2134.21,95.00,91.00,ACCEPTED,
+2025-11-30T11:14:05.046973,TradingView,POWERGRID-EQ,BUY,984.93,97.00,90.00,ACCEPTED,
+2025-11-30T11:14:05.222635,TradingView,POWERGRID-EQ,BUY,984.85,96.00,92.00,ACCEPTED,
+2025-11-30T11:14:05.422562,TradingView,ASIANPAINT-EQ,BUY,727.09,95.00,91.00,ACCEPTED,
+2025-11-30T11:14:05.679547,TradingView,ASIANPAINT-EQ,SELL,722.45,94.00,95.00,ACCEPTED,
+2025-11-30T11:14:05.880603,TradingView,AXISBANK-EQ,BUY,865.86,96.00,94.00,ACCEPTED,
+2025-11-30T11:14:06.033031,TradingView,TCS-EQ,SELL,2373.76,94.00,97.00,ACCEPTED,
+2025-11-30T11:14:06.208793,TradingView,ADANIENT-EQ,SELL,718.59,93.00,99.00,ACCEPTED,
+2025-11-30T11:14:06.502046,TradingView,ADANIENT-EQ,BUY,723.21,94.00,91.00,ACCEPTED,
+2025-11-30T11:14:06.763359,TradingView,BAJFINANCE-EQ,BUY,1667.04,97.00,95.00,ACCEPTED,
+2025-11-30T11:14:06.884941,TradingView,POWERGRID-EQ,SELL,978.94,93.00,93.00,ACCEPTED,
+2025-11-30T11:14:06.991553,TradingView,ITC-EQ,SELL,1171.23,90.00,89.00,ACCEPTED,
+2025-11-30T11:14:07.314619,TradingView,SBIN-EQ,BUY,1164.22,99.00,91.00,ACCEPTED,
+2025-11-30T11:14:07.474830,TradingView,SUNPHARMA-EQ,BUY,1406.15,98.00,93.00,ACCEPTED,
+2025-11-30T11:14:07.644070,TradingView,ADANIENT-EQ,SELL,718.43,95.00,96.00,ACCEPTED,
+2025-11-30T11:14:07.923496,TradingView,BEL-EQ,BUY,2133.67,96.00,92.00,ACCEPTED,
+2025-11-30T11:14:08.152075,TradingView,AXISBANK-EQ,SELL,861.53,90.00,94.00,ACCEPTED,
+2025-11-30T11:14:08.306625,TradingView,ASIANPAINT-EQ,BUY,726.66,98.00,92.00,ACCEPTED,
+2025-11-30T11:14:08.471279,TradingView,SUNPHARMA-EQ,SELL,1397.73,91.00,97.00,ACCEPTED,
+2025-11-30T11:14:08.696016,TradingView,BAJFINANCE-EQ,BUY,1667.81,99.00,91.00,ACCEPTED,
+2025-11-30T11:14:08.982573,TradingView,SBIN-EQ,BUY,1164.67,98.00,91.00,ACCEPTED,
+2025-11-30T11:14:09.202494,TradingView,POWERGRID-EQ,BUY,984.34,99.00,91.00,ACCEPTED,
+2025-11-30T11:14:09.539462,TradingView,SUNPHARMA-EQ,SELL,1397.09,90.00,93.00,ACCEPTED,
+2025-11-30T11:14:09.804357,TradingView,AXISBANK-EQ,SELL,860.56,93.00,86.00,ACCEPTED,
+2025-11-30T11:14:09.968102,TradingView,ITC-EQ,BUY,1177.88,97.00,95.00,ACCEPTED,
+2025-11-30T11:14:10.307569,TradingView,BAJFINANCE-EQ,BUY,1666.75,94.00,90.00,ACCEPTED,
+2025-11-30T11:14:10.508957,TradingView,ASIANPAINT-EQ,BUY,726.74,94.00,92.00,ACCEPTED,
+2025-11-30T11:14:10.635228,TradingView,BAJFINANCE-EQ,BUY,1666.85,94.00,92.00,ACCEPTED,
+2025-11-30T11:14:10.971596,TradingView,SBIN-EQ,BUY,1165.13,97.00,93.00,ACCEPTED,
+2025-11-30T11:14:11.217867,TradingView,BAJFINANCE-EQ,BUY,1666.44,97.00,91.00,ACCEPTED,
+2025-11-30T11:14:11.373567,TradingView,SBIN-EQ,SELL,1156.81,96.00,88.00,ACCEPTED,
+2025-11-30T11:14:11.554544,TradingView,AXISBANK-EQ,SELL,861.26,90.00,91.00,ACCEPTED,
+2025-11-30T11:14:11.752819,TradingView,BAJFINANCE-EQ,BUY,1667.75,99.00,92.00,ACCEPTED,
+2025-11-30T11:14:11.863369,TradingView,POWERGRID-EQ,SELL,978.95,95.00,97.00,ACCEPTED,
+2025-11-30T11:14:11.985892,TradingView,AXISBANK-EQ,SELL,872.11,96.00,87.00,ACCEPTED,
+2025-11-30T11:14:11.990049,TradingView,NESTLEIND-EQ,SELL,1863.60,90.00,97.00,ACCEPTED,
+2025-11-30T11:14:11.992457,TradingView,TITAN-EQ,SELL,1341.07,94.00,93.00,ACCEPTED,
+2025-11-30T11:14:11.996276,TradingView,TCS-EQ,SELL,2402.33,93.00,92.00,ACCEPTED,
+2025-11-30T11:14:11.996785,TradingView,ICICIBANK-EQ,SELL,2477.19,93.00,94.00,ACCEPTED,
+2025-11-30T11:14:11.997191,TradingView,ASIANPAINT-EQ,SELL,731.96,91.00,85.00,ACCEPTED,
+2025-11-30T11:14:12.002338,TradingView,TECHM-EQ,SELL,256.73,96.00,85.00,ACCEPTED,
+2025-11-30T11:14:12.014786,TradingView,MARUTI-EQ,SELL,1658.95,93.00,92.00,ACCEPTED,
+2025-11-30T11:14:12.016708,TradingView,M&M-EQ,SELL,512.57,93.00,86.00,ACCEPTED,
+2025-11-30T11:14:12.017927,TradingView,ONGC-EQ,SELL,2146.97,91.00,92.00,ACCEPTED,
+2025-11-30T15:07:01.013616,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.0% < 90%
+2025-11-30T15:10:16.856346,TradingView,UNKNOWN,UNKNOWN,0.00,,,REJECTED,Signal quality filter: Low confidence 0.0% < 90%
+2025-11-30T15:10:39.616363,TradingView,NIFTY50-EQ,BUY,23150.00,93.00,0.00,ACCEPTED,

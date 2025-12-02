@@ -1,0 +1,144 @@
+timestamp,stage,symbol,action,details
+2025-11-28T10:21:03.804915,ALERT_RECEIVED,UNITDSPR-EQ,BUY,{"price": 1447.8, "confidence": null, "score": null}
+2025-11-28T10:21:03.805243,VALIDATION_PASSED,UNITDSPR-EQ,BUY,{"price": 1447.8, "confidence": null, "score": null}
+2025-11-28T10:21:03.807238,ANALYTICS_APPROVED,UNITDSPR-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:21:03.808977,POSITION_SIZE_CALCULATED,UNITDSPR-EQ,BUY,{"quantity": 6, "required_capital": 1770.2199999999998, "charges": 32.86}
+2025-11-28T10:21:03.809242,CAPITAL_CHECK_PASSED,UNITDSPR-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-11-28T10:21:03.809531,ORDER_PLACING,UNITDSPR-EQ,BUY,{"quantity": 6, "price": 1447.8, "order_type": "MARKET"}
+2025-11-28T10:21:03.988066,ORDER_PLACEMENT_FAILED,UNITDSPR-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 6, "capital_released": 1770.2199999999998}
+2025-11-28T10:21:51.644837,ALERT_RECEIVED,INFY-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:51.645132,VALIDATION_PASSED,INFY-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:51.646488,ANALYTICS_APPROVED,INFY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:21:51.647895,POSITION_SIZE_CALCULATED,INFY-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T10:21:51.648388,CAPITAL_CHECK_PASSED,INFY-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-11-28T10:21:51.649026,ORDER_PLACING,INFY-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T10:21:51.809304,ORDER_PLACED,INFY-EQ,BUY,{"order_id": "251128000251457", "quantity": 5, "price": 1850.5}
+2025-11-28T10:21:51.810125,ORDER_CONFIRMING,INFY-EQ,BUY,{"order_id": "251128000251457", "timeout": 30}
+2025-11-28T10:21:51.928544,ORDER_CONFIRMED,INFY-EQ,BUY,{"order_id": "251128000251457", "filled_price": 1558.8, "quantity": 5}
+2025-11-28T10:21:51.938820,POSITION_ADDED,INFY-EQ,BUY,{"entry_price": 1558.8, "quantity": 5, "capital_used": 1883.96, "sl_price": 1551.0, "trade_id": 109}
+2025-11-28T10:21:51.940456,MONITOR_ADDED,INFY-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T10:21:51.941705,EXECUTION_COMPLETE,INFY-EQ,BUY,{"order_id": "251128000251457", "entry_price": 1850.5, "quantity": 5, "capital_used": 1883.96, "sl_price": 1551.0, "trade_id": 109, "status": "SUCCESS"}
+2025-11-28T10:21:53.444320,ALERT_RECEIVED,TCS-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:53.445284,VALIDATION_PASSED,TCS-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:53.447521,ANALYTICS_APPROVED,TCS-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:21:53.449462,POSITION_SIZE_CALCULATED,TCS-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T10:21:53.450030,CAPITAL_CHECK_PASSED,TCS-EQ,BUY,{"available_capital": 18116.04, "available_slots": 9}
+2025-11-28T10:21:53.451534,ORDER_PLACING,TCS-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T10:21:53.619531,ORDER_PLACED,TCS-EQ,BUY,{"order_id": "251128000251511", "quantity": 5, "price": 1850.5}
+2025-11-28T10:21:53.620759,ORDER_CONFIRMING,TCS-EQ,BUY,{"order_id": "251128000251511", "timeout": 30}
+2025-11-28T10:21:53.731214,ORDER_CONFIRMED,TCS-EQ,BUY,{"order_id": "251128000251511", "filled_price": 3134.1, "quantity": 5}
+2025-11-28T10:21:53.736369,POSITION_ADDED,TCS-EQ,BUY,{"entry_price": 3134.1, "quantity": 5, "capital_used": 1883.96, "sl_price": 3118.4, "trade_id": 110}
+2025-11-28T10:21:53.738928,MONITOR_ADDED,TCS-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T10:21:53.739458,EXECUTION_COMPLETE,TCS-EQ,BUY,{"order_id": "251128000251511", "entry_price": 1850.5, "quantity": 5, "capital_used": 1883.96, "sl_price": 3118.4, "trade_id": 110, "status": "SUCCESS"}
+2025-11-28T10:21:55.242227,ALERT_RECEIVED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:55.242541,VALIDATION_PASSED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:55.244791,ANALYTICS_APPROVED,RELIANCE-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:21:55.246394,POSITION_SIZE_CALCULATED,RELIANCE-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T10:21:55.247372,CAPITAL_CHECK_PASSED,RELIANCE-EQ,BUY,{"available_capital": 16232.08, "available_slots": 8}
+2025-11-28T10:21:55.247832,ORDER_PLACING,RELIANCE-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T10:21:55.459481,ORDER_PLACED,RELIANCE-EQ,BUY,{"order_id": "251128000251567", "quantity": 5, "price": 1850.5}
+2025-11-28T10:21:55.460367,ORDER_CONFIRMING,RELIANCE-EQ,BUY,{"order_id": "251128000251567", "timeout": 30}
+2025-11-28T10:21:55.573997,ORDER_CONFIRMED,RELIANCE-EQ,BUY,{"order_id": "251128000251567", "filled_price": 1577.4, "quantity": 5}
+2025-11-28T10:21:55.579126,POSITION_ADDED,RELIANCE-EQ,BUY,{"entry_price": 1577.4, "quantity": 5, "capital_used": 1883.96, "sl_price": 1569.5, "trade_id": 111}
+2025-11-28T10:21:55.582030,MONITOR_ADDED,RELIANCE-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T10:21:55.583019,EXECUTION_COMPLETE,RELIANCE-EQ,BUY,{"order_id": "251128000251567", "entry_price": 1850.5, "quantity": 5, "capital_used": 1883.96, "sl_price": 1569.5, "trade_id": 111, "status": "SUCCESS"}
+2025-11-28T10:21:57.085731,ALERT_RECEIVED,INFY-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:57.086033,EXECUTION_BLOCKED,INFY-EQ,BUY,{"reason": "Already have position", "existing_position": 1558.8}
+2025-11-28T10:21:58.593001,ALERT_RECEIVED,TCS-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:21:58.593797,EXECUTION_BLOCKED,TCS-EQ,BUY,{"reason": "Already have position", "existing_position": 3134.1}
+2025-11-28T10:22:00.099082,ALERT_RECEIVED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T10:22:00.099771,EXECUTION_BLOCKED,RELIANCE-EQ,BUY,{"reason": "Already have position", "existing_position": 1577.4}
+2025-11-28T10:24:05.557349,ALERT_RECEIVED,PNBHOUSING-EQ,BUY,{"price": 910.5, "confidence": null, "score": null}
+2025-11-28T10:24:05.557668,VALIDATION_PASSED,PNBHOUSING-EQ,BUY,{"price": 910.5, "confidence": null, "score": null}
+2025-11-28T10:24:05.558138,ANALYTICS_APPROVED,PNBHOUSING-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:24:05.558476,POSITION_SIZE_CALCULATED,PNBHOUSING-EQ,BUY,{"quantity": 10, "required_capital": 1854.3, "charges": 33.3}
+2025-11-28T10:24:05.558611,CAPITAL_CHECK_PASSED,PNBHOUSING-EQ,BUY,{"available_capital": 14348.119999999999, "available_slots": 7}
+2025-11-28T10:24:05.561165,ORDER_PLACING,PNBHOUSING-EQ,BUY,{"quantity": 10, "price": 910.5, "order_type": "MARKET"}
+2025-11-28T10:24:05.704596,ORDER_PLACED,PNBHOUSING-EQ,BUY,{"order_id": "251128000255277", "quantity": 10, "price": 910.5}
+2025-11-28T10:24:05.704906,ORDER_CONFIRMING,PNBHOUSING-EQ,BUY,{"order_id": "251128000255277", "timeout": 30}
+2025-11-28T10:24:05.842615,ORDER_CONFIRMED,PNBHOUSING-EQ,BUY,{"order_id": "251128000255277", "filled_price": 908.35, "quantity": 10}
+2025-11-28T10:24:05.847989,POSITION_ADDED,PNBHOUSING-EQ,BUY,{"entry_price": 908.35, "quantity": 10, "capital_used": 1854.3, "sl_price": 903.8, "trade_id": 112}
+2025-11-28T10:24:05.850345,MONITOR_ADDED,PNBHOUSING-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T10:24:05.851546,EXECUTION_COMPLETE,PNBHOUSING-EQ,BUY,{"order_id": "251128000255277", "entry_price": 910.5, "quantity": 10, "capital_used": 1854.3, "sl_price": 903.8, "trade_id": 112, "status": "SUCCESS"}
+2025-11-28T10:24:11.458900,ALERT_RECEIVED,TORNTPOWER-EQ,BUY,{"price": 1320.2, "confidence": null, "score": null}
+2025-11-28T10:24:11.459546,VALIDATION_PASSED,TORNTPOWER-EQ,BUY,{"price": 1320.2, "confidence": null, "score": null}
+2025-11-28T10:24:11.461545,ANALYTICS_APPROVED,TORNTPOWER-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:24:11.463415,POSITION_SIZE_CALCULATED,TORNTPOWER-EQ,BUY,{"quantity": 7, "required_capital": 1881.73, "charges": 33.45}
+2025-11-28T10:24:11.464806,CAPITAL_CHECK_PASSED,TORNTPOWER-EQ,BUY,{"available_capital": 12493.82, "available_slots": 6}
+2025-11-28T10:24:11.465972,ORDER_PLACING,TORNTPOWER-EQ,BUY,{"quantity": 7, "price": 1320.2, "order_type": "MARKET"}
+2025-11-28T10:24:11.601096,ORDER_PLACED,TORNTPOWER-EQ,BUY,{"order_id": "251128000255435", "quantity": 7, "price": 1320.2}
+2025-11-28T10:24:11.601313,ORDER_CONFIRMING,TORNTPOWER-EQ,BUY,{"order_id": "251128000255435", "timeout": 30}
+2025-11-28T10:24:11.724979,ORDER_CONFIRMED,TORNTPOWER-EQ,BUY,{"order_id": "251128000255435", "filled_price": 1316.0, "quantity": 7}
+2025-11-28T10:24:11.731079,POSITION_ADDED,TORNTPOWER-EQ,BUY,{"entry_price": 1316.0, "quantity": 7, "capital_used": 1881.73, "sl_price": 1309.4, "trade_id": 113}
+2025-11-28T10:24:11.734163,MONITOR_ADDED,TORNTPOWER-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T10:24:11.735376,EXECUTION_COMPLETE,TORNTPOWER-EQ,BUY,{"order_id": "251128000255435", "entry_price": 1320.2, "quantity": 7, "capital_used": 1881.73, "sl_price": 1309.4, "trade_id": 113, "status": "SUCCESS"}
+2025-11-28T10:33:02.966200,ALERT_RECEIVED,POWERINDIA-EQ,BUY,{"price": 22065.0, "confidence": null, "score": null}
+2025-11-28T10:33:02.966544,VALIDATION_PASSED,POWERINDIA-EQ,BUY,{"price": 22065.0, "confidence": null, "score": null}
+2025-11-28T10:33:02.968943,ANALYTICS_APPROVED,POWERINDIA-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:33:02.969976,POSITION_SIZE_CALCULATED,POWERINDIA-EQ,BUY,{"quantity": 1, "required_capital": 4460.11, "charges": 47.11}
+2025-11-28T10:33:02.970138,CAPITAL_CHECK_FAILED,POWERINDIA-EQ,BUY,{"required_capital": 4460.11, "reason": "Trade capital exceeds limit (need: 4460.11, limit: 2000.0)", "available_capital": 10612.09, "available_slots": 5}
+2025-11-28T10:48:02.141883,ALERT_RECEIVED,KALYANKJIL-EQ,BUY,{"price": 498.3, "confidence": null, "score": null}
+2025-11-28T10:48:02.142982,VALIDATION_PASSED,KALYANKJIL-EQ,BUY,{"price": 498.3, "confidence": null, "score": null}
+2025-11-28T10:48:02.144362,ANALYTICS_APPROVED,KALYANKJIL-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:48:02.146020,POSITION_SIZE_CALCULATED,KALYANKJIL-EQ,BUY,{"quantity": 19, "required_capital": 1927.2300000000002, "charges": 33.69}
+2025-11-28T10:48:02.146681,CAPITAL_CHECK_PASSED,KALYANKJIL-EQ,BUY,{"available_capital": 10612.09, "available_slots": 5}
+2025-11-28T10:48:02.147747,ORDER_PLACING,KALYANKJIL-EQ,BUY,{"quantity": 19, "price": 498.3, "order_type": "MARKET"}
+2025-11-28T10:48:02.288301,ORDER_PLACEMENT_FAILED,KALYANKJIL-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 19, "capital_released": 1927.2300000000002}
+2025-11-28T10:48:03.790854,ALERT_RECEIVED,ESCORTS-EQ,BUY,{"price": 3846.3, "confidence": null, "score": null}
+2025-11-28T10:48:03.792144,VALIDATION_PASSED,ESCORTS-EQ,BUY,{"price": 3846.3, "confidence": null, "score": null}
+2025-11-28T10:48:03.792854,ANALYTICS_APPROVED,ESCORTS-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T10:48:03.793225,POSITION_SIZE_CALCULATED,ESCORTS-EQ,BUY,{"quantity": 2, "required_capital": 1570.3200000000002, "charges": 31.8}
+2025-11-28T10:48:03.793384,CAPITAL_CHECK_PASSED,ESCORTS-EQ,BUY,{"available_capital": 10612.09, "available_slots": 5}
+2025-11-28T10:48:03.794611,ORDER_PLACING,ESCORTS-EQ,BUY,{"quantity": 2, "price": 3846.3, "order_type": "MARKET"}
+2025-11-28T10:48:03.920108,ORDER_PLACED,ESCORTS-EQ,BUY,{"order_id": "251128000304440", "quantity": 2, "price": 3846.3}
+2025-11-28T10:48:03.920743,ORDER_CONFIRMING,ESCORTS-EQ,BUY,{"order_id": "251128000304440", "timeout": 30}
+2025-11-28T10:48:04.034984,ORDER_CONFIRMED,ESCORTS-EQ,BUY,{"order_id": "251128000304440", "filled_price": 3859.15, "quantity": 2}
+2025-11-28T10:48:04.039273,POSITION_ADDED,ESCORTS-EQ,BUY,{"entry_price": 3859.15, "quantity": 2, "capital_used": 1570.3200000000002, "sl_price": 3839.85, "trade_id": 114}
+2025-11-28T10:48:04.042892,MONITOR_ADDED,ESCORTS-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T10:48:04.043472,EXECUTION_COMPLETE,ESCORTS-EQ,BUY,{"order_id": "251128000304440", "entry_price": 3846.3, "quantity": 2, "capital_used": 1570.3200000000002, "sl_price": 3839.85, "trade_id": 114, "status": "SUCCESS"}
+2025-11-28T11:26:50.377880,ALERT_RECEIVED,INFY-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:50.378768,VALIDATION_PASSED,INFY-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:50.380196,ANALYTICS_APPROVED,INFY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T11:26:50.381312,POSITION_SIZE_CALCULATED,INFY-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T11:26:50.381816,CAPITAL_CHECK_PASSED,INFY-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-11-28T11:26:50.382315,ORDER_PLACING,INFY-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T11:26:50.537033,ORDER_PLACED,INFY-EQ,BUY,{"order_id": "251128000367977", "quantity": 5, "price": 1850.5}
+2025-11-28T11:26:50.537352,ORDER_CONFIRMING,INFY-EQ,BUY,{"order_id": "251128000367977", "timeout": 30}
+2025-11-28T11:26:50.649254,ORDER_CONFIRMED,INFY-EQ,BUY,{"order_id": "251128000367977", "filled_price": 1561.4, "quantity": 5}
+2025-11-28T11:26:50.656431,POSITION_ADDED,INFY-EQ,BUY,{"entry_price": 1561.4, "quantity": 5, "capital_used": 1883.96, "sl_price": 1553.55, "trade_id": 115}
+2025-11-28T11:26:50.657619,MONITOR_ADDED,INFY-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T11:26:50.658817,EXECUTION_COMPLETE,INFY-EQ,BUY,{"order_id": "251128000367977", "entry_price": 1850.5, "quantity": 5, "capital_used": 1883.96, "sl_price": 1553.55, "trade_id": 115, "status": "SUCCESS"}
+2025-11-28T11:26:52.161442,ALERT_RECEIVED,TCS-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:52.162217,VALIDATION_PASSED,TCS-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:52.163447,ANALYTICS_APPROVED,TCS-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T11:26:52.164613,POSITION_SIZE_CALCULATED,TCS-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T11:26:52.165078,CAPITAL_CHECK_PASSED,TCS-EQ,BUY,{"available_capital": 18116.04, "available_slots": 9}
+2025-11-28T11:26:52.165378,ORDER_PLACING,TCS-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T11:26:52.285292,ORDER_PLACED,TCS-EQ,BUY,{"order_id": "251128000368068", "quantity": 5, "price": 1850.5}
+2025-11-28T11:26:52.285788,ORDER_CONFIRMING,TCS-EQ,BUY,{"order_id": "251128000368068", "timeout": 30}
+2025-11-28T11:26:52.402310,ORDER_CONFIRMED,TCS-EQ,BUY,{"order_id": "251128000368068", "filled_price": 3136.6, "quantity": 5}
+2025-11-28T11:26:52.407256,POSITION_ADDED,TCS-EQ,BUY,{"entry_price": 3136.6, "quantity": 5, "capital_used": 1883.96, "sl_price": 3120.9, "trade_id": 116}
+2025-11-28T11:26:52.408588,MONITOR_ADDED,TCS-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-11-28T11:26:52.409188,EXECUTION_COMPLETE,TCS-EQ,BUY,{"order_id": "251128000368068", "entry_price": 1850.5, "quantity": 5, "capital_used": 1883.96, "sl_price": 3120.9, "trade_id": 116, "status": "SUCCESS"}
+2025-11-28T11:26:53.911966,ALERT_RECEIVED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:53.912297,VALIDATION_PASSED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:53.913735,ANALYTICS_APPROVED,RELIANCE-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T11:26:53.915017,POSITION_SIZE_CALCULATED,RELIANCE-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T11:26:53.915216,CAPITAL_CHECK_PASSED,RELIANCE-EQ,BUY,{"available_capital": 16232.08, "available_slots": 8}
+2025-11-28T11:26:53.916143,ORDER_PLACING,RELIANCE-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T11:26:54.038323,ORDER_PLACED,RELIANCE-EQ,BUY,{"order_id": "251128000368170", "quantity": 5, "price": 1850.5}
+2025-11-28T11:26:54.038770,ORDER_CONFIRMING,RELIANCE-EQ,BUY,{"order_id": "251128000368170", "timeout": 30}
+2025-11-28T11:26:54.171809,ORDER_TIMEOUT,RELIANCE-EQ,BUY,{"order_id": "251128000368170", "timeout_seconds": 30, "final_status": "REJECTED", "capital_released": 1883.96}
+2025-11-28T11:26:55.674359,ALERT_RECEIVED,INFY-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:55.675164,EXECUTION_BLOCKED,INFY-EQ,BUY,{"reason": "Already have position", "existing_position": 1561.4}
+2025-11-28T11:26:57.183420,ALERT_RECEIVED,TCS-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:57.183744,EXECUTION_BLOCKED,TCS-EQ,BUY,{"reason": "Already have position", "existing_position": 3136.6}
+2025-11-28T11:26:58.690929,ALERT_RECEIVED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:58.691230,VALIDATION_PASSED,RELIANCE-EQ,BUY,{"price": 1850.5, "confidence": null, "score": null}
+2025-11-28T11:26:58.693559,ANALYTICS_APPROVED,RELIANCE-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-11-28T11:26:58.695261,POSITION_SIZE_CALCULATED,RELIANCE-EQ,BUY,{"quantity": 5, "required_capital": 1883.96, "charges": 33.46}
+2025-11-28T11:26:58.695417,CAPITAL_CHECK_PASSED,RELIANCE-EQ,BUY,{"available_capital": 16232.08, "available_slots": 8}
+2025-11-28T11:26:58.696597,ORDER_PLACING,RELIANCE-EQ,BUY,{"quantity": 5, "price": 1850.5, "order_type": "MARKET"}
+2025-11-28T11:26:58.819055,ORDER_PLACED,RELIANCE-EQ,BUY,{"order_id": "251128000368392", "quantity": 5, "price": 1850.5}
+2025-11-28T11:26:58.819907,ORDER_CONFIRMING,RELIANCE-EQ,BUY,{"order_id": "251128000368392", "timeout": 30}
+2025-11-28T11:26:58.931089,ORDER_TIMEOUT,RELIANCE-EQ,BUY,{"order_id": "251128000368392", "timeout_seconds": 30, "final_status": "REJECTED", "capital_released": 1883.96}

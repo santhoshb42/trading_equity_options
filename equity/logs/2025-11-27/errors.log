@@ -1,0 +1,139 @@
+2025-11-27 00:00:05 | ERROR | broker_errors | BROKER_ERROR | SESSION_EXPIRED | Code: AG8001 | Endpoint: rmsLimit | Invalid Token | session_age_minutes=14.762433666666668 | note=Angel One has strict rate limits (1 login/sec). If getting AG8001 repeatedly, we're likely rate-limited for the day.
+2025-11-27 16:30:10 | ERROR | errors | DETAILED_ERROR | error_type=EOD_CONNECTION_ERROR | message=Failed to connect to bot at http://localhost:80 | timestamp=2025-11-27T16:30:10.932862 | exception_type=ConnectionError | exception_message=HTTPConnectionPool(host='localhost', port=80): Max retries exceeded with url: /learning/eod-update (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7aecfc26bcb0>: Failed to establish a new connection: [Errno 111] Connection refused')) | stack_trace=Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 198, in _new_conn
+    sock = connection.create_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 493, in _make_request
+    conn.request(
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 494, in request
+    self.endheaders()
+  File "/usr/lib/python3.12/http/client.py", line 1331, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "/usr/lib/python3.12/http/client.py", line 1091, in _send_output
+    self.send(msg)
+  File "/usr/lib/python3.12/http/client.py", line 1035, in send
+    self.connect()
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 325, in connect
+    self.sock = self._new_conn()
+                ^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 213, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: <urllib3.connection.HTTPConnection object at 0x7aecfc26bcb0>: Failed to establish a new connection: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPConnectionPool(host='localhost', port=80): Max retries exceeded with url: /learning/eod-update (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7aecfc26bcb0>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/eqcode/eod_scheduler.py", line 181, in trigger_eod_update
+    response = requests.post(
+               ^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/api.py", line 115, in post
+    return request("post", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/adapters.py", line 677, in send
+    raise ConnectionError(e, request=request)
+requests.exceptions.ConnectionError: HTTPConnectionPool(host='localhost', port=80): Max retries exceeded with url: /learning/eod-update (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7aecfc26bcb0>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+2025-11-27 16:30:10 | ERROR | errors | DETAILED_ERROR | error_type=EOD_CONNECTION_ERROR | message=Failed to connect to bot at http://localhost:80 | timestamp=2025-11-27T16:30:10.963580 | exception_type=ConnectionError | exception_message=HTTPConnectionPool(host='localhost', port=80): Max retries exceeded with url: /learning/eod-update (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7aecf2757770>: Failed to establish a new connection: [Errno 111] Connection refused')) | stack_trace=Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 198, in _new_conn
+    sock = connection.create_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 493, in _make_request
+    conn.request(
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 494, in request
+    self.endheaders()
+  File "/usr/lib/python3.12/http/client.py", line 1331, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "/usr/lib/python3.12/http/client.py", line 1091, in _send_output
+    self.send(msg)
+  File "/usr/lib/python3.12/http/client.py", line 1035, in send
+    self.connect()
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 325, in connect
+    self.sock = self._new_conn()
+                ^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 213, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: <urllib3.connection.HTTPConnection object at 0x7aecf2757770>: Failed to establish a new connection: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPConnectionPool(host='localhost', port=80): Max retries exceeded with url: /learning/eod-update (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7aecf2757770>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/root/santhosh/trading/equity/eqcode/eod_scheduler.py", line 181, in trigger_eod_update
+    response = requests.post(
+               ^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/api.py", line 115, in post
+    return request("post", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/santhosh/trading/equity/.venv/lib/python3.12/site-packages/requests/adapters.py", line 677, in send
+    raise ConnectionError(e, request=request)
+requests.exceptions.ConnectionError: HTTPConnectionPool(host='localhost', port=80): Max retries exceeded with url: /learning/eod-update (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7aecf2757770>: Failed to establish a new connection: [Errno 111] Connection refused'))
+

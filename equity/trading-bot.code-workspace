@@ -1,0 +1,38 @@
+{
+  "folders": [
+    {
+      "path": ".",
+      "name": "Trading Bot"
+    },
+    {
+      "path": "/root/santhosh/trading/equity/logs/18-11-2025",
+      "name": "📊 Today's Logs (18-11-2025)"
+    }
+  ],
+  "settings": {
+    "files.watcherExclude": {
+      "**/node_modules": true,
+      "**/.git": true,
+      "**/__pycache__": true,
+      "**/.pytest_cache": true,
+      "**/.venv": true,
+      "**/.*": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/.git": true,
+      "**/__pycache__": true,
+      "**/.venv": true
+    },
+    "files.autoSave": "off",
+    "[python]": {
+      "editor.formatOnSave": false
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-python.vscode-pylance"
+    ]
+  }
+}

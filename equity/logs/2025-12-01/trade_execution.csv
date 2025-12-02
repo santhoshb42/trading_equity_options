@@ -1,0 +1,229 @@
+timestamp,stage,symbol,action,details
+2025-12-01T09:51:02.526909,ALERT_RECEIVED,HEROMOTOCO-EQ,BUY,{"price": 6264.5, "confidence": null, "score": null}
+2025-12-01T09:51:02.528402,VALIDATION_PASSED,HEROMOTOCO-EQ,BUY,{"price": 6264.5, "confidence": null, "score": null}
+2025-12-01T09:51:02.529176,ANALYTICS_APPROVED,HEROMOTOCO-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:51:02.530923,POSITION_SIZE_CALCULATED,HEROMOTOCO-EQ,BUY,{"quantity": 1, "required_capital": 1283.17, "charges": 30.27}
+2025-12-01T09:51:02.531581,CAPITAL_CHECK_PASSED,HEROMOTOCO-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T09:51:02.532857,ORDER_PLACING,HEROMOTOCO-EQ,BUY,{"quantity": 1, "price": 6264.5, "order_type": "MARKET"}
+2025-12-01T09:51:02.735763,ORDER_PLACED,HEROMOTOCO-EQ,BUY,{"order_id": "251201000165324", "quantity": 1, "price": 6264.5}
+2025-12-01T09:51:02.737010,ORDER_CONFIRMING,HEROMOTOCO-EQ,BUY,{"order_id": "251201000165324", "timeout": 30}
+2025-12-01T09:51:02.873153,ORDER_CONFIRMED,HEROMOTOCO-EQ,BUY,{"order_id": "251201000165324", "filled_price": 6320.0, "quantity": 1}
+2025-12-01T09:51:02.885625,POSITION_ADDED,HEROMOTOCO-EQ,BUY,{"entry_price": 6320.0, "quantity": 1, "capital_used": 1283.17, "sl_price": 6288.4, "trade_id": 117}
+2025-12-01T09:51:02.888994,MONITOR_ADDED,HEROMOTOCO-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T09:51:02.890445,EXECUTION_COMPLETE,HEROMOTOCO-EQ,BUY,{"order_id": "251201000165324", "entry_price": 6264.5, "quantity": 1, "capital_used": 1283.17, "sl_price": 6288.4, "trade_id": 117, "status": "SUCCESS"}
+2025-12-01T09:51:06.395437,ALERT_RECEIVED,IIFL-EQ,BUY,{"price": 584.45, "confidence": null, "score": null}
+2025-12-01T09:51:06.396635,VALIDATION_PASSED,IIFL-EQ,BUY,{"price": 584.45, "confidence": null, "score": null}
+2025-12-01T09:51:06.398305,ANALYTICS_APPROVED,IIFL-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:51:06.400039,POSITION_SIZE_CALCULATED,IIFL-EQ,BUY,{"quantity": 16, "required_capital": 1903.8000000000002, "charges": 33.56}
+2025-12-01T09:51:06.400684,CAPITAL_CHECK_PASSED,IIFL-EQ,BUY,{"available_capital": 18716.83, "available_slots": 9}
+2025-12-01T09:51:06.401156,ORDER_PLACING,IIFL-EQ,BUY,{"quantity": 16, "price": 584.45, "order_type": "MARKET"}
+2025-12-01T09:51:06.512796,ORDER_PLACEMENT_FAILED,IIFL-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 16, "capital_released": 1903.8000000000002}
+2025-12-01T09:54:06.628394,ALERT_RECEIVED,KALYANKJIL-EQ,BUY,{"price": 514.0, "confidence": null, "score": null}
+2025-12-01T09:54:06.629685,VALIDATION_PASSED,KALYANKJIL-EQ,BUY,{"price": 514.0, "confidence": null, "score": null}
+2025-12-01T09:54:06.631787,ANALYTICS_APPROVED,KALYANKJIL-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:54:06.633291,POSITION_SIZE_CALCULATED,KALYANKJIL-EQ,BUY,{"quantity": 19, "required_capital": 1987.21, "charges": 34.01}
+2025-12-01T09:54:06.633830,CAPITAL_CHECK_PASSED,KALYANKJIL-EQ,BUY,{"available_capital": 18716.83, "available_slots": 9}
+2025-12-01T09:54:06.635147,ORDER_PLACING,KALYANKJIL-EQ,BUY,{"quantity": 19, "price": 514.0, "order_type": "MARKET"}
+2025-12-01T09:54:06.765003,ORDER_PLACEMENT_FAILED,KALYANKJIL-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 19, "capital_released": 1987.21}
+2025-12-01T09:54:08.268030,ALERT_RECEIVED,ADANIPORTS-EQ,BUY,{"price": 1543.1, "confidence": null, "score": null}
+2025-12-01T09:54:08.268323,VALIDATION_PASSED,ADANIPORTS-EQ,BUY,{"price": 1543.1, "confidence": null, "score": null}
+2025-12-01T09:54:08.270246,ANALYTICS_APPROVED,ADANIPORTS-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:54:08.270993,POSITION_SIZE_CALCULATED,ADANIPORTS-EQ,BUY,{"quantity": 6, "required_capital": 1885.1899999999998, "charges": 33.47}
+2025-12-01T09:54:08.271141,CAPITAL_CHECK_PASSED,ADANIPORTS-EQ,BUY,{"available_capital": 18716.83, "available_slots": 9}
+2025-12-01T09:54:08.271401,ORDER_PLACING,ADANIPORTS-EQ,BUY,{"quantity": 6, "price": 1543.1, "order_type": "MARKET"}
+2025-12-01T09:54:08.395440,ORDER_PLACED,ADANIPORTS-EQ,BUY,{"order_id": "251201000176775", "quantity": 6, "price": 1543.1}
+2025-12-01T09:54:08.396598,ORDER_CONFIRMING,ADANIPORTS-EQ,BUY,{"order_id": "251201000176775", "timeout": 30}
+2025-12-01T09:54:08.513900,ORDER_CONFIRMED,ADANIPORTS-EQ,BUY,{"order_id": "251201000176775", "filled_price": 1540.9, "quantity": 6}
+2025-12-01T09:54:08.518963,POSITION_ADDED,ADANIPORTS-EQ,BUY,{"entry_price": 1540.9, "quantity": 6, "capital_used": 1885.1899999999998, "sl_price": 1533.15, "trade_id": 118}
+2025-12-01T09:54:08.521474,MONITOR_ADDED,ADANIPORTS-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T09:54:08.522716,EXECUTION_COMPLETE,ADANIPORTS-EQ,BUY,{"order_id": "251201000176775", "entry_price": 1543.1, "quantity": 6, "capital_used": 1885.1899999999998, "sl_price": 1533.15, "trade_id": 118, "status": "SUCCESS"}
+2025-12-01T09:57:01.649497,ALERT_RECEIVED,DELHIVERY-EQ,BUY,{"price": 431.7, "confidence": null, "score": null}
+2025-12-01T09:57:01.650123,VALIDATION_PASSED,DELHIVERY-EQ,BUY,{"price": 431.7, "confidence": null, "score": null}
+2025-12-01T09:57:01.650622,ANALYTICS_APPROVED,DELHIVERY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:57:01.652738,POSITION_SIZE_CALCULATED,DELHIVERY-EQ,BUY,{"quantity": 22, "required_capital": 1933.2, "charges": 33.72}
+2025-12-01T09:57:01.653245,CAPITAL_CHECK_PASSED,DELHIVERY-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T09:57:01.654240,ORDER_PLACING,DELHIVERY-EQ,BUY,{"quantity": 22, "price": 431.7, "order_type": "MARKET"}
+2025-12-01T09:57:01.796921,ORDER_PLACEMENT_FAILED,DELHIVERY-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 22, "capital_released": 1933.2}
+2025-12-01T09:57:03.299608,ALERT_RECEIVED,BAJAJ_AUTO-EQ,BUY,{"price": 9145.0, "confidence": null, "score": null}
+2025-12-01T09:57:03.300561,VALIDATION_PASSED,BAJAJ_AUTO-EQ,BUY,{"price": 9145.0, "confidence": null, "score": null}
+2025-12-01T09:57:03.302133,ANALYTICS_APPROVED,BAJAJ_AUTO-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:57:03.303371,POSITION_SIZE_CALCULATED,BAJAJ_AUTO-EQ,BUY,{"quantity": 1, "required_capital": 1862.34, "charges": 33.34}
+2025-12-01T09:57:03.303714,CAPITAL_CHECK_PASSED,BAJAJ_AUTO-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T09:57:03.304741,ORDER_PLACING,BAJAJ_AUTO-EQ,BUY,{"quantity": 1, "price": 9145.0, "order_type": "MARKET"}
+2025-12-01T09:57:03.307373,ORDER_PLACEMENT_FAILED,BAJAJ_AUTO-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 1, "capital_released": 1862.34}
+2025-12-01T09:57:04.809878,ALERT_RECEIVED,BANKBARODA-EQ,BUY,{"price": 293.0, "confidence": null, "score": null}
+2025-12-01T09:57:04.810181,VALIDATION_PASSED,BANKBARODA-EQ,BUY,{"price": 293.0, "confidence": null, "score": null}
+2025-12-01T09:57:04.811673,ANALYTICS_APPROVED,BANKBARODA-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:57:04.812769,POSITION_SIZE_CALCULATED,BANKBARODA-EQ,BUY,{"quantity": 33, "required_capital": 1967.7000000000003, "charges": 33.9}
+2025-12-01T09:57:04.812981,CAPITAL_CHECK_PASSED,BANKBARODA-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T09:57:04.813308,ORDER_PLACING,BANKBARODA-EQ,BUY,{"quantity": 33, "price": 293.0, "order_type": "MARKET"}
+2025-12-01T09:57:04.933004,ORDER_PLACED,BANKBARODA-EQ,BUY,{"order_id": "251201000185836", "quantity": 33, "price": 293.0}
+2025-12-01T09:57:04.934111,ORDER_CONFIRMING,BANKBARODA-EQ,BUY,{"order_id": "251201000185836", "timeout": 30}
+2025-12-01T09:57:05.059453,ORDER_CONFIRMED,BANKBARODA-EQ,BUY,{"order_id": "251201000185836", "filled_price": 296.2, "quantity": 33}
+2025-12-01T09:57:05.074071,POSITION_ADDED,BANKBARODA-EQ,BUY,{"entry_price": 296.2, "quantity": 33, "capital_used": 1967.7000000000003, "sl_price": 294.7, "trade_id": 119}
+2025-12-01T09:57:05.077207,MONITOR_ADDED,BANKBARODA-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T09:57:05.078112,EXECUTION_COMPLETE,BANKBARODA-EQ,BUY,{"order_id": "251201000185836", "entry_price": 293.0, "quantity": 33, "capital_used": 1967.7000000000003, "sl_price": 294.7, "trade_id": 119, "status": "SUCCESS"}
+2025-12-01T09:57:06.580638,ALERT_RECEIVED,KPITTECH-EQ,BUY,{"price": 1249.4, "confidence": null, "score": null}
+2025-12-01T09:57:06.581011,VALIDATION_PASSED,KPITTECH-EQ,BUY,{"price": 1249.4, "confidence": null, "score": null}
+2025-12-01T09:57:06.581638,ANALYTICS_APPROVED,KPITTECH-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:57:06.584319,POSITION_SIZE_CALCULATED,KPITTECH-EQ,BUY,{"quantity": 7, "required_capital": 1782.0800000000004, "charges": 32.92}
+2025-12-01T09:57:06.584801,CAPITAL_CHECK_PASSED,KPITTECH-EQ,BUY,{"available_capital": 18032.3, "available_slots": 9}
+2025-12-01T09:57:06.585224,ORDER_PLACING,KPITTECH-EQ,BUY,{"quantity": 7, "price": 1249.4, "order_type": "MARKET"}
+2025-12-01T09:57:06.718046,ORDER_PLACED,KPITTECH-EQ,BUY,{"order_id": "251201000185929", "quantity": 7, "price": 1249.4}
+2025-12-01T09:57:06.718295,ORDER_CONFIRMING,KPITTECH-EQ,BUY,{"order_id": "251201000185929", "timeout": 30}
+2025-12-01T09:57:06.829421,ORDER_CONFIRMED,KPITTECH-EQ,BUY,{"order_id": "251201000185929", "filled_price": 1248.0, "quantity": 7}
+2025-12-01T09:57:06.834584,POSITION_ADDED,KPITTECH-EQ,BUY,{"entry_price": 1248.0, "quantity": 7, "capital_used": 1782.0800000000004, "sl_price": 1241.75, "trade_id": 120}
+2025-12-01T09:57:06.837276,MONITOR_ADDED,KPITTECH-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T09:57:06.837946,EXECUTION_COMPLETE,KPITTECH-EQ,BUY,{"order_id": "251201000185929", "entry_price": 1249.4, "quantity": 7, "capital_used": 1782.0800000000004, "sl_price": 1241.75, "trade_id": 120, "status": "SUCCESS"}
+2025-12-01T09:57:08.340454,ALERT_RECEIVED,KOTAKBANK-EQ,BUY,{"price": 2155.0, "confidence": null, "score": null}
+2025-12-01T09:57:08.340809,VALIDATION_PASSED,KOTAKBANK-EQ,BUY,{"price": 2155.0, "confidence": null, "score": null}
+2025-12-01T09:57:08.341266,ANALYTICS_APPROVED,KOTAKBANK-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T09:57:08.341591,POSITION_SIZE_CALCULATED,KOTAKBANK-EQ,BUY,{"quantity": 4, "required_capital": 1756.78, "charges": 32.78}
+2025-12-01T09:57:08.343571,CAPITAL_CHECK_PASSED,KOTAKBANK-EQ,BUY,{"available_capital": 16250.22, "available_slots": 8}
+2025-12-01T09:57:08.344599,ORDER_PLACING,KOTAKBANK-EQ,BUY,{"quantity": 4, "price": 2155.0, "order_type": "MARKET"}
+2025-12-01T09:57:08.473294,ORDER_PLACED,KOTAKBANK-EQ,BUY,{"order_id": "251201000186026", "quantity": 4, "price": 2155.0}
+2025-12-01T09:57:08.473499,ORDER_CONFIRMING,KOTAKBANK-EQ,BUY,{"order_id": "251201000186026", "timeout": 30}
+2025-12-01T09:57:08.581088,ORDER_CONFIRMED,KOTAKBANK-EQ,BUY,{"order_id": "251201000186026", "filled_price": 2151.0, "quantity": 4}
+2025-12-01T09:57:08.586306,POSITION_ADDED,KOTAKBANK-EQ,BUY,{"entry_price": 2151.0, "quantity": 4, "capital_used": 1756.78, "sl_price": 2140.2, "trade_id": 121}
+2025-12-01T09:57:08.588590,MONITOR_ADDED,KOTAKBANK-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T09:57:08.589770,EXECUTION_COMPLETE,KOTAKBANK-EQ,BUY,{"order_id": "251201000186026", "entry_price": 2155.0, "quantity": 4, "capital_used": 1756.78, "sl_price": 2140.2, "trade_id": 121, "status": "SUCCESS"}
+2025-12-01T10:03:02.590404,ALERT_RECEIVED,IDEA-EQ,BUY,{"price": 10.11, "confidence": null, "score": null}
+2025-12-01T10:03:02.590994,VALIDATION_PASSED,IDEA-EQ,BUY,{"price": 10.11, "confidence": null, "score": null}
+2025-12-01T10:03:02.591472,ANALYTICS_APPROVED,IDEA-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:03:02.593281,POSITION_SIZE_CALCULATED,IDEA-EQ,BUY,{"quantity": 972, "required_capital": 1999.454, "charges": 34.07}
+2025-12-01T10:03:02.593819,CAPITAL_CHECK_PASSED,IDEA-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:03:02.594372,ORDER_PLACING,IDEA-EQ,BUY,{"quantity": 972, "price": 10.11, "order_type": "MARKET"}
+2025-12-01T10:03:02.777252,ORDER_PLACEMENT_FAILED,IDEA-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 972, "capital_released": 1999.454}
+2025-12-01T10:06:02.238711,ALERT_RECEIVED,IEX-EQ,BUY,{"price": 144.21, "confidence": null, "score": null}
+2025-12-01T10:06:02.239472,VALIDATION_PASSED,IEX-EQ,BUY,{"price": 144.21, "confidence": null, "score": null}
+2025-12-01T10:06:02.240286,ANALYTICS_APPROVED,IEX-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:06:02.242908,POSITION_SIZE_CALCULATED,IEX-EQ,BUY,{"quantity": 68, "required_capital": 1995.3060000000003, "charges": 34.05}
+2025-12-01T10:06:02.243615,CAPITAL_CHECK_PASSED,IEX-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:06:02.244954,ORDER_PLACING,IEX-EQ,BUY,{"quantity": 68, "price": 144.21, "order_type": "MARKET"}
+2025-12-01T10:06:02.521214,ORDER_PLACED,IEX-EQ,BUY,{"order_id": "251201000223894", "quantity": 68, "price": 144.21}
+2025-12-01T10:06:02.522532,ORDER_CONFIRMING,IEX-EQ,BUY,{"order_id": "251201000223894", "timeout": 30}
+2025-12-01T10:06:02.745526,ORDER_CONFIRMED,IEX-EQ,BUY,{"order_id": "251201000223894", "filled_price": 145.35, "quantity": 68}
+2025-12-01T10:06:02.759165,POSITION_ADDED,IEX-EQ,BUY,{"entry_price": 145.35, "quantity": 68, "capital_used": 1995.3060000000003, "sl_price": 144.6, "trade_id": 122}
+2025-12-01T10:06:02.762527,MONITOR_ADDED,IEX-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T10:06:02.764116,EXECUTION_COMPLETE,IEX-EQ,BUY,{"order_id": "251201000223894", "entry_price": 144.21, "quantity": 68, "capital_used": 1995.3060000000003, "sl_price": 144.6, "trade_id": 122, "status": "SUCCESS"}
+2025-12-01T10:24:03.886139,ALERT_RECEIVED,TECHM-EQ,BUY,{"price": 1521.0, "confidence": null, "score": null}
+2025-12-01T10:24:03.886764,VALIDATION_PASSED,TECHM-EQ,BUY,{"price": 1521.0, "confidence": null, "score": null}
+2025-12-01T10:24:03.887380,ANALYTICS_APPROVED,TECHM-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:24:03.890953,POSITION_SIZE_CALCULATED,TECHM-EQ,BUY,{"quantity": 6, "required_capital": 1858.52, "charges": 33.32}
+2025-12-01T10:24:03.891478,CAPITAL_CHECK_PASSED,TECHM-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:24:03.892065,ORDER_PLACING,TECHM-EQ,BUY,{"quantity": 6, "price": 1521.0, "order_type": "MARKET"}
+2025-12-01T10:24:04.067867,ORDER_PLACED,TECHM-EQ,BUY,{"order_id": "251201000258876", "quantity": 6, "price": 1521.0}
+2025-12-01T10:24:04.068187,ORDER_CONFIRMING,TECHM-EQ,BUY,{"order_id": "251201000258876", "timeout": 30}
+2025-12-01T10:24:04.205487,ORDER_CONFIRMED,TECHM-EQ,BUY,{"order_id": "251201000258876", "filled_price": 1519.1, "quantity": 6}
+2025-12-01T10:24:04.227958,POSITION_ADDED,TECHM-EQ,BUY,{"entry_price": 1519.1, "quantity": 6, "capital_used": 1858.52, "sl_price": 1511.5, "trade_id": 123}
+2025-12-01T10:24:04.231865,MONITOR_ADDED,TECHM-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T10:24:04.233761,EXECUTION_COMPLETE,TECHM-EQ,BUY,{"order_id": "251201000258876", "entry_price": 1521.0, "quantity": 6, "capital_used": 1858.52, "sl_price": 1511.5, "trade_id": 123, "status": "SUCCESS"}
+2025-12-01T10:27:02.925689,ALERT_RECEIVED,MUTHOOTFIN-EQ,BUY,{"price": 3809.6, "confidence": null, "score": null}
+2025-12-01T10:27:02.926317,VALIDATION_PASSED,MUTHOOTFIN-EQ,BUY,{"price": 3809.6, "confidence": null, "score": null}
+2025-12-01T10:27:02.926979,ANALYTICS_APPROVED,MUTHOOTFIN-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:27:02.927554,POSITION_SIZE_CALCULATED,MUTHOOTFIN-EQ,BUY,{"quantity": 2, "required_capital": 1555.5600000000002, "charges": 31.72}
+2025-12-01T10:27:02.930116,CAPITAL_CHECK_PASSED,MUTHOOTFIN-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:27:02.931728,ORDER_PLACING,MUTHOOTFIN-EQ,BUY,{"quantity": 2, "price": 3809.6, "order_type": "MARKET"}
+2025-12-01T10:27:03.108627,ORDER_PLACEMENT_FAILED,MUTHOOTFIN-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 2, "capital_released": 1555.5600000000002}
+2025-12-01T10:33:01.562171,ALERT_RECEIVED,INDIANB-EQ,BUY,{"price": 885.85, "confidence": null, "score": null}
+2025-12-01T10:33:01.562922,VALIDATION_PASSED,INDIANB-EQ,BUY,{"price": 885.85, "confidence": null, "score": null}
+2025-12-01T10:33:01.563503,ANALYTICS_APPROVED,INDIANB-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:33:01.565956,POSITION_SIZE_CALCULATED,INDIANB-EQ,BUY,{"quantity": 11, "required_capital": 1982.8500000000001, "charges": 33.98}
+2025-12-01T10:33:01.566361,CAPITAL_CHECK_PASSED,INDIANB-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:33:01.567093,ORDER_PLACING,INDIANB-EQ,BUY,{"quantity": 11, "price": 885.85, "order_type": "MARKET"}
+2025-12-01T10:33:01.756446,ORDER_PLACED,INDIANB-EQ,BUY,{"order_id": "251201000276601", "quantity": 11, "price": 885.85}
+2025-12-01T10:33:01.756959,ORDER_CONFIRMING,INDIANB-EQ,BUY,{"order_id": "251201000276601", "timeout": 30}
+2025-12-01T10:33:01.916276,ORDER_CONFIRMED,INDIANB-EQ,BUY,{"order_id": "251201000276601", "filled_price": 887.89, "quantity": 11}
+2025-12-01T10:33:01.929400,POSITION_ADDED,INDIANB-EQ,BUY,{"entry_price": 887.89, "quantity": 11, "capital_used": 1982.8500000000001, "sl_price": 883.45, "trade_id": 124}
+2025-12-01T10:33:01.932170,MONITOR_ADDED,INDIANB-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T10:33:01.933623,EXECUTION_COMPLETE,INDIANB-EQ,BUY,{"order_id": "251201000276601", "entry_price": 885.85, "quantity": 11, "capital_used": 1982.8500000000001, "sl_price": 883.45, "trade_id": 124, "status": "SUCCESS"}
+2025-12-01T10:33:03.436369,ALERT_RECEIVED,UNIONBANK-EQ,BUY,{"price": 155.48, "confidence": null, "score": null}
+2025-12-01T10:33:03.437271,VALIDATION_PASSED,UNIONBANK-EQ,BUY,{"price": 155.48, "confidence": null, "score": null}
+2025-12-01T10:33:03.438418,ANALYTICS_APPROVED,UNIONBANK-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:33:03.439720,POSITION_SIZE_CALCULATED,UNIONBANK-EQ,BUY,{"quantity": 63, "required_capital": 1993.088, "charges": 34.04}
+2025-12-01T10:33:03.440219,CAPITAL_CHECK_PASSED,UNIONBANK-EQ,BUY,{"available_capital": 18017.15, "available_slots": 9}
+2025-12-01T10:33:03.441258,ORDER_PLACING,UNIONBANK-EQ,BUY,{"quantity": 63, "price": 155.48, "order_type": "MARKET"}
+2025-12-01T10:33:03.573574,ORDER_PLACED,UNIONBANK-EQ,BUY,{"order_id": "251201000276658", "quantity": 63, "price": 155.48}
+2025-12-01T10:33:03.574683,ORDER_CONFIRMING,UNIONBANK-EQ,BUY,{"order_id": "251201000276658", "timeout": 30}
+2025-12-01T10:33:03.714384,ORDER_CONFIRMED,UNIONBANK-EQ,BUY,{"order_id": "251201000276658", "filled_price": 155.45, "quantity": 63}
+2025-12-01T10:33:03.721024,POSITION_ADDED,UNIONBANK-EQ,BUY,{"entry_price": 155.45, "quantity": 63, "capital_used": 1993.088, "sl_price": 154.65, "trade_id": 125}
+2025-12-01T10:33:03.724051,MONITOR_ADDED,UNIONBANK-EQ,BUY,{"monitor_status": "SUCCESS"}
+2025-12-01T10:33:03.724528,EXECUTION_COMPLETE,UNIONBANK-EQ,BUY,{"order_id": "251201000276658", "entry_price": 155.48, "quantity": 63, "capital_used": 1993.088, "sl_price": 154.65, "trade_id": 125, "status": "SUCCESS"}
+2025-12-01T10:33:05.227360,ALERT_RECEIVED,SAMMAANCAP-EQ,BUY,{"price": 154.19, "confidence": null, "score": null}
+2025-12-01T10:33:05.228550,VALIDATION_PASSED,SAMMAANCAP-EQ,BUY,{"price": 154.19, "confidence": null, "score": null}
+2025-12-01T10:33:05.229624,ANALYTICS_APPROVED,SAMMAANCAP-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:33:05.230013,POSITION_SIZE_CALCULATED,SAMMAANCAP-EQ,BUY,{"quantity": 63, "required_capital": 1976.744, "charges": 33.95}
+2025-12-01T10:33:05.230149,CAPITAL_CHECK_PASSED,SAMMAANCAP-EQ,BUY,{"available_capital": 16024.062, "available_slots": 8}
+2025-12-01T10:33:05.230412,ORDER_PLACING,SAMMAANCAP-EQ,BUY,{"quantity": 63, "price": 154.19, "order_type": "MARKET"}
+2025-12-01T10:33:05.349281,ORDER_PLACEMENT_FAILED,SAMMAANCAP-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 63, "capital_released": 1976.744}
+2025-12-01T10:39:01.805065,ALERT_RECEIVED,KFINTECH-EQ,BUY,{"price": 1090.5, "confidence": null, "score": null}
+2025-12-01T10:39:01.808558,VALIDATION_PASSED,KFINTECH-EQ,BUY,{"price": 1090.5, "confidence": null, "score": null}
+2025-12-01T10:39:01.815386,ANALYTICS_APPROVED,KFINTECH-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:39:01.816638,POSITION_SIZE_CALCULATED,KFINTECH-EQ,BUY,{"quantity": 9, "required_capital": 1996.96, "charges": 34.06}
+2025-12-01T10:39:01.818722,CAPITAL_CHECK_PASSED,KFINTECH-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:39:01.835568,ORDER_PLACING,KFINTECH-EQ,BUY,{"quantity": 9, "price": 1090.5, "order_type": "MARKET"}
+2025-12-01T10:39:02.113593,ORDER_PLACEMENT_FAILED,KFINTECH-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 9, "capital_released": 1996.96}
+2025-12-01T10:39:03.616673,ALERT_RECEIVED,CHOLAFIN-EQ,BUY,{"price": 1733.6, "confidence": null, "score": null}
+2025-12-01T10:39:03.617204,VALIDATION_PASSED,CHOLAFIN-EQ,BUY,{"price": 1733.6, "confidence": null, "score": null}
+2025-12-01T10:39:03.621459,ANALYTICS_APPROVED,CHOLAFIN-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:39:03.623723,POSITION_SIZE_CALCULATED,CHOLAFIN-EQ,BUY,{"quantity": 5, "required_capital": 1766.44, "charges": 32.84}
+2025-12-01T10:39:03.624008,CAPITAL_CHECK_PASSED,CHOLAFIN-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:39:03.624445,ORDER_PLACING,CHOLAFIN-EQ,BUY,{"quantity": 5, "price": 1733.6, "order_type": "MARKET"}
+2025-12-01T10:39:03.806129,ORDER_PLACED,CHOLAFIN-EQ,BUY,{"order_id": "251201000290062", "quantity": 5, "price": 1733.6}
+2025-12-01T10:39:03.806557,ORDER_CONFIRMING,CHOLAFIN-EQ,BUY,{"order_id": "251201000290062", "timeout": 30}
+2025-12-01T10:39:03.959503,ORDER_TIMEOUT,CHOLAFIN-EQ,BUY,{"order_id": "251201000290062", "timeout_seconds": 30, "final_status": "REJECTED", "capital_released": 1766.44}
+2025-12-01T10:42:02.256248,ALERT_RECEIVED,HINDCOPPER-EQ,BUY,{"price": 340.6, "confidence": null, "score": null}
+2025-12-01T10:42:02.257176,VALIDATION_PASSED,HINDCOPPER-EQ,BUY,{"price": 340.6, "confidence": null, "score": null}
+2025-12-01T10:42:02.259414,ANALYTICS_APPROVED,HINDCOPPER-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:42:02.261228,POSITION_SIZE_CALCULATED,HINDCOPPER-EQ,BUY,{"quantity": 28, "required_capital": 1941.1200000000003, "charges": 33.76}
+2025-12-01T10:42:02.261762,CAPITAL_CHECK_PASSED,HINDCOPPER-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:42:02.263087,ORDER_PLACING,HINDCOPPER-EQ,BUY,{"quantity": 28, "price": 340.6, "order_type": "MARKET"}
+2025-12-01T10:42:02.468636,ORDER_PLACEMENT_FAILED,HINDCOPPER-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 28, "capital_released": 1941.1200000000003}
+2025-12-01T10:42:03.972363,ALERT_RECEIVED,CAMS-EQ,BUY,{"price": 3965.0, "confidence": null, "score": null}
+2025-12-01T10:42:03.973554,VALIDATION_PASSED,CAMS-EQ,BUY,{"price": 3965.0, "confidence": null, "score": null}
+2025-12-01T10:42:03.974287,ANALYTICS_APPROVED,CAMS-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:42:03.974630,POSITION_SIZE_CALCULATED,CAMS-EQ,BUY,{"quantity": 2, "required_capital": 1618.05, "charges": 32.05}
+2025-12-01T10:42:03.975671,CAPITAL_CHECK_PASSED,CAMS-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:42:03.976564,ORDER_PLACING,CAMS-EQ,BUY,{"quantity": 2, "price": 3965.0, "order_type": "MARKET"}
+2025-12-01T10:42:04.106077,ORDER_PLACED,CAMS-EQ,BUY,{"order_id": "251201000300168", "quantity": 2, "price": 3965.0}
+2025-12-01T10:42:04.106668,ORDER_CONFIRMING,CAMS-EQ,BUY,{"order_id": "251201000300168", "timeout": 30}
+2025-12-01T10:42:04.243555,ORDER_TIMEOUT,CAMS-EQ,BUY,{"order_id": "251201000300168", "timeout_seconds": 30, "final_status": "REJECTED", "capital_released": 1618.05}
+2025-12-01T10:48:03.366330,ALERT_RECEIVED,NBCC-EQ,BUY,{"price": 117.52, "confidence": null, "score": null}
+2025-12-01T10:48:03.367231,VALIDATION_PASSED,NBCC-EQ,BUY,{"price": 117.52, "confidence": null, "score": null}
+2025-12-01T10:48:03.369812,ANALYTICS_APPROVED,NBCC-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:48:03.371626,POSITION_SIZE_CALCULATED,NBCC-EQ,BUY,{"quantity": 83, "required_capital": 1984.8220000000001, "charges": 33.99}
+2025-12-01T10:48:03.372261,CAPITAL_CHECK_PASSED,NBCC-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:48:03.373509,ORDER_PLACING,NBCC-EQ,BUY,{"quantity": 83, "price": 117.52, "order_type": "MARKET"}
+2025-12-01T10:48:03.566466,ORDER_PLACEMENT_FAILED,NBCC-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 83, "capital_released": 1984.8220000000001}
+2025-12-01T10:48:05.068949,ALERT_RECEIVED,BHARATFORG-EQ,BUY,{"price": 1448.8, "confidence": null, "score": null}
+2025-12-01T10:48:05.069248,VALIDATION_PASSED,BHARATFORG-EQ,BUY,{"price": 1448.8, "confidence": null, "score": null}
+2025-12-01T10:48:05.071617,ANALYTICS_APPROVED,BHARATFORG-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:48:05.072576,POSITION_SIZE_CALCULATED,BHARATFORG-EQ,BUY,{"quantity": 6, "required_capital": 1771.4199999999998, "charges": 32.86}
+2025-12-01T10:48:05.072804,CAPITAL_CHECK_PASSED,BHARATFORG-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
+2025-12-01T10:48:05.073124,ORDER_PLACING,BHARATFORG-EQ,BUY,{"quantity": 6, "price": 1448.8, "order_type": "MARKET"}
+2025-12-01T10:48:05.190566,ORDER_PLACEMENT_FAILED,BHARATFORG-EQ,BUY,{"reason": "Rate limit timeout - order placement blocked by rate limiter", "detailed_reason": "API rate limit exceeded - retry after backoff", "rejection_type": "RATE_LIMITED", "quantity": 6, "capital_released": 1771.4199999999998}
+2025-12-01T10:48:06.693262,ALERT_RECEIVED,SOLARINDS-EQ,BUY,{"price": 13398.0, "confidence": null, "score": null}
+2025-12-01T10:48:06.693814,VALIDATION_PASSED,SOLARINDS-EQ,BUY,{"price": 13398.0, "confidence": null, "score": null}
+2025-12-01T10:48:06.696370,ANALYTICS_APPROVED,SOLARINDS-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T10:48:06.697992,POSITION_SIZE_CALCULATED,SOLARINDS-EQ,BUY,{"quantity": 1, "required_capital": 2717.4800000000005, "charges": 37.88}
+2025-12-01T10:48:06.698834,CAPITAL_CHECK_FAILED,SOLARINDS-EQ,BUY,{"required_capital": 2717.4800000000005, "reason": "Trade capital exceeds limit (need: 2717.4800000000005, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}
+2025-12-01T18:05:59.807476,ALERT_RECEIVED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:05:59.808415,VALIDATION_PASSED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:05:59.809132,ANALYTICS_APPROVED,BANKNIFTY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T18:05:59.811667,POSITION_SIZE_CALCULATED,BANKNIFTY-EQ,BUY,{"quantity": 1, "required_capital": 10579.54, "charges": 79.54}
+2025-12-01T18:05:59.812487,CAPITAL_CHECK_FAILED,BANKNIFTY-EQ,BUY,{"required_capital": 10579.54, "reason": "Trade capital exceeds limit (need: 10579.54, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}
+2025-12-01T18:06:07.523936,ALERT_RECEIVED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:06:07.524587,VALIDATION_PASSED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:06:07.525224,ANALYTICS_APPROVED,BANKNIFTY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T18:06:07.526894,POSITION_SIZE_CALCULATED,BANKNIFTY-EQ,BUY,{"quantity": 1, "required_capital": 10579.54, "charges": 79.54}
+2025-12-01T18:06:07.527804,CAPITAL_CHECK_FAILED,BANKNIFTY-EQ,BUY,{"required_capital": 10579.54, "reason": "Trade capital exceeds limit (need: 10579.54, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}
+2025-12-01T18:09:51.799268,ALERT_RECEIVED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:09:51.800976,VALIDATION_PASSED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:09:51.802153,ANALYTICS_APPROVED,BANKNIFTY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T18:09:51.803639,POSITION_SIZE_CALCULATED,BANKNIFTY-EQ,BUY,{"quantity": 1, "required_capital": 10579.54, "charges": 79.54}
+2025-12-01T18:09:51.804402,CAPITAL_CHECK_FAILED,BANKNIFTY-EQ,BUY,{"required_capital": 10579.54, "reason": "Trade capital exceeds limit (need: 10579.54, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}
+2025-12-01T18:09:57.413035,ALERT_RECEIVED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:09:57.413669,VALIDATION_PASSED,BANKNIFTY-EQ,BUY,{"price": 52500.0, "confidence": null, "score": null}
+2025-12-01T18:09:57.414354,ANALYTICS_APPROVED,BANKNIFTY-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-01T18:09:57.416848,POSITION_SIZE_CALCULATED,BANKNIFTY-EQ,BUY,{"quantity": 1, "required_capital": 10579.54, "charges": 79.54}
+2025-12-01T18:09:57.417506,CAPITAL_CHECK_FAILED,BANKNIFTY-EQ,BUY,{"required_capital": 10579.54, "reason": "Trade capital exceeds limit (need: 10579.54, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}

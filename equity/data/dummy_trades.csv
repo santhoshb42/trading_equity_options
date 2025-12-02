@@ -1,0 +1,1 @@
+trade_id,symbol,action,entry_price,entry_time,quantity,capital_would_use,rejection_reason,ml_score,tv_score,exit_price,exit_time,exit_reason,gross_profit,charges_estimate,net_profit,profit_percent,outcome,sl_price,trail_sl_price,was_hit_by_sl,was_real_trade,used_for_ml_training,ml_learned

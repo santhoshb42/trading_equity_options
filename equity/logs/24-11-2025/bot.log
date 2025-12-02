@@ -1,0 +1,412 @@
+2025-11-24 19:37:45 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:37:45 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:37:45 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:37:45 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:37:45 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:37:45 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:37:45 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:37:45 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:37:45.772700
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:37:45 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:37:45 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:37:45.780181 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:37:45 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:37:45 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:37:45 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:37:45 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:37:45 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:37:45 | ERROR | equity_bot | ERROR | EOD_CONNECTION_ERROR | Failed to connect to bot at http://localhost:80
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_SCHEDULER | EOD update triggered (may be a missed trigger from late bot start) | trigger_time=2025-11-24T19:37:45.771028
+2025-11-24 19:37:45 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:37:45.829980
+2025-11-24 19:37:45 | ERROR | equity_bot | ERROR | EOD_CONNECTION_ERROR | Failed to connect to bot at http://localhost:80
+2025-11-24 19:37:46 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 134294434511712 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:37:46 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:37:46 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:37:46 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:37:46 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:37:46 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:37:46 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:37:46 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:37:46 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:37:46 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:37:46 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:37:46 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:37:46 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:37:46 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:37:46 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:37:48 | INFO | equity_bot | SESSION | Performing lightweight session validation
+2025-11-24 19:37:48 | INFO | equity_bot | RATE_LIMIT_WAIT_START | Waiting for rate limit clearance | endpoint=rmsLimit | timeout_seconds=2.0
+2025-11-24 19:37:48 | INFO | equity_bot | API_CALL_DEBUG | About to call rmsLimit with args=(), kwargs={}
+2025-11-24 19:37:48 | INFO | equity_bot | API_CALL_DEBUG | rmsLimit returned: {'status': True, 'message': 'SUCCESS', 'errorcode': '', 'data': {'net': '17942.9474', 'availablecash': '17942.9474', 'availableintradaypayin': '0.0000', 'availablelimitmargin': '0.0000', 'collateral': '0.0000', 'm2munrealized': '0.0000', 'm2mrealized': '-274.5900', 'utiliseddebits': '759.3426', 'utilisedspan': None, 'utilisedoptionpremium': None, 'utilisedholdingsales': None, 'utilisedexposure': None, 'utilisedturnover': None, 'utilisedpayout': '17942.9474'}}
+2025-11-24 19:37:48 | INFO | equity_bot | SESSION | Session valid
+2025-11-24 19:38:13 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:14 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:38:14 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:14 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:14 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:14 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:14 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=0 | active_positions=0
+2025-11-24 19:38:14 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:14 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:38:14 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:14 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:14 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:14 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:38:14 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:38:14 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:38:14.932355
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:38:14 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:38:14 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:38:14.933207 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:38:14 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:38:14 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:38:14 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:38:14 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:38:14 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:38:14 | ERROR | equity_bot | ERROR | EOD_CONNECTION_ERROR | Failed to connect to bot at http://localhost:80
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_SCHEDULER | EOD update triggered (may be a missed trigger from late bot start) | trigger_time=2025-11-24T19:38:14.931675
+2025-11-24 19:38:14 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:38:14.947069
+2025-11-24 19:38:14 | ERROR | equity_bot | ERROR | EOD_CONNECTION_ERROR | Failed to connect to bot at http://localhost:80
+2025-11-24 19:38:15 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 129054748504864 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:38:15 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:38:15 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:38:15 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:38:15 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:38:15 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:38:15 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:38:15 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:15 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:38:15 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:38:15 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:38:15 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:38:15 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:38:15 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:38:15 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:38:27 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:27 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:38:27 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:27 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:27 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:27 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:38:27 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:38:27 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:38:27.744538
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:38:27 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:38:27 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:38:27.752902 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:38:27 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:38:27 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:38:27 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:38:27 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:38:27.775260
+2025-11-24 19:38:27 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:38:27 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:38:28 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 135961087722608 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:38:28 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:38:28 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:38:28 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:38:28 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:38:28 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:38:28 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:38:28 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:28 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:38:28 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:38:28 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:38:28 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:38:28 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:38:28 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:38:28 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:38:28 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=1 | active_positions=0
+2025-11-24 19:38:45 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:45 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:38:45 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:45 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:45 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:38:45 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:38:45 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:38:45 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:38:45.429779
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:38:45 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:38:45 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:38:45.431967 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:38:45 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:38:45 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:38:45 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:38:45 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:38:45 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:38:45 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:38:45.735197
+2025-11-24 19:38:45 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 135270684912016 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:38:45 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:38:45 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:38:45 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:38:45 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:38:45 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:38:45 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:38:45 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:38:46 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:38:46 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:38:46 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:38:46 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:38:46 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:38:46 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:38:46 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:38:46 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=1 | active_positions=0
+2025-11-24 19:39:02 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:02 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:39:02 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:02 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:02 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:02 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:39:02 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:39:02 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:39:02.761532
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:39:02 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:39:02 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:39:02.765616 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:39:02 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:39:02 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:39:02 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:39:02 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:39:02.782629
+2025-11-24 19:39:02 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:39:02 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:39:03 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 132325087749968 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:39:03 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:39:03 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:39:03 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:39:03 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:39:03 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:39:03 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:39:03 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:03 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:39:03 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:39:03 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:39:03 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:39:03 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:39:03 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:39:03 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:39:03 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=0 | active_positions=0
+2025-11-24 19:39:14 | INFO | equity_bot | EOD_SCHEDULER | EOD update triggered (may be a missed trigger from late bot start) | trigger_time=2025-11-24T19:38:14.931675
+2025-11-24 19:39:14 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:39:14.958852
+2025-11-24 19:39:15 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:39:15 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:39:15 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:39:15.042525
+2025-11-24 19:39:19 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:19 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:39:19 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:19 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:19 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:19 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:39:19 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:39:19 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:39:19.487566
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:39:19 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:39:19 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:39:19.491522 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:39:19 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:39:19 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:39:19 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:39:19 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:39:19.501495
+2025-11-24 19:39:19 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:39:19 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:39:19 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 124866990155600 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:39:19 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:39:19 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:39:19 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:39:19 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:39:19 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:39:19 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:39:19 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:20 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:39:20 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:39:20 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:39:20 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:39:20 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:39:20 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:39:20 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:39:20 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=0 | active_positions=0
+2025-11-24 19:39:35 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:35 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:39:35 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:35 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:35 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:35 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:39:36 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:39:36 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:39:36.009289
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:39:36 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:39:36 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:39:36.015050 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:39:36 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:39:36 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:39:36 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:39:36 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:39:36 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:39:36 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:39:36.025316
+2025-11-24 19:39:36 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 124129212228976 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:39:36 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:39:36 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:39:36 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:39:36 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:39:36 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:39:36 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:39:36 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:36 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:39:36 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:39:36 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:39:36 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:39:36 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:39:36 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:39:36 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:39:36 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=0 | active_positions=0
+2025-11-24 19:39:52 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:52 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-11-24 19:39:52 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:52 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:52 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-11-24 19:39:52 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-11-24 19:39:52 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-11-24 19:39:52 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=80 | margin_percentage=0.2 | paper_trading=False
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:30 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:30, learning: 15:15
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_SCHEDULER | Bot started after trigger time - attempting missed EOD update
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_SCHEDULER | Triggering EOD learning update at 2025-11-24T19:39:52.705292
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread | trigger_time=15:30
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 80)
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-11-24 19:39:52 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-11-24 19:39:52 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-11-24T19:39:52.709618 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-11-24 19:39:52 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=6 | refill_rate=6
+2025-11-24 19:39:52 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=150 | refill_rate=2.5
+2025-11-24 19:39:52 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=6 | rpm_limit=150
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_LEARNING_UPDATE | Triggering end-of-day learning update
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_ANALYSIS_COMPLETE | Learning update completed | summary={"real_trades_executed": 0, "paper_trades_executed": 0, "total_trades": 0, "csv_trades_ingested": 0, "missed_alerts_paper_traded": 0, "paper_pnl_total": 0.0}
+2025-11-24 19:39:52 | INFO | equity_bot | INSTRUMENTS | Loaded 2337 instruments
+2025-11-24 19:39:52 | INFO | equity_bot | SESSION | Performing fresh login
+2025-11-24 19:39:52 | INFO | equity_bot | EOD_UPDATE_SUCCESS | EOD learning update completed successfully | update_count=1 | timestamp=2025-11-24T19:39:52.721541
+2025-11-24 19:39:52 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 132365327903936 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-11-24 19:39:52 | INFO | equity_bot | SESSION | Session saved to file
+2025-11-24 19:39:52 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-11-24 19:39:52 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-11-24 19:39:52 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-11-24 19:39:52 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-11-24 19:39:52 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-11-24 19:39:52 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-11-24 19:39:53 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-11-24 19:39:53 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-11-24 19:39:53 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-11-24 19:39:53 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-11-24 19:39:53 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-11-24 19:39:53 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-11-24 19:39:53 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:80
+2025-11-24 19:39:53 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=0 | active_positions=0
+2025-11-24 19:40:02 | INFO | equity_bot | SESSION | Performing lightweight session validation
+2025-11-24 19:40:02 | INFO | equity_bot | RATE_LIMIT_WAIT_START | Waiting for rate limit clearance | endpoint=rmsLimit | timeout_seconds=2.0
+2025-11-24 19:40:02 | INFO | equity_bot | API_CALL_DEBUG | About to call rmsLimit with args=(), kwargs={}
+2025-11-24 19:40:02 | INFO | equity_bot | API_CALL_DEBUG | rmsLimit returned: {'status': True, 'message': 'SUCCESS', 'errorcode': '', 'data': {'net': '17942.9474', 'availablecash': '17942.9474', 'availableintradaypayin': '0.0000', 'availablelimitmargin': '0.0000', 'collateral': '0.0000', 'm2munrealized': '0.0000', 'm2mrealized': '-274.5900', 'utiliseddebits': '759.3426', 'utilisedspan': None, 'utilisedoptionpremium': None, 'utilisedholdingsales': None, 'utilisedexposure': None, 'utilisedturnover': None, 'utilisedpayout': '17942.9474'}}
+2025-11-24 19:40:02 | INFO | equity_bot | SESSION | Session valid
+2025-11-24 19:40:02 | INFO | equity_bot | SHUTDOWN | Received signal 15, initiating graceful shutdown...
+2025-11-24 19:40:02 | INFO | equity_bot | SHUTDOWN | Initiating bot shutdown...
+2025-11-24 19:40:02 | INFO | equity_bot | EOD_SCHEDULER_STOP_REQUESTED | EOD scheduler stop requested
+2025-11-24 19:40:02 | INFO | equity_bot | SHUTDOWN | EOD scheduler stopped
+2025-11-24 19:40:02 | INFO | equity_bot | SHUTDOWN | Bot shutdown completed successfully
+2025-11-24 19:40:02 | INFO | equity_bot | BOT_CLEANUP | Bot cleanup on exit | uptime_seconds=108 | active_positions=0

@@ -1,0 +1,87 @@
+nohup: ignoring input
+📅 Log directory rolled over to: /root/santhosh/trading/equity/logs/2025-12-02
+2025-12-02 11:15:46 | INFO | STARTUP | Logging initialized | log_dir=/root/santhosh/trading/equity/logs/2025-12-02
+2025-12-02 11:15:46 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+2025-12-02 11:15:46 | INFO | equity_bot | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-12-02 11:15:46 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-12-02 11:15:46 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-12-02 11:15:46 | INFO | equity_bot | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-12-02 11:15:46 | INFO | equity_bot | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-12-02 11:15:46 | INFO | system | SYSTEM_STARTUP_INITIALIZING | component=STARTUP | state=INITIALIZING | timestamp=2025-12-02T11:15:46.533851 | python_version=3.12.3 | system=Linux | memory_available_mb=554 | disk_free_gb=44 | cpu_count=1 | working_directory=/root/santhosh/trading/equity | log_directory=/root/santhosh/trading/equity/logs/2025-12-02
+2025-12-02 11:15:46 | INFO | system | SYSTEM_BOT_STARTING | component=BOT | state=STARTING | timestamp=2025-12-02T11:15:46.534190
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | Starting Equity Trading Bot...
+2025-12-02 11:15:46 | INFO | system | SYSTEM_SIGNAL_HANDLERS_REGISTERED | component=SIGNAL_HANDLERS | state=REGISTERED | timestamp=2025-12-02T11:15:46.534546
+2025-12-02 11:15:46 | INFO | system | SYSTEM_CONFIG_VALIDATING | component=CONFIG | state=VALIDATING | timestamp=2025-12-02T11:15:46.534752
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | Validating configuration...
+2025-12-02 11:15:46 | INFO | system | SYSTEM_CONFIG_VALID | component=CONFIG | state=VALID | timestamp=2025-12-02T11:15:46.535082
+2025-12-02 11:15:46 | INFO | equity_bot | CONFIG | Configuration validation passed
+2025-12-02 11:15:46 | INFO | equity_bot | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=8080 | margin_percentage=0.2 | paper_trading=False
+2025-12-02 11:15:46 | INFO | system | SYSTEM_TRADING_CONFIG_LOADED | component=TRADING_CONFIG | state=LOADED | timestamp=2025-12-02T11:15:46.535403 | trading_mode=LIVE | capital_per_trade=2000.0 | max_positions=5 | default_sl_percentage=0.5 | monitor_interval=20
+2025-12-02 11:15:46 | INFO | system | SYSTEM_LEARNING_ENGINE_INITIALIZED | component=LEARNING_ENGINE | state=INITIALIZED | timestamp=2025-12-02T11:15:46.536214
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | Hybrid learning engine initialized
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP |   Status: ML system ready for real-time learning
+2025-12-02 11:15:46 | INFO | equity_bot | EOD_SCHEDULER_SCHEDULED | EOD scheduler scheduled with two stages | squareoff_time=15:12 | learning_time=15:15 | description=Stage 1: Square-off at 3:12 PM (avoid EOD rush) | Stage 2: Learning at 3:15 PM (get more data)
+2025-12-02 11:15:46 | INFO | equity_bot | EOD_SCHEDULER_STARTED | EOD scheduler started, squareoff: 15:12, learning: 15:15
+2025-12-02 11:15:46 | INFO | equity_bot | EOD_DAEMON_STARTED | EOD scheduler started as daemon thread (square-off at 15:12, learning at 15:15) | squareoff_time=15:12 | learning_time=15:15
+2025-12-02 11:15:46 | INFO | system | SYSTEM_EOD_SCHEDULER_STARTED | component=EOD_SCHEDULER | state=STARTED | timestamp=2025-12-02T11:15:46.537955
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | EOD scheduler daemon started (daily update at 3:30 PM IST on port 8080)
+2025-12-02 11:15:46 | INFO | system | SYSTEM_BOT_RUNNING | component=BOT | state=RUNNING | timestamp=2025-12-02T11:15:46.538105
+2025-12-02 11:15:46 | INFO | system | SYSTEM_STARTUP_COMPLETE | component=STARTUP | state=COMPLETE | timestamp=2025-12-02T11:15:46.538187 | startup_time=1764654346.5381505 | trading_mode=LIVE | python_version=3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0] | working_directory=/root/santhosh/trading/equity | environment_loaded=True
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | All components initialized successfully
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | Trading Mode: LIVE
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | Bot is ready to receive webhook alerts
+2025-12-02 11:15:46 | INFO | system | SYSTEM_SYSTEM_READY | component=SYSTEM | state=READY | timestamp=2025-12-02T11:15:46.538410 | webhook_server=starting | broker=will_initialize | monitor=will_initialize | rate_limiter=will_initialize
+2025-12-02 11:15:46 | INFO | system | SYSTEM_WEBHOOK_SERVER_STARTING | component=WEBHOOK_SERVER | state=STARTING | timestamp=2025-12-02T11:15:46.538464
+2025-12-02 11:15:46 | INFO | equity_bot | STARTUP | Starting webhook server...
+2025-12-02 11:15:46 | INFO | equity_bot | BOT_STARTUP | Trading bot starting up | startup_time=2025-12-02T11:15:46.538558 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-12-02 11:15:46 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=8 | refill_rate=8
+2025-12-02 11:15:46 | INFO | equity_bot | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=180 | refill_rate=3.0
+2025-12-02 11:15:46 | INFO | equity_bot | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=8 | rpm_limit=180
+2025-12-02 11:15:46 | INFO | equity_bot | INSTRUMENTS | Loaded 2399 instruments
+2025-12-02 11:15:46 | INFO | equity_bot | SESSION | Performing fresh login
+[I 251202 11:15:46 smartConnect:124] in pool
+2025-12-02 11:15:46 | INFO | equity_bot | SESSION_DEBUG | SmartConnect instance ID: 124900670959312 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-12-02 11:15:46 | INFO | equity_bot | SESSION | Session saved to file
+2025-12-02 11:15:46 | INFO | equity_bot | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-12-02 11:15:46 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started
+2025-12-02 11:15:46 | INFO | equity_bot | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-12-02 11:15:46 | INFO | equity_bot | RATE_LIMITER | API call recorded: login
+2025-12-02 11:15:46 | INFO | equity_bot | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-12-02 11:15:46 | INFO | equity_bot | FEEDBACK_INIT | PerformanceFeedback initialized (window: 20)
+✅ Auto-save heartbeat started
+==================================================
+    EQUITY TRADING BOT
+    Powered by AngelOne SmartAPI
+==================================================
+
+🛡️ INITIALIZING INDESTRUCTIBLE TRADING BOT...
+🛡️ INITIALIZING INDESTRUCTIBLE BOT...
+✅ Normal startup - no crash recovery needed
+2025-12-02 11:15:46 | INFO | FEEDBACK_INIT | PerformanceFeedback initialized for adaptive trading
+2025-12-02 11:15:46 | INFO | MONITOR | Backed up stale positions.json to positions.json.startup_1764654346
+2025-12-02 11:15:46 | INFO | MONITOR | ✓ Cleared stale positions.json - will rebuild from broker holdings
+2025-12-02 11:15:46 | INFO | MONITOR | Skipping file load - broker will be source of truth
+2025-12-02 11:15:46 | INFO | HOLDINGS_SYNC | Fetching positions and holdings from broker...
+2025-12-02 11:15:47 | INFO | HOLDINGS_SYNC | No positions or holdings found at broker
+2025-12-02 11:15:47 | INFO | equity_bot | MONITOR | PositionMonitor instance created successfully
+2025-12-02 11:15:47 | INFO | MONITOR | Position monitoring started with bucketed LTP checking
+2025-12-02 11:15:47 | INFO | MONITOR | Event loop thread started
+2025-12-02 11:15:47 | INFO | equity_bot | MONITOR | Position monitor started in background
+2025-12-02 11:15:47 | INFO | MONITOR | Event loop started successfully for priority queue
+2025-12-02 11:15:47 | INFO | equity_bot | MONITOR | Monitor initialized with 0 existing positions
+2025-12-02 11:15:47 | INFO | equity_bot | SYSTEM | Trading system initialized successfully
+2025-12-02 11:15:47 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker started successfully
+2025-12-02 11:15:47 | INFO | equity_bot | ALERT_QUEUE | Alert queue worker thread started
+2025-12-02 11:15:47 | INFO | equity_bot | SERVER | Starting webhook server on 0.0.0.0:8080
+ * Serving Flask app 'eqcode.api'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8080
+ * Running on http://143.244.141.127:8080
+Press CTRL+C to quit
+2025-12-02 11:15:47 | INFO | MONITOR | Priority API queue enabled and started
+2025-12-02 11:15:47 | INFO | SL_RETRY | SL retry thread started - waiting 30s before initial placement (conserve startup API quota)
+2025-12-02 11:15:47 | INFO | SL_RETRY | SL retry thread started successfully
+2025-12-02 11:15:47 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)

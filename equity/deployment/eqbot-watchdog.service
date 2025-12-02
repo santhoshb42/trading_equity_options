@@ -1,0 +1,8 @@
+[Unit]
+Description=EQ Bot Watchdog Service
+After=eqbot.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/santhosh/trading/equity/deployment/watchdog.sh
+User=root

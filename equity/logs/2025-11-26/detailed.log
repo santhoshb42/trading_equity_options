@@ -1,0 +1,40 @@
+2025-11-26 06:01:36 | INFO | system | SYSTEM_STARTUP_INITIALIZING | component=STARTUP | state=INITIALIZING | timestamp=2025-11-26T06:01:36.263347 | python_version=3.12.3 | system=Linux | memory_available_mb=1492 | disk_free_gb=43 | cpu_count=1 | working_directory=/root/santhosh/trading/equity | log_directory=/root/santhosh/trading/equity/logs/2025-11-26
+2025-11-26 06:01:36 | INFO | system | SYSTEM_BOT_STARTING | component=BOT | state=STARTING | timestamp=2025-11-26T06:01:36.265016
+2025-11-26 06:01:36 | INFO | system | SYSTEM_SIGNAL_HANDLERS_REGISTERED | component=SIGNAL_HANDLERS | state=REGISTERED | timestamp=2025-11-26T06:01:36.265264
+2025-11-26 06:01:36 | INFO | system | SYSTEM_CONFIG_VALIDATING | component=CONFIG | state=VALIDATING | timestamp=2025-11-26T06:01:36.265321
+2025-11-26 06:01:36 | INFO | system | SYSTEM_CONFIG_VALID | component=CONFIG | state=VALID | timestamp=2025-11-26T06:01:36.265440
+2025-11-26 06:01:36 | INFO | system | SYSTEM_TRADING_CONFIG_LOADED | component=TRADING_CONFIG | state=LOADED | timestamp=2025-11-26T06:01:36.265600 | trading_mode=LIVE | capital_per_trade=2000.0 | max_positions=5 | default_sl_percentage=0.5 | monitor_interval=20
+2025-11-26 06:01:36 | INFO | system | SYSTEM_LEARNING_ENGINE_INITIALIZED | component=LEARNING_ENGINE | state=INITIALIZED | timestamp=2025-11-26T06:01:36.270028
+2025-11-26 06:01:36 | INFO | system | SYSTEM_EOD_SCHEDULER_STARTED | component=EOD_SCHEDULER | state=STARTED | timestamp=2025-11-26T06:01:36.271334
+2025-11-26 06:01:36 | INFO | system | SYSTEM_BOT_RUNNING | component=BOT | state=RUNNING | timestamp=2025-11-26T06:01:36.271441
+2025-11-26 06:01:36 | INFO | system | SYSTEM_STARTUP_COMPLETE | component=STARTUP | state=COMPLETE | timestamp=2025-11-26T06:01:36.271518 | startup_time=1764117096.271483 | trading_mode=LIVE | python_version=3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0] | working_directory=/root/santhosh/trading/equity | environment_loaded=True
+2025-11-26 06:01:36 | INFO | system | SYSTEM_SYSTEM_READY | component=SYSTEM | state=READY | timestamp=2025-11-26T06:01:36.272791 | webhook_server=starting | broker=will_initialize | monitor=will_initialize | rate_limiter=will_initialize
+2025-11-26 06:01:36 | INFO | system | SYSTEM_WEBHOOK_SERVER_STARTING | component=WEBHOOK_SERVER | state=STARTING | timestamp=2025-11-26T06:01:36.272853
+2025-11-26 09:05:10 | INFO | system | SYSTEM_STARTUP_INITIALIZING | component=STARTUP | state=INITIALIZING | timestamp=2025-11-26T09:05:10.414602 | python_version=3.12.3 | system=Linux | memory_available_mb=1654 | disk_free_gb=44 | cpu_count=1 | working_directory=/root/santhosh/trading/equity | log_directory=/root/santhosh/trading/equity/logs/2025-11-26
+2025-11-26 09:05:10 | INFO | system | SYSTEM_BOT_STARTING | component=BOT | state=STARTING | timestamp=2025-11-26T09:05:10.415491
+2025-11-26 09:05:10 | INFO | system | SYSTEM_SIGNAL_HANDLERS_REGISTERED | component=SIGNAL_HANDLERS | state=REGISTERED | timestamp=2025-11-26T09:05:10.415798
+2025-11-26 09:05:10 | INFO | system | SYSTEM_CONFIG_VALIDATING | component=CONFIG | state=VALIDATING | timestamp=2025-11-26T09:05:10.415900
+2025-11-26 09:05:10 | INFO | system | SYSTEM_CONFIG_VALID | component=CONFIG | state=VALID | timestamp=2025-11-26T09:05:10.416125
+2025-11-26 09:05:10 | INFO | system | SYSTEM_TRADING_CONFIG_LOADED | component=TRADING_CONFIG | state=LOADED | timestamp=2025-11-26T09:05:10.416417 | trading_mode=LIVE | capital_per_trade=2000.0 | max_positions=5 | default_sl_percentage=0.5 | monitor_interval=20
+2025-11-26 09:05:10 | INFO | system | SYSTEM_LEARNING_ENGINE_INITIALIZED | component=LEARNING_ENGINE | state=INITIALIZED | timestamp=2025-11-26T09:05:10.417984
+2025-11-26 09:05:10 | INFO | system | SYSTEM_EOD_SCHEDULER_STARTED | component=EOD_SCHEDULER | state=STARTED | timestamp=2025-11-26T09:05:10.420351
+2025-11-26 09:05:10 | INFO | system | SYSTEM_BOT_RUNNING | component=BOT | state=RUNNING | timestamp=2025-11-26T09:05:10.420552
+2025-11-26 09:05:10 | INFO | system | SYSTEM_STARTUP_COMPLETE | component=STARTUP | state=COMPLETE | timestamp=2025-11-26T09:05:10.421007 | startup_time=1764128110.4206274 | trading_mode=LIVE | python_version=3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0] | working_directory=/root/santhosh/trading/equity | environment_loaded=True
+2025-11-26 09:05:10 | INFO | system | SYSTEM_SYSTEM_READY | component=SYSTEM | state=READY | timestamp=2025-11-26T09:05:10.421484 | webhook_server=starting | broker=will_initialize | monitor=will_initialize | rate_limiter=will_initialize
+2025-11-26 09:05:10 | INFO | system | SYSTEM_WEBHOOK_SERVER_STARTING | component=WEBHOOK_SERVER | state=STARTING | timestamp=2025-11-26T09:05:10.421587
+2025-11-26 09:33:06 | INFO | webhook | WEBHOOK_INVALID_FORMAT | status=INVALID_FORMAT | symbol=UNKNOWN | action=UNKNOWN | price=None | timestamp=2025-11-26T09:33:06.853543 | raw_data={"content_type": "text/plain; charset=utf-8"} | error=Content-Type must be application/json
+2025-11-26 10:18:04 | INFO | webhook | WEBHOOK_INVALID_FORMAT | status=INVALID_FORMAT | symbol=UNKNOWN | action=UNKNOWN | price=None | timestamp=2025-11-26T10:18:04.185850 | raw_data={"content_type": "text/plain; charset=utf-8"} | error=Content-Type must be application/json
+2025-11-26 14:54:01 | INFO | webhook | WEBHOOK_INVALID_FORMAT | status=INVALID_FORMAT | symbol=UNKNOWN | action=UNKNOWN | price=None | timestamp=2025-11-26T14:54:01.526706 | raw_data={"content_type": "text/plain; charset=utf-8"} | error=Content-Type must be application/json
+2025-11-26 14:57:04 | INFO | webhook | WEBHOOK_INVALID_FORMAT | status=INVALID_FORMAT | symbol=UNKNOWN | action=UNKNOWN | price=None | timestamp=2025-11-26T14:57:04.597188 | raw_data={"content_type": "text/plain; charset=utf-8"} | error=Content-Type must be application/json
+2025-11-26 16:30:12 | INFO | system | SYSTEM_STARTUP_INITIALIZING | component=STARTUP | state=INITIALIZING | timestamp=2025-11-26T16:30:12.047886 | python_version=3.12.3 | system=Linux | memory_available_mb=1637 | disk_free_gb=44 | cpu_count=1 | working_directory=/root/santhosh/trading/equity | log_directory=/root/santhosh/trading/equity/logs/2025-11-26
+2025-11-26 16:30:12 | INFO | system | SYSTEM_BOT_STARTING | component=BOT | state=STARTING | timestamp=2025-11-26T16:30:12.048479
+2025-11-26 16:30:12 | INFO | system | SYSTEM_SIGNAL_HANDLERS_REGISTERED | component=SIGNAL_HANDLERS | state=REGISTERED | timestamp=2025-11-26T16:30:12.048803
+2025-11-26 16:30:12 | INFO | system | SYSTEM_CONFIG_VALIDATING | component=CONFIG | state=VALIDATING | timestamp=2025-11-26T16:30:12.048911
+2025-11-26 16:30:12 | INFO | system | SYSTEM_CONFIG_VALID | component=CONFIG | state=VALID | timestamp=2025-11-26T16:30:12.049130
+2025-11-26 16:30:12 | INFO | system | SYSTEM_TRADING_CONFIG_LOADED | component=TRADING_CONFIG | state=LOADED | timestamp=2025-11-26T16:30:12.049451 | trading_mode=LIVE | capital_per_trade=2000.0 | max_positions=5 | default_sl_percentage=0.5 | monitor_interval=20
+2025-11-26 16:30:12 | INFO | system | SYSTEM_LEARNING_ENGINE_INITIALIZED | component=LEARNING_ENGINE | state=INITIALIZED | timestamp=2025-11-26T16:30:12.052154
+2025-11-26 16:30:12 | INFO | system | SYSTEM_EOD_SCHEDULER_STARTED | component=EOD_SCHEDULER | state=STARTED | timestamp=2025-11-26T16:30:12.058763
+2025-11-26 16:30:12 | INFO | system | SYSTEM_BOT_RUNNING | component=BOT | state=RUNNING | timestamp=2025-11-26T16:30:12.059001
+2025-11-26 16:30:12 | INFO | system | SYSTEM_STARTUP_COMPLETE | component=STARTUP | state=COMPLETE | timestamp=2025-11-26T16:30:12.059135 | startup_time=1764154812.0590734 | trading_mode=LIVE | python_version=3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0] | working_directory=/root/santhosh/trading/equity | environment_loaded=True
+2025-11-26 16:30:12 | INFO | system | SYSTEM_SYSTEM_READY | component=SYSTEM | state=READY | timestamp=2025-11-26T16:30:12.059452 | webhook_server=starting | broker=will_initialize | monitor=will_initialize | rate_limiter=will_initialize
+2025-11-26 16:30:12 | INFO | system | SYSTEM_WEBHOOK_SERVER_STARTING | component=WEBHOOK_SERVER | state=STARTING | timestamp=2025-11-26T16:30:12.059542
