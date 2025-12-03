@@ -1,1 +1,22 @@
-{}
+{
+  "MPHASIS-EQ": {
+    "total_trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_profit": 31.8,
+    "trade_history": [
+      {
+        "date": "2025-12-03T19:39:39.058329",
+        "won": true,
+        "profit": 31.8,
+        "is_paper": false
+      }
+    ],
+    "recent_form": "cold",
+    "win_rate": 1.0,
+    "win_rate_last_10": 1.0,
+    "avg_profit": 31.8,
+    "reliability_score": 0.5,
+    "last_updated": "2025-12-03 19:39:39.058337"
+  }
+}

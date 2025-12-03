@@ -1540,16 +1540,21 @@ class AngelOneBroker:
                 
                 return order
             else:
-                # Error - response can be None (rate limit timeout OR broker error), dict (broker error), or other
+                # Error - response can be None (token invalid, rate limit timeout, OR broker error), dict (broker error), or other
                 if response is None:
-                    # Check if we have extracted error details from the exception
-                    if hasattr(self, 'last_api_error_code') and self.last_api_error_code:
+                    # 🔑 PRIORITY 1: Check if token is invalid or session expired
+                    if not self.smart_api or not hasattr(self.smart_api, 'access_token') or not self.smart_api.access_token:
+                        error_msg = "Order failed - invalid or expired authentication token"
+                        error_code = "TOKEN_INVALID"
+                        log_event("TOKEN_ERROR", f"Order placement failed due to invalid token | symbol={symbol}")
+                    # 🔍 PRIORITY 2: Check if we have extracted error details from the exception
+                    elif hasattr(self, 'last_api_error_code') and self.last_api_error_code:
                         # Broker returned an error - use extracted details
                         error_code = self.last_api_error_code
                         error_msg = self.last_api_error_message
                         log_event("BROKER_ERROR_EXTRACTED", f"Using extracted broker error: {error_code}")
                     else:
-                        # No extracted error - this is likely a genuine rate limit timeout
+                        # 🕒 PRIORITY 3: No extracted error and token is valid - genuine rate limit timeout
                         # This happens when rate limiter times out after 30 seconds
                         # Indicates too many requests queued up - order placement failed due to rate limiting
                         error_msg = "Rate limit timeout - order placement blocked by rate limiter"

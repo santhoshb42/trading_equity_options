@@ -16,6 +16,7 @@ Architecture:
 import signal
 import sys
 import time
+import os
 import atexit
 import threading
 from datetime import datetime
@@ -114,6 +115,9 @@ class OptionsTradingBot:
         # Start position monitor thread
         self._start_position_monitor()
         
+        # Start instrument refresh thread
+        self._start_instrument_refresh()
+        
         # Start API server
         self._start_api_server()
     
@@ -205,6 +209,54 @@ class OptionsTradingBot:
         self.position_monitor_thread.start()
         print("   ✅ Position monitor thread started")
         logger.debug(f"POSITION_MONITOR: THREAD_STARTED")
+    
+    def _start_instrument_refresh(self):
+        """Start daily instrument refresh thread"""
+        def refresh_instruments_loop():
+            from datetime import time as dt_time, timedelta
+            import schedule
+            
+            # Schedule refresh at 9:15 AM every day
+            schedule.every().day.at("09:15").do(self._refresh_instruments_now)
+            
+            logger.info("INSTRUMENT_REFRESH: SCHEDULED | time=09:15 AM")
+            
+            while self.running:
+                schedule.run_pending()
+                time.sleep(60)  # Check every minute
+        
+        instrument_thread = threading.Thread(
+            target=refresh_instruments_loop,
+            daemon=True,
+            name="OptionsInstrumentRefresh"
+        )
+        instrument_thread.start()
+        print("   ✅ Instrument refresh thread started (daily at 09:15 AM)")
+    
+    def _refresh_instruments_now(self):
+        """Refresh instruments from broker immediately"""
+        try:
+            logger.info("INSTRUMENT_REFRESH: START")
+            
+            from tools.fetch_nfo_instruments import fetch_nfo_instruments
+            
+            instruments = fetch_nfo_instruments()
+            
+            if instruments:
+                import json
+                from pathlib import Path
+                
+                output_file = Path(__file__).parent / "tools" / "instrument.json"
+                with open(output_file, 'w') as f:
+                    json.dump(instruments, f, indent=2)
+                
+                logger.info(f"INSTRUMENT_REFRESH: SUCCESS | instruments={len(instruments)}")
+                print(f"   ✅ Instrument refresh: {len(instruments)} contracts updated")
+            else:
+                logger.warning("INSTRUMENT_REFRESH: FAILED | no instruments returned")
+                
+        except Exception as e:
+            logger.error(f"INSTRUMENT_REFRESH: ERROR | {str(e)}")
     
     def _start_api_server(self):
         """Start API server"""
@@ -314,4 +366,40 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    # Prevent multiple instances using PID file
+    script_dir = Path(__file__).parent
+    pid_file = script_dir / "options_bot.pid"
+    
+    if pid_file.exists():
+        try:
+            with open(pid_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            
+            # Check if process is actually running
+            try:
+                os.kill(old_pid, 0)  # Signal 0 just checks if process exists
+                print(f"❌ ERROR: Options bot already running (PID {old_pid})")
+                print(f"   If bot is not running, delete: {pid_file}")
+                sys.exit(1)
+            except OSError:
+                # Process doesn't exist, stale PID file
+                print(f"⚠️  Removing stale PID file (process {old_pid} not found)")
+                pid_file.unlink()
+        except Exception as e:
+            print(f"⚠️  Error checking PID file: {e}")
+            pid_file.unlink()
+    
+    # Write our PID
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
+    
+    # Cleanup PID file on exit
+    def cleanup_pid():
+        if pid_file.exists():
+            pid_file.unlink()
+    
+    atexit.register(cleanup_pid)
+    
+    print(f"✅ Started options bot (PID {os.getpid()})")
+    
     main()

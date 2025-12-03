@@ -246,15 +246,37 @@ class TradingState:
                 if not login_ok:
                     log_event("BROKER_PAPER_MODE", "Broker login failed - continuing in PAPER mode with simulated orders")
             else:
-                # LIVE mode requires successful login
-                if not self.broker.login():
-                    log_broker_error(
-                        error_type="BROKER_CRASH",
-                        message="Bot startup failed - broker login failed",
-                        endpoint="initialize -> login",
-                        context={"startup_time": startup_time}
-                    )
-                    raise Exception("Failed to login to AngelOne")
+                # LIVE mode requires successful login with exponential backoff
+                max_login_attempts = 5
+                base_wait_time = 60  # Start with 60 seconds
+                
+                for attempt in range(1, max_login_attempts + 1):
+                    log_event("BROKER_LOGIN", f"Login attempt {attempt}/{max_login_attempts}")
+                    
+                    if self.broker.login():
+                        log_event("BROKER_LOGIN", "✅ Login successful")
+                        break
+                    
+                    if attempt < max_login_attempts:
+                        # Exponential backoff: 60s, 120s, 240s, 480s
+                        wait_time = base_wait_time * (2 ** (attempt - 1))
+                        log_event("BROKER_LOGIN", f"❌ Login failed, waiting {wait_time}s before retry {attempt + 1}/{max_login_attempts}")
+                        log_broker_error(
+                            error_type="LOGIN_RETRY",
+                            message=f"Login attempt {attempt} failed, retrying in {wait_time}s",
+                            endpoint="initialize -> login",
+                            context={"attempt": attempt, "wait_time": wait_time}
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        # All attempts exhausted
+                        log_broker_error(
+                            error_type="BROKER_CRASH",
+                            message=f"Bot startup failed - all {max_login_attempts} login attempts failed",
+                            endpoint="initialize -> login",
+                            context={"startup_time": startup_time, "total_attempts": max_login_attempts}
+                        )
+                        raise Exception(f"Failed to login to AngelOne after {max_login_attempts} attempts")
             
             # Restore positions if recovered from crash
             if recovered_positions:

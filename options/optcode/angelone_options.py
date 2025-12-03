@@ -111,28 +111,84 @@ class OptionChain:
     def __init__(self, underlying: str, expiry: str):
         self.underlying = underlying
         self.expiry = expiry
-        self.contracts: Dict[Tuple[float, str], OptionContract] = {}  # {(strike, type): contract}
+        self.contracts: Dict[str, OptionContract] = {}  # {symbol: contract} - use symbol as key, not strike
         self.atm_strike = None
         self.last_updated = None
     
     def add_contract(self, contract: OptionContract):
         """Add contract to chain"""
-        key = (contract.strike, contract.contract_type)
+        # Use symbol as key since strike might not be pre-parsed
+        key = contract.symbol
         self.contracts[key] = contract
     
     def get_contract(self, strike: float, contract_type: str) -> Optional[OptionContract]:
-        """Get contract for specific strike and type"""
-        return self.contracts.get((strike, contract_type))
+        """Get contract for specific strike and type (legacy method)"""
+        # Find contract with matching strike and type (by iterating contracts)
+        for contract in self.contracts.values():
+            if contract.strike == strike and contract.contract_type == contract_type:
+                return contract
+        return None
     
     def get_atm_contracts(self, current_spot: float, offset: int = 0) -> Optional[Tuple[OptionContract, OptionContract]]:
-        """Get ATM or offset contracts (CE, PE) based on current spot price"""
-        # Find nearest strike
-        available_strikes = sorted(set(s for s, _ in self.contracts.keys()))
+        """
+        Get ATM or offset contracts (CE, PE) based on current spot price.
+        
+        Strategy: Find ALL available CE and PE symbols, extract their strikes from symbol strings,
+        then pick the pair (CE, PE) with strike NEAREST to current spot price.
+        
+        Args:
+            current_spot: Current LTP/spot price
+            offset: Strike offset (0=ATM, 1=next OTM, -1=next ITM)
+        """
+        # Get all CE and PE symbols separately
+        ce_contracts = [c for c in self.contracts.values() if c.contract_type == 'CE']
+        pe_contracts = [c for c in self.contracts.values() if c.contract_type == 'PE']
+        
+        if not ce_contracts or not pe_contracts:
+            logger.warning(f"ATM: Insufficient contracts CE={len(ce_contracts)} PE={len(pe_contracts)}")
+            return None
+        
+        # Extract strike from symbol for all contracts
+        # Symbol format: SYMBOL+DDMMMYY+STRIKE+CE/PE (e.g., AMBER30DEC257100CE)
+        def extract_strike_from_symbol(contract):
+            """Extract numeric strike from symbol using pattern matching
+            
+            Format: {SYMBOL}{DD}{MMM}{YY}{STRIKE}{CE|PE}
+            Example: AMBER30DEC257100CE → strike 7100
+            Pattern: ([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)
+            """
+            symbol = contract.symbol
+            
+            import re
+            # Match pattern: SYMBOL + DD + MMM + YY + STRIKE + CE/PE
+            pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$'
+            match = re.match(pattern, symbol)
+            
+            if match:
+                strike_str = match.group(5)  # Group 5 is the STRIKE
+                try:
+                    return int(strike_str)
+                except:
+                    return 0
+            return 0
+        
+        # Build lists of (contract, strike) tuples
+        ce_with_strikes = [(c, extract_strike_from_symbol(c)) for c in ce_contracts]
+        pe_with_strikes = [(c, extract_strike_from_symbol(c)) for c in pe_contracts]
+        
+        if not ce_with_strikes or not pe_with_strikes:
+            logger.warning(f"ATM: Could not extract strikes from symbols")
+            return None
+        
+        # Find available strikes
+        available_strikes = sorted(set(s for _, s in ce_with_strikes))
         if not available_strikes:
             return None
         
-        # Find ATM strike (nearest to spot)
+        # Find the strike NEAREST to current spot (ATM)
         atm_strike = min(available_strikes, key=lambda x: abs(x - current_spot))
+        
+        logger.debug(f"ATM: LTP={current_spot} | nearest_strike={atm_strike} | available={available_strikes[:5]}...")
         
         # Apply offset if requested
         strike_index = available_strikes.index(atm_strike)
@@ -143,9 +199,16 @@ class OptionChain:
         else:
             selected_strike = atm_strike
         
-        ce = self.get_contract(selected_strike, 'CE')
-        pe = self.get_contract(selected_strike, 'PE')
-        return (ce, pe) if ce and pe else None
+        # Find CE and PE for selected strike
+        ce = next((c for c, s in ce_with_strikes if s == selected_strike), None)
+        pe = next((c for c, s in pe_with_strikes if s == selected_strike), None)
+        
+        if ce and pe:
+            logger.info(f"ATM: Selected {ce.symbol} and {pe.symbol} for {current_spot}")
+            return (ce, pe)
+        else:
+            logger.warning(f"ATM: Could not find CE or PE for strike {selected_strike}")
+            return None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert chain to dictionary for storage"""
@@ -153,8 +216,8 @@ class OptionChain:
             'underlying': self.underlying,
             'expiry': self.expiry,
             'contracts': {
-                f"{strike}_{type}": contract.to_dict()
-                for (strike, type), contract in self.contracts.items()
+                symbol: contract.to_dict()
+                for symbol, contract in self.contracts.items()
             },
             'atm_strike': self.atm_strike,
             'last_updated': self.last_updated
@@ -322,7 +385,9 @@ class AngelOneOptionsBroker:
                     self.option_chains[key] = chain
                     self.chain_last_updated[key] = datetime.now()
                     self._cache_chain(chain)
-                logger.info(f"CHAIN_FETCH: SUCCESS | {underlying} | strikes={len(set(s for s, _ in chain.contracts.keys()))} | cached={should_use_cache}")
+                # Count unique contracts
+                num_contracts = len(chain.contracts)
+                logger.info(f"CHAIN_FETCH: SUCCESS | {underlying} | contracts={num_contracts} | cached={should_use_cache}")
             else:
                 logger.warning(f"CHAIN_FETCH: FAILED | {underlying} {expiry}")
                 rate_limiter.record_call("fetch_chain", False)
@@ -340,20 +405,25 @@ class AngelOneOptionsBroker:
         return None
     
     def _create_mock_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> OptionChain:
-        """Create mock option chain for PAPER mode testing using CE extractor
+        """Create mock option chain for PAPER mode testing using real instrument.json data
+        
+        Strategy: Load all real contracts from instrument.json for current month,
+        then get_atm_contracts() will pick the nearest strike to current LTP.
         
         Args:
             underlying: Stock or index symbol
             expiry: Expiry date YYYY-MM-DD
-            current_price: Current market price to center strikes around (if None, uses configured spot)
+            current_price: Current market price (used by get_atm_contracts for selection)
         """
         chain = OptionChain(underlying, expiry)
         
-        # Use CE extractor to generate realistic contracts
-        # Generate wider range of strikes (31 strikes) to support various alert prices
-        # In real trading, broker APIs return full chains; this simulates that
-        generator = OptionChainGenerator()
-        contracts_data = generator.generate_chain(underlying, expiry, num_strikes=31, center_price=current_price)
+        # Try to load real contracts from instrument.json
+        extractor = InstrumentCEExtractor()
+        contracts_data = extractor.build_real_option_chain(underlying, expiry, center_price=current_price)
+        
+        if not contracts_data:
+            logger.warning(f"CHAIN_MOCK: No contracts found for {underlying} {expiry}")
+            return chain
         
         # Mock spot prices for reference
         spot_prices = {
@@ -382,7 +452,7 @@ class AngelOneOptionsBroker:
         for contract_data in contracts_data:
             contract = OptionContract(
                 underlying=contract_data['underlying'],
-                strike=contract_data['strike'],
+                strike=0,  # Don't need to parse, get_atm_contracts extracts from symbol
                 expiry=contract_data['expiry'],
                 contract_type=contract_data['contract_type'],
                 symbol=contract_data['symbol']
@@ -393,28 +463,25 @@ class AngelOneOptionsBroker:
             if token:
                 contract.token = token
             
-            # Mock market data
-            itm_offset = abs((contract_data['strike'] - spot) / 100)
+            # Mock market data (simplified - not using strike for calcs)
             base_premium = spot * 0.02
-            premium = base_premium / (1 + itm_offset * 0.3)
-            
-            contract.ltp = premium
-            contract.iv = 20 + (itm_offset * 2)
-            contract.delta = 0.5 + ((contract_data['strike'] - spot) / 1000) if contract_data['contract_type'] == 'CE' else 0.5 - ((contract_data['strike'] - spot) / 1000)
-            contract.delta = max(0, min(1, contract.delta))
-            contract.gamma = 0.05 - min(itm_offset * 0.005, 0.04)
-            contract.theta = -0.02 - (itm_offset * 0.005)
+            contract.ltp = base_premium
+            contract.iv = 20
+            contract.delta = 0.5
+            contract.gamma = 0.05
+            contract.theta = -0.02
             contract.vega = 0.1
-            contract.open_interest = 10000 + int(itm_offset ** 2 * 1000)
-            contract.volume = 1000 + int(itm_offset ** 2 * 100)
-            contract.bid = premium * 0.98
-            contract.ask = premium * 1.02
+            contract.open_interest = 10000
+            contract.volume = 1000
+            contract.bid = base_premium * 0.98
+            contract.ask = base_premium * 1.02
             contract.last_updated = datetime.now().isoformat()
             
             chain.add_contract(contract)
         
         chain.atm_strike = spot
         chain.last_updated = datetime.now().isoformat()
+        logger.info(f"CHAIN_MOCK: Created chain for {underlying} with {len(chain.contracts)} contracts")
         return chain
     
     def _cache_chain(self, chain: OptionChain):
@@ -429,16 +496,38 @@ class AngelOneOptionsBroker:
             print(f"⚠️ Failed to cache option chain: {str(e)}")
     
     def get_next_expiry(self, underlying: str) -> str:
-        """Get next available expiry date (weekly preferred)"""
+        """Get current month's expiry (last Tuesday of month)
+        
+        Monthly expiry = last Tuesday of current month.
+        This matches what's available in instrument.json from broker.
+        """
         today = datetime.now().date()
         
-        # Find next Thursday (weekly expiry)
-        days_ahead = 3 - today.weekday()  # 3 = Thursday
-        if days_ahead <= 0:  # Already passed this week
-            days_ahead += 7
+        # Find LAST Tuesday of current month
+        # Start from last day of month and work backwards
+        import calendar
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        last_date = today.replace(day=last_day)
         
-        next_expiry = today + timedelta(days=days_ahead)
-        return next_expiry.strftime("%Y-%m-%d")
+        # Find last Tuesday
+        # Tuesday = 1 in Python's weekday (0=Monday, 1=Tuesday, ... 6=Sunday)
+        days_back = (last_date.weekday() - 1) % 7
+        last_tuesday = last_date - timedelta(days=days_back)
+        
+        # If we've passed this month's expiry, use next month's
+        if today > last_tuesday:
+            # Move to next month
+            if today.month == 12:
+                next_month = today.replace(year=today.year + 1, month=1, day=1)
+            else:
+                next_month = today.replace(month=today.month + 1, day=1)
+            
+            last_day = calendar.monthrange(next_month.year, next_month.month)[1]
+            last_date = next_month.replace(day=last_day)
+            days_back = (last_date.weekday() - 1) % 7  # Tuesday = 1
+            last_tuesday = last_date - timedelta(days=days_back)
+        
+        return last_tuesday.strftime("%Y-%m-%d")
     
     def place_options_order(self,
                            symbol: str,  # BANKNIFTY25XXX1900CE

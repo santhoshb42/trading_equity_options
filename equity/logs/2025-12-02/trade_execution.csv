@@ -220,3 +220,18 @@ timestamp,stage,symbol,action,details
 2025-12-02T19:02:11.224146,CAPITAL_CHECK_PASSED,ASIANPAINT-EQ,BUY,{"available_capital": 20000.0, "available_slots": 10}
 2025-12-02T19:02:11.224414,ORDER_PLACING,ASIANPAINT-EQ,BUY,{"quantity": 3, "price": 2955.0, "order_type": "MARKET"}
 2025-12-02T19:02:11.227382,ORDER_PLACEMENT_FAILED,ASIANPAINT-EQ,BUY,{"reason": "Broker API call failed", "detailed_reason": "Broker API error: Broker API call failed", "rejection_type": "API_ERROR", "quantity": 3, "capital_released": 1806.05}
+2025-12-02T19:45:52.449025,ALERT_RECEIVED,POWERINDIA-EQ,BUY,{"price": 22755.0, "confidence": null, "score": null}
+2025-12-02T19:45:52.450826,VALIDATION_PASSED,POWERINDIA-EQ,BUY,{"price": 22755.0, "confidence": null, "score": null}
+2025-12-02T19:45:52.463556,ANALYTICS_APPROVED,POWERINDIA-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-02T19:45:52.466843,POSITION_SIZE_CALCULATED,POWERINDIA-EQ,BUY,{"quantity": 1, "required_capital": 4598.85, "charges": 47.85}
+2025-12-02T19:45:52.467293,CAPITAL_CHECK_FAILED,POWERINDIA-EQ,BUY,{"required_capital": 4598.85, "reason": "Trade capital exceeds limit (need: 4598.85, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}
+2025-12-02T19:50:12.484119,ALERT_RECEIVED,POWERINDIA-EQ,BUY,{"price": 22755.0, "confidence": null, "score": null}
+2025-12-02T19:50:12.484515,VALIDATION_PASSED,POWERINDIA-EQ,BUY,{"price": 22755.0, "confidence": null, "score": null}
+2025-12-02T19:50:12.485850,ANALYTICS_APPROVED,POWERINDIA-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-02T19:50:12.486291,POSITION_SIZE_CALCULATED,POWERINDIA-EQ,BUY,{"quantity": 1, "required_capital": 4598.85, "charges": 47.85}
+2025-12-02T19:50:12.486446,CAPITAL_CHECK_FAILED,POWERINDIA-EQ,BUY,{"required_capital": 4598.85, "reason": "Trade capital exceeds limit (need: 4598.85, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}
+2025-12-02T19:58:32.172044,ALERT_RECEIVED,POWERINDIA-EQ,BUY,{"price": 22755.0, "confidence": null, "score": null}
+2025-12-02T19:58:32.173105,VALIDATION_PASSED,POWERINDIA-EQ,BUY,{"price": 22755.0, "confidence": null, "score": null}
+2025-12-02T19:58:32.176152,ANALYTICS_APPROVED,POWERINDIA-EQ,BUY,{"tv_score": null, "analytics_signal": "ERROR_FALLBACK"}
+2025-12-02T19:58:32.177868,POSITION_SIZE_CALCULATED,POWERINDIA-EQ,BUY,{"quantity": 1, "required_capital": 4598.85, "charges": 47.85}
+2025-12-02T19:58:32.178209,CAPITAL_CHECK_FAILED,POWERINDIA-EQ,BUY,{"required_capital": 4598.85, "reason": "Trade capital exceeds limit (need: 4598.85, limit: 2000.0)", "available_capital": 20000.0, "available_slots": 10}

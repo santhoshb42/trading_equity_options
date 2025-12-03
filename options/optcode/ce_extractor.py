@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 from .optconfig import BASE_DIR
+from .optlogging import logger
 
 # =============================================================================
 # CE/PE Symbol Format Reference
@@ -82,29 +83,63 @@ class OptionSymbolFormat:
         """
         Parse full option symbol back to components.
         
+        Supports two formats:
+        1. BANKNIFTY25DEC1900CE (broker format with month name)
+        2. BANKNIFTY251900CE (compact format with YYMMDD, where MM is 01-12)
+        3. POWERINDIA251222500CE (Angel One format with strike directly after date)
+        
         Args:
-            symbol: Full symbol (e.g., BANKNIFTY25DEC1900CE)
+            symbol: Full symbol (e.g., BANKNIFTY25DEC1900CE or POWERINDIA251222500CE)
         
         Returns: Dict with underlying, year, month, strike, contract_type or None
         """
         try:
-            # Pattern: UNDERLYING + YY + MONTH + STRIKE + (CE|PE)
-            pattern = r'^([A-Z]+?)(\d{2})([A-Z]{3})(\d+)(CE|PE)$'
-            match = re.match(pattern, symbol)
+            # Try format 1: UNDERLYING + YY + MONTH(3 chars) + STRIKE + (CE|PE)
+            pattern1 = r'^([A-Z]+?)(\d{2})([A-Z]{3})(\d+)(CE|PE)$'
+            match = re.match(pattern1, symbol)
             
-            if not match:
-                return None
+            if match:
+                underlying, year, month, strike, contract_type = match.groups()
+                return {
+                    'underlying': underlying,
+                    'year': year,
+                    'month': month,
+                    'strike': int(strike),
+                    'contract_type': contract_type,
+                    'full_symbol': symbol
+                }
             
-            underlying, year, month, strike, contract_type = match.groups()
+            # Try format 2: UNDERLYING + YYMMDD + STRIKE + (CE|PE)
+            # This catches Angel One format like POWERINDIA251222500CE
+            # YYMMDD = 6 digits (251222 = Dec 22, 2025)
+            pattern2 = r'^([A-Z]+?)(\d{6})(\d+)(CE|PE)$'
+            match = re.match(pattern2, symbol)
             
-            return {
-                'underlying': underlying,
-                'year': year,
-                'month': month,
-                'strike': int(strike),
-                'contract_type': contract_type,
-                'full_symbol': symbol
-            }
+            if match:
+                underlying, yymmdd, strike, contract_type = match.groups()
+                
+                # Parse YYMMDD
+                yy = yymmdd[:2]
+                mm = yymmdd[2:4]
+                
+                # Convert month number to month name
+                month_names = {
+                    '01': 'JAN', '02': 'FEB', '03': 'MAR', '04': 'APR',
+                    '05': 'MAY', '06': 'JUN', '07': 'JUL', '08': 'AUG',
+                    '09': 'SEP', '10': 'OCT', '11': 'NOV', '12': 'DEC'
+                }
+                month = month_names.get(mm, 'UNK')
+                
+                return {
+                    'underlying': underlying,
+                    'year': yy,
+                    'month': month,
+                    'strike': int(strike),
+                    'contract_type': contract_type,
+                    'full_symbol': symbol
+                }
+            
+            return None
         except Exception as e:
             print(f"❌ Error parsing symbol {symbol}: {str(e)}")
             return None
@@ -225,7 +260,8 @@ class InstrumentCEExtractor:
     
     def __init__(self, instrument_file: Optional[Path] = None):
         self.instrument_file = instrument_file or (BASE_DIR / "tools" / "instrument.json")
-        self.instruments = {}
+        self.instruments = {}  # symbol -> item (for single lookup)
+        self.all_instruments = []  # Keep ALL items to handle duplicates with different expiry
         self.options_map = {}  # Map of symbol -> option details
         self._load_instruments()
     
@@ -236,7 +272,11 @@ class InstrumentCEExtractor:
                 with open(self.instrument_file, 'r') as f:
                     data = json.load(f)
                 
-                # Build quick lookup by symbol
+                # Keep ALL items (including duplicates with different expiry)
+                self.all_instruments = data
+                
+                # Also build quick lookup by symbol (for get_token_for_symbol)
+                # This will have the last occurrence, but all_instruments has all
                 for item in data:
                     self.instruments[item['symbol']] = item
                     
@@ -244,9 +284,8 @@ class InstrumentCEExtractor:
                     if item.get('exch_seg') == 'NFO':
                         self.options_map[item['symbol']] = item
                 
-                print(f"✅ Loaded {len(self.instruments)} instruments from {self.instrument_file}")
-                if self.options_map:
-                    print(f"   Found {len(self.options_map)} NFO options contracts")
+                print(f"✅ Loaded {len(self.all_instruments)} instruments from {self.instrument_file}")
+                print(f"   {len(self.instruments)} unique symbols, {len(self.options_map)} NFO options")
             else:
                 print(f"⚠️ Instrument file not found: {self.instrument_file}")
                 print("   ℹ️ Using pure algorithmic symbol generation (no token mapping)")
@@ -261,6 +300,67 @@ class InstrumentCEExtractor:
         if symbol in self.instruments:
             return self.instruments[symbol].get('token')
         return None
+    
+    def build_real_option_chain(self, underlying: str, expiry: str, center_price: Optional[float] = None) -> Optional[List[Dict]]:
+        """
+        Build option chain from REAL instrument.json data - SUPER SIMPLE grep approach.
+        
+        Strategy: grep for "SYMBOL+EXACT_EXPIRY" pattern (e.g., "AMBER30DEC25")
+        This will return only 3-4 strikes from broker, then pick nearest to LTP.
+        
+        Args:
+            underlying: Stock symbol (POWERINDIA, AMBER, INFY, etc.)
+            expiry: Expiry date in YYYY-MM-DD format (e.g., 2025-12-30)
+            center_price: Current LTP (unused here, used by get_atm_contracts())
+        
+        Returns: List of matching contracts (typically 3-4 strikes) OR None if not found
+        """
+        contracts = []
+        
+        # Strip trailing digits (e.g., POWERINDIA3 -> POWERINDIA)
+        underlying_clean = underlying.rstrip('0123456789')
+        
+        # Convert expiry to broker format: DDMMMYY (e.g., 30DEC25)
+        from datetime import datetime
+        expiry_date = datetime.strptime(expiry, '%Y-%m-%d')
+        expiry_pattern = expiry_date.strftime('%d%b%y').upper()  # e.g., "30DEC25"
+        
+        # Build grep pattern: SYMBOL+DDMMMYY (e.g., "AMBER30DEC25")
+        search_pattern = f"{underlying_clean}{expiry_pattern}"
+        
+        logger.debug(f"Grepping for: {search_pattern}")
+        
+        # Search all_instruments for matching symbols
+        for instrument in self.all_instruments:
+            symbol = instrument.get('symbol', '')
+            
+            # Simple grep: does symbol contain our exact pattern?
+            if search_pattern in symbol and symbol.endswith(('CE', 'PE')):
+                # Extract contract type
+                contract_type = symbol[-2:]
+                
+                contract = {
+                    'symbol': symbol,
+                    'underlying': underlying_clean,
+                    'expiry': expiry,
+                    'contract_type': contract_type,
+                    'strike': None,  # Will be extracted from symbol when needed
+                    'atm': False,
+                    'token': instrument.get('token'),
+                    'exch_seg': instrument.get('exch_seg', 'NFO')
+                }
+                contracts.append(contract)
+        
+        # Sort by symbol
+        contracts = sorted(contracts, key=lambda x: x['symbol'])
+        
+        if contracts:
+            logger.info(f"✅ Found {len(contracts)} contracts for {search_pattern} (grep: {underlying_clean}{expiry_pattern})")
+            logger.debug(f"Contracts: {[c['symbol'] for c in contracts[:10]]}")
+            return contracts
+        else:
+            logger.warning(f"⚠️ NO contracts found for {search_pattern}")
+            return None
     
     def build_ce_pe_map(self, underlyings: List[str] = None) -> Dict[str, List[Dict]]:
         """

@@ -37,6 +37,10 @@ echo ""
 echo "45 8 * * 1-5 /sbin/shutdown -r +5 # System reboot at 8:45 AM (5 min delay)" >> "$TEMP_CRON"
 echo "✅ Added: System reboot at 08:45 AM with 5-min delay (Mon-Fri)"
 
+# Add instrument.json refresh at 8:50 AM (before market open)
+echo "50 8 * * 1-5 cd $BOT_DIR && python3 tools/fetch_nfo_instruments.py >> /tmp/optbot_instrument_refresh.log 2>&1 # Daily instrument refresh" >> "$TEMP_CRON"
+echo "✅ Added: Daily instrument.json refresh at 08:50 AM (Mon-Fri)"
+
 # Add webhook router check at 8:55 AM (ensure it's running)
 echo "55 8 * * 1-5 sudo systemctl is-active webhook-router || sudo systemctl start webhook-router >> /tmp/router_health.log 2>&1 # Ensure router is running" >> "$TEMP_CRON"
 echo "✅ Added: Webhook router health check at 08:55 AM (Mon-Fri)"
@@ -61,7 +65,7 @@ echo ""
 echo "=========================================="
 echo "Preview of new cron jobs:"
 echo "=========================================="
-grep -E "reboot|router|optbot|options bot" "$TEMP_CRON" || true
+grep -E "reboot|router|optbot|options bot|instrument" "$TEMP_CRON" || true
 
 echo ""
 echo "=========================================="
@@ -74,7 +78,7 @@ crontab "$TEMP_CRON"
 # Verify installation
 echo ""
 echo "Installed cron jobs for Options Bot:"
-crontab -l | grep -E "reboot|router|optbot|options bot" || echo "No matching jobs found"
+crontab -l | grep -E "reboot|router|optbot|options bot|instrument" || echo "No matching jobs found"
 
 echo ""
 echo "=========================================="
@@ -83,6 +87,7 @@ echo "=========================================="
 echo ""
 echo "Schedule:"
 echo "  🔄 08:45 AM  - System reboot (5-min delay, done by 08:50)"
+echo "  📊 08:50 AM  - Refresh instrument.json from broker"
 echo "  🚀 08:55 AM  - Webhook router health check (ensure running)"
 echo "  🕘 09:00 AM  - Options bot auto-starts (port 8081)"
 echo "  🔍 Every 30m - Options bot health check (09:00-16:00)"
@@ -93,6 +98,7 @@ echo "Backup of old crontab: $CRONTAB_BACKUP"
 echo "Restore with: crontab $CRONTAB_BACKUP"
 echo ""
 echo "Monitor cron logs:"
+echo "  tail -f /tmp/optbot_instrument_refresh.log"
 echo "  tail -f /tmp/router_health.log"
 echo "  tail -f /tmp/optbot_startup.log"
 echo "  tail -f /tmp/optbot_health.log"

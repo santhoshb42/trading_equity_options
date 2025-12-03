@@ -13,6 +13,7 @@ import sys
 import signal
 import threading
 import time
+import atexit
 from pathlib import Path
 
 # Load environment variables from .env file
@@ -166,16 +167,17 @@ class EquityTradingBot:
                 log_event("STARTUP", f"  Storage: {storage_dir}")
                 log_event("STARTUP", "  Status: ML system ready for real-time learning")
                 
-                # Start EOD scheduler as background daemon thread
-                # Scheduler will call bot API at 3:30 PM IST daily for learning updates
-                webhook_port = WebhookConfig.WEBHOOK_PORT
-                
-                self.eod_scheduler = start_eod_scheduler_daemon(
-                    bot_url=f"http://localhost:{webhook_port}",
-                    trigger_time="15:30"  # 3:30 PM IST
-                )
-                log_system_state("EOD_SCHEDULER", "STARTED")
-                log_event("STARTUP", f"EOD scheduler daemon started (daily update at 3:30 PM IST on port {webhook_port})")
+                # EOD scheduler disabled - was causing KILL signal during startup
+                # TODO: Re-enable after server is fully started, or move to cron
+                # webhook_port = WebhookConfig.WEBHOOK_PORT
+                # 
+                # self.eod_scheduler = start_eod_scheduler_daemon(
+                #     bot_url=f"http://localhost:{webhook_port}",
+                #     trigger_time="15:30"  # 3:30 PM IST
+                # )
+                # log_system_state("EOD_SCHEDULER", "STARTED")
+                # log_event("STARTUP", f"EOD scheduler daemon started (daily update at 3:30 PM IST on port {webhook_port})")
+                log_event("STARTUP", "EOD scheduler disabled (use cron at 3:15 PM instead)")
                 
             except Exception as e:
                 log_error("LEARNING_INIT", "Failed to initialize learning engine", e,
@@ -260,6 +262,41 @@ if __name__ == "__main__":
     if script_dir.name != "equity":
         print("Error: This script must be run from the equity directory")
         sys.exit(1)
+    
+    # Prevent multiple instances using PID file
+    pid_file = script_dir / "equity_bot.pid"
+    
+    if pid_file.exists():
+        try:
+            with open(pid_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            
+            # Check if process is actually running
+            try:
+                os.kill(old_pid, 0)  # Signal 0 just checks if process exists
+                print(f"❌ ERROR: Equity bot already running (PID {old_pid})")
+                print(f"   If bot is not running, delete: {pid_file}")
+                sys.exit(1)
+            except OSError:
+                # Process doesn't exist, stale PID file
+                print(f"⚠️  Removing stale PID file (process {old_pid} not found)")
+                pid_file.unlink()
+        except Exception as e:
+            print(f"⚠️  Error checking PID file: {e}")
+            pid_file.unlink()
+    
+    # Write our PID
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
+    
+    # Cleanup PID file on exit
+    def cleanup_pid():
+        if pid_file.exists():
+            pid_file.unlink()
+    
+    atexit.register(cleanup_pid)
+    
+    print(f"✅ Started equity bot (PID {os.getpid()})")
     
     # Run the bot
     exit_code = main()
