@@ -281,32 +281,52 @@ class EnsembleSignalModel:
             return self._baseline_scoring(features)
     
     def _baseline_scoring(self, features: Dict[str, float]) -> Tuple[float, Dict[str, Any]]:
-        """Fallback scoring when models not trained"""
-        score = 0.0
+        """
+        Fallback scoring when models not trained
         
-        # Momentum bonus
+        CRITICAL: Default to ACCEPT (0.65+) unless strong negative signals
+        This prevents rejecting good new symbols due to lack of data
+        """
+        # Start optimistic - assume signal is good unless proven bad
+        score = 0.65  # Above threshold by default
+        
+        # PENALTIES (reduce score for negative signals)
+        
+        # Strong negative momentum penalty
         momentum = features.get('momentum_3', 0.0)
-        score += min(abs(momentum) * 100, 20) / 100  # 0-0.2
+        if momentum < -0.02:  # -2% or worse
+            score -= 0.15
+        
+        # Very low alert confidence penalty
+        alert_conf = features.get('alert_confidence', 0.5)
+        if alert_conf < 0.3:
+            score -= 0.10
+        
+        # BONUSES (increase score for positive signals)
+        
+        # Strong positive momentum
+        if momentum > 0.01:  # +1% or better
+            score += 0.05
         
         # Volume confirmation
         vol_trend = features.get('volume_trend', 1.0)
-        if vol_trend > 1.1:
-            score += 0.2
+        if vol_trend > 1.3:  # 30%+ volume increase
+            score += 0.05
         
-        # RSI extreme
+        # RSI extreme (oversold = buying opportunity)
         if features.get('rsi_extreme', 0.0) > 0:
-            score += 0.2
+            score += 0.05
         
-        # Alert confidence
-        score += features.get('alert_confidence', 0.5) * 0.3
+        # High alert confidence
+        if alert_conf > 0.7:
+            score += 0.05
         
-        # Market hours bonus
-        if features.get('is_market_open', 0.0) > 0:
-            score += 0.1
+        final_score = max(0.0, min(1.0, score))
         
-        return min(score, 1.0), {
-            'method': 'baseline',
-            'final_score': min(score, 1.0)
+        return final_score, {
+            'method': 'baseline_optimistic',
+            'final_score': final_score,
+            'note': 'Defaults to ACCEPT unless negative signals present'
         }
     
     def _calculate_model_agreement(self, rf: float, gb: float, svm: float) -> float:
@@ -377,18 +397,27 @@ class MLSignalFilter:
         """
         Validate signal using ML ensemble
         
+        PHILOSOPHY: 
+        - If model is trained and has data → use ML prediction
+        - If no data/untrained → DEFAULT TO ACCEPT (learn from new trades)
+        - Only reject if ML has strong evidence of poor quality
+        
         Returns:
             - is_valid: True if signal passes ML filters
             - confidence: ML model confidence score (0.0-1.0)
             - details: Scoring breakdown
         """
         if not HAS_SKLEARN or not self.model:
-            return True, 0.5, {'status': 'sklearn_not_available'}
+            return True, 0.65, {'status': 'sklearn_not_available', 'default': 'accept'}
         
         # Extract features
         alert_confidence = alert_data.get('confidence', 0.5)
         rsi = alert_data.get('technical', {}).get('rsi', 50.0)
         trend = alert_data.get('trend', 'neutral')
+        
+        # Check if we have historical data for this symbol
+        has_history = (symbol in self.extractor.price_history and 
+                      len(self.extractor.price_history[symbol]) >= 5)
         
         self.extractor.add_data_point(symbol, entry_price, 
                                      alert_data.get('volume', 1000),
@@ -399,8 +428,15 @@ class MLSignalFilter:
         # Get ML prediction
         ml_score, details = self.model.predict_signal_quality(features)
         
-        # Additional filtering logic
-        is_valid = ml_score >= self.min_score_threshold
+        # Enhanced validation logic
+        if not has_history and not self.model.is_trained:
+            # NEW SYMBOL + UNTRAINED MODEL → Accept and learn
+            is_valid = True
+            ml_score = 0.65  # Override to passing score
+            details['override_reason'] = 'new_symbol_learning_mode'
+        else:
+            # Have data or trained model → trust ML score
+            is_valid = ml_score >= self.min_score_threshold
         
         # Track statistics
         self.model_stats['total_signals'] += 1

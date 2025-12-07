@@ -1,2 +1,0 @@
-timestamp,error_type,error_code,endpoint,message,context,recovery_attempted,recovery_success
-2025-11-27T00:00:05.454176,SESSION_EXPIRED,AG8001,rmsLimit,Invalid Token,{"session_age_minutes": 14.762433666666668, "note": "Angel One has strict rate limits (1 login/sec). If getting AG8001 repeatedly, we're likely rate-limited for the day."},False,False

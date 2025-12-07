@@ -81,12 +81,38 @@ def fetch_from_angelone():
         # We need to use searchScrip for individual symbols or get from broker's instrument master
         print("📥 Fetching NFO instruments from broker...")
         
-        # List of F&O underlyings to fetch
+        # Complete NSE F&O Universe - ALL approved underlyings
         underlyings = [
-            'POWERINDIA', 'AMBER',  # Priority: today's alert symbols
-            'BANKNIFTY', 'NIFTY', 'FINNIFTY',  # Indices
-            'TCS', 'INFY', 'RELIANCE', 'TECHM',  # Key stocks
-            'BSOFT', 'GRANULES', 'INDUSINDBK', 'MPHASIS', 'OFSS', 'ASIANPAINT'  # Other F&O
+            # Indices (3)
+            'BANKNIFTY', 'NIFTY', 'FINNIFTY',
+            # Banks & Financials (15)
+            'AUBANK', 'AXISBANK', 'BANKBARODA', 'CITI', 'HDFCBANK', 'ICICIBANK', 'INDUSINDBK', 'IDFCBANK', 'KOTAK', 'RBLBANK', 'SBICARD', 'SBILIFE', 'SBIN', 'YESBANK', 'FEDERALBNK',
+            # IT (8)
+            'INFY', 'TCS', 'TECHM', 'WIPRO', 'HCL', 'LTIM', 'KPITTECH', 'MFSL',
+            # Energy & Utilities (8)
+            'RELIANCE', 'TATASTEEL', 'TATAPOWER', 'NTPC', 'GAIL', 'BPCL', 'COALINDIA', 'POWERGRID',
+            # Consumption (10)
+            'ASIANPAINT', 'BRITANNIA', 'COLPAL', 'DABUR', 'HINDUSTAN', 'INDIGO', 'ITC', 'MARUTI', 'NESTLEIND', 'UNILEVER',
+            # Pharma (8)
+            'APOLLOHOSP', 'AUROPHARMA', 'BIOCON', 'CIPLA', 'DRREDDY', 'GLDRX', 'LUPIN', 'SUNPHARMA',
+            # Infra & Realty (10)
+            'ADANIGREEN', 'ADANIPORTS', 'ADANITRANS', 'ADANIPOWER', 'BHARTIARTL', 'GMRINFRA', 'JSWSTEEL', 'LTTS', 'OBEROIRLTY', 'SUNTV',
+            # Chemicals & Materials (6)
+            'AMBUJACEM', 'BOSCHLTD', 'HCLTECH', 'HINDALCO', 'HINDCOPPER', 'NMDC',
+            # Auto (6)
+            'BAJAJ', 'BAJAJFINSV', 'BAJAJHLDNG', 'EICHERMOT', 'HEROMOTOCO', 'TVS',
+            # Industrial (8)
+            'ABB', 'CUMMINSIND', 'KPILTECH', 'LAXMIMACH', 'NATIONALUM', 'PAGEIND', 'PIIND', 'SIEMENS',
+            # Services (4)
+            'IRFC', 'IRCTC', 'MOENERGY', 'NAUKRI',
+            # Diversified (8)
+            'BRENT', 'COTTON', 'CRUDEOIL', 'GOLDGULD', 'SILVER', 'JSWENERGY', 'MRF', 'SYNGENE',
+            # Additional Core (8)
+            'AMBER', 'BSOFT', 'CAMS', 'GRANULES', 'INDIGO', 'KALYANKJIL', 'MPHASIS', 'OFSS',
+            # Additional Approved F&O (12)
+            'CENTRALBK', 'CRISIL', 'DEEPAKINDS', 'EXIDEIND', 'FSL', 'GLENMARK', 'GRASIM', 'INOXWIND', 'KPILTECH', 'LICHSGFIN', 'MCLRENSP', 'MOTILALOSWL',
+            # Options Market Makers (5)
+            'NATCOPHARM', 'NUVOCO', 'PETRONET', 'RBLBANK', 'SYNGENE'
         ]
         
         instruments = []

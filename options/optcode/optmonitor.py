@@ -56,7 +56,14 @@ class OptionPosition:
             'vega': 0.1
         }
         self.current_iv = 20.0
+        self.entry_iv = None  # IV at entry (for IV crush detection)
         self.last_updated = entry_time
+        
+        # Market data tracking for liquidity
+        self.bid_price = entry_premium
+        self.ask_price = entry_premium
+        self.volume = 0
+        self.open_interest = 0
         
         # Exit tracking
         self.exit_premium = None
@@ -390,6 +397,158 @@ class OptionPositionMonitor:
         fake_move_detector = get_fake_move_detector()
         return fake_move_detector.get_statistics()
     
+    def refresh_position_ltps(self) -> Dict[str, Any]:
+        """
+        Refresh LTP and Greeks for all open positions from broker.
+        Fetches real market data including Greeks, IV, bid-ask, volume, OI.
+        
+        Returns:
+            Dictionary with refresh statistics
+        """
+        refresh_stats = {
+            'positions_checked': len(self.positions),
+            'ltps_updated': 0,
+            'greeks_updated': 0,
+            'failed_fetches': 0,
+            'errors': []
+        }
+        
+        if not self.broker:
+            logger.warning("REFRESH_LTP: No broker available")
+            return refresh_stats
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # STEP 1: Fetch current market data (LTP, OHLC, volume)
+                market_data = self.broker.get_market_data(symbol, exchange="NFO")
+                
+                if not market_data or market_data.get('ltp', 0) <= 0:
+                    refresh_stats['failed_fetches'] += 1
+                    logger.warning(f"REFRESH_LTP: Failed to fetch market data for {symbol}")
+                    continue
+                
+                current_ltp = market_data['ltp']
+                
+                # STEP 2: Fetch real Greeks and IV from option chain
+                # Use fallback defaults
+                real_greeks = {
+                    'delta': 0.5,
+                    'gamma': 0.05,
+                    'theta': -0.02,
+                    'vega': 0.1
+                }
+                real_iv = 20.0
+                
+                try:
+                    # CRITICAL: Use the last TUESDAY of the month (NSE monthly expiry)
+                    from datetime import datetime as dt, timedelta
+                    exp_date = dt.strptime(position.expiry, "%Y-%m-%d")
+                    
+                    # Find last TUESDAY of the same month
+                    # Start from last day of month and walk backwards
+                    if exp_date.month == 12:
+                        last_day = dt(exp_date.year, 12, 31)
+                    else:
+                        last_day = dt(exp_date.year, exp_date.month + 1, 1) - timedelta(days=1)
+                    
+                    # Walk backwards to find Tuesday (weekday=1)
+                    while last_day.weekday() != 1:
+                        last_day -= timedelta(days=1)
+                    
+                    monthly_expiry_iso = last_day.strftime("%Y-%m-%d")
+                    # Also convert to broker format for matching (DDMMMYYYY, e.g., 30DEC2025)
+                    monthly_expiry_broker = last_day.strftime("%d%b%Y").upper()
+                    
+                    # If exact monthly expiry not available, find closest available expiry
+                    # (instruments.json might not have the exact last Tuesday)
+                    from .ce_extractor import InstrumentCEExtractor
+                    ce_extractor = InstrumentCEExtractor()
+                    available_expiries = set(item['expiry'] for item in ce_extractor.all_instruments 
+                                            if item['name'] == position.underlying)
+                    
+                    # Check if monthly expiry exists (in broker format: DDMMMYYYY)
+                    if available_expiries and monthly_expiry_broker not in available_expiries:
+                        # Find closest available expiry to our monthly expiry
+                        # Convert broker format back to ISO for comparison
+                        def broker_to_iso(broker_date_str):
+                            """Convert DDMMMYYYY to YYYY-MM-DD"""
+                            from datetime import datetime as dt_convert
+                            return dt_convert.strptime(broker_date_str, "%d%b%Y").strftime("%Y-%m-%d")
+                        
+                        closest = min(available_expiries, 
+                                    key=lambda x: abs((dt.strptime(broker_to_iso(x), "%Y-%m-%d") - dt.strptime(monthly_expiry_iso, "%Y-%m-%d")).days))
+                        logger.debug(f"REFRESH_LTP: Monthly expiry {monthly_expiry_broker} not available, using {closest}")
+                        monthly_expiry_iso = broker_to_iso(closest)
+                    
+                    # Fetch option chain using the corrected monthly expiry (ISO format)
+                    option_chain = self.broker.fetch_option_chain(
+                        position.underlying,
+                        monthly_expiry_iso
+                    )
+                    
+                    if option_chain:
+                        # Find contract matching this position's strike and type
+                        contract = option_chain.get_contract(position.strike, position.contract_type)
+                        
+                        logger.debug(f"REFRESH_LTP: Chain search | {symbol} | looking for strike={position.strike} ({type(position.strike).__name__}), type={position.contract_type} | chain has {len(option_chain.contracts)} contracts")
+                        
+                        if contract:
+                            # Use REAL Greeks from broker
+                            real_greeks = {
+                                'delta': contract.delta,
+                                'gamma': contract.gamma,
+                                'theta': contract.theta,
+                                'vega': contract.vega
+                            }
+                            real_iv = contract.iv
+                            
+                            # Track market liquidity data
+                            position.bid_price = contract.bid if contract.bid > 0 else current_ltp
+                            position.ask_price = contract.ask if contract.ask > 0 else current_ltp
+                            position.volume = contract.volume
+                            position.open_interest = contract.open_interest
+                            
+                            # Track entry IV for IV crush detection
+                            if position.entry_iv is None:
+                                position.entry_iv = real_iv
+                            
+                            logger.debug(f"REFRESH_LTP: GREEKS | {symbol} | delta={contract.delta:.3f} | gamma={contract.gamma:.4f} | theta={contract.theta:.4f} | vega={contract.vega:.3f} | iv={real_iv:.2f}")
+                            refresh_stats['greeks_updated'] += 1
+                        else:
+                            logger.debug(f"REFRESH_LTP: Contract not found | {symbol} | strike={position.strike} | type={position.contract_type} (using fallback Greeks)")
+                    else:
+                        logger.debug(f"REFRESH_LTP: Option chain not available | {symbol} | expiry={monthly_expiry} (using fallback Greeks)")
+                        
+                except Exception as chain_error:
+                    logger.debug(f"REFRESH_LTP: Could not fetch real Greeks | {symbol} | {str(chain_error)} (using fallback)")
+                    # Continue with fallback greeks
+                
+                # STEP 3: Update position with market data
+                self.update_position_market_data(
+                    symbol=symbol,
+                    current_premium=current_ltp,
+                    greeks=real_greeks,
+                    iv=real_iv
+                )
+                
+                refresh_stats['ltps_updated'] += 1
+                
+                logger.debug(f"REFRESH_LTP: {symbol} | ltp=₹{current_ltp:.2f} | pnl=₹{position.unrealized_pnl:.2f} | delta={real_greeks['delta']:.3f} | oi={position.open_interest}")
+                
+            except Exception as e:
+                refresh_stats['failed_fetches'] += 1
+                refresh_stats['errors'].append(f"{symbol}: {str(e)}")
+                logger.error(f"REFRESH_LTP: ERROR | {symbol} | {str(e)}")
+        
+        # Save updated positions
+        if refresh_stats['ltps_updated'] > 0:
+            self._save_positions()
+        
+        logger.info(f"REFRESH_LTP: Complete | updated={refresh_stats['ltps_updated']}/{refresh_stats['positions_checked']} | greeks={refresh_stats['greeks_updated']} | failed={refresh_stats['failed_fetches']}")
+        return refresh_stats
+    
     def perform_periodic_monitoring(self) -> Dict[str, Any]:
         """
         Perform all monitoring checks with rate limit handling.
@@ -405,6 +564,7 @@ class OptionPositionMonitor:
             'closed_by_expiry': [],
             'closed_by_profit': [],
             'closed_by_stoploss': [],
+            'ltps_refreshed': 0,
             'rate_limiter_stats': {},
             'error': None
         }
@@ -413,6 +573,12 @@ class OptionPositionMonitor:
             # Process any rate-limited requests that were queued for retry
             if self.broker:
                 self.broker.process_pending_rate_limited_requests()
+            
+            # CRITICAL: Refresh LTP for all positions before checking exits
+            if len(self.positions) > 0:
+                refresh_stats = self.refresh_position_ltps()
+                monitoring_result['ltps_refreshed'] = refresh_stats['ltps_updated']
+                logger.info(f"MONITORING: Refreshed LTP for {refresh_stats['ltps_updated']}/{len(self.positions)} positions")
             
             # Check and close positions by expiry
             expired = self.check_expiry_close()

@@ -536,9 +536,9 @@ app.config['SECRET_KEY'] = WebhookConfig.WEBHOOK_SECRET or 'default-secret-key'
 # Note: validate_alert and process_symbol are now imported from webhook_parser.py
 
 
-def calculate_position_size(symbol: str, price: float) -> Tuple[int, float, float]:
+def calculate_position_size(symbol: str, price: float, ml_score: float = 0.65, alert: Dict = None) -> Tuple[int, float, float]:
     """
-    Calculate position size based on capital and margin requirements
+    Calculate position size based on capital and margin requirements with dynamic capital allocation
     
     With Week 3 P3.3 AdvancedPositionSizer:
     - Kelly Criterion for optimal sizing
@@ -547,24 +547,81 @@ def calculate_position_size(symbol: str, price: float) -> Tuple[int, float, floa
     - Win rate multiplier
     - Capital availability factor
     
+    ENHANCED with Dynamic Capital Allocation:
+    - ML confidence-based sizing (higher ML score → more capital)
+    - Win/loss streak adjustments
+    - Market regime considerations
+    - Volatility adjustments
+    
     Args:
         symbol: Stock symbol
         price: Current price
+        ml_score: ML confidence score (0-1) for dynamic capital allocation
+        alert: Full alert data (optional, for additional context)
         
     Returns:
         Tuple of (quantity, margin_required, total_charges)
     """
+    # ===== DYNAMIC CAPITAL ALLOCATION: Adjust capital based on ML confidence =====
+    try:
+        from .dynamic_capital_allocator import calculate_dynamic_capital
+        from .regime_filter import get_regime_info
+        
+        # Get recent trade outcomes for streak detection
+        recent_trades = []
+        try:
+            from .pnl_analytics import get_pnl_analytics
+            pnl = get_pnl_analytics()
+            recent_trades_data = pnl.get_recent_trades(limit=5)
+            recent_trades = [t.get('ml_outcome', 'UNKNOWN') for t in recent_trades_data if t.get('ml_outcome')]
+        except Exception:
+            pass
+        
+        # Get market regime
+        market_regime = 'BULL'
+        try:
+            regime_info = get_regime_info()
+            market_regime = regime_info.get('regime', 'BULL')
+        except Exception:
+            pass
+        
+        # Determine volatility (could be enhanced with actual volatility calculation)
+        volatility = 'NORMAL'  # Default, can be enhanced later
+        
+        # Calculate dynamic capital allocation
+        allocated_capital, breakdown = calculate_dynamic_capital(
+            symbol=symbol,
+            ml_score=ml_score,
+            price=price,
+            recent_trades=recent_trades,
+            market_regime=market_regime,
+            volatility=volatility
+        )
+        
+        log_event("DYNAMIC_CAPITAL_ALLOCATED", f"💰 Dynamic capital for {symbol}",
+                 symbol=symbol,
+                 ml_score=round(ml_score, 3),
+                 base_capital=CapitalConfig.CAP_PER_TRADE,
+                 allocated_capital=round(allocated_capital, 2),
+                 multiplier=round(breakdown['final_multiplier'], 2),
+                 regime=market_regime,
+                 recent_trades_count=len(recent_trades))
+        
+    except Exception as e:
+        log_event("DYNAMIC_CAPITAL_ERROR", f"Failed to calculate dynamic capital for {symbol}: {e}")
+        allocated_capital = CapitalConfig.CAP_PER_TRADE
+    
     # ===== WEEK 3 P3.3: Use Advanced Position Sizer if available =====
     if trading_state.position_sizer:
         try:
             # Set capital for sizing
             trading_state.position_sizer.set_capital(CapitalConfig.MAX_CAPITAL)
             
-            # Get advanced position size
+            # Get advanced position size using DYNAMIC capital
             sizing_result = trading_state.position_sizer.calculate_position_size(
                 symbol=symbol,
                 current_price=price,
-                quantity_base=CapitalConfig.calculate_quantity_for_capital(price, CapitalConfig.CAP_PER_TRADE)
+                quantity_base=CapitalConfig.calculate_quantity_for_capital(price, allocated_capital)
             )
             
             quantity = sizing_result.get('quantity', 0)
@@ -579,6 +636,7 @@ def calculate_position_size(symbol: str, price: float) -> Tuple[int, float, floa
             log_event("ADVANCED_POSITION_SIZE", f"Advanced sizing for {symbol}",
                      base_quantity=details.get('quantity_base'),
                      adjusted_quantity=quantity,
+                     dynamic_capital=round(allocated_capital, 2),
                      kelly_ratio=details.get('kelly_ratio'),
                      volatility_multiplier=details.get('volatility_multiplier'),
                      correlation_multiplier=details.get('correlation_multiplier'),
@@ -592,11 +650,11 @@ def calculate_position_size(symbol: str, price: float) -> Tuple[int, float, floa
             
         except Exception as e:
             log_event("ADVANCED_SIZING_ERROR", f"Failed to use advanced sizer for {symbol}: {e}")
-            # Fall back to standard sizing
+            # Fall back to standard sizing with dynamic capital
     
-    # ===== FALLBACK: Standard Position Sizing =====
-    # Use configured capital per trade
-    available_capital = CapitalConfig.CAP_PER_TRADE
+    # ===== FALLBACK: Standard Position Sizing with Dynamic Capital =====
+    # Use dynamically allocated capital
+    available_capital = allocated_capital
     
     # Calculate quantity considering margin (20% for MIS)
     quantity = CapitalConfig.calculate_quantity_for_capital(price, available_capital)
@@ -614,8 +672,14 @@ def calculate_position_size(symbol: str, price: float) -> Tuple[int, float, floa
     total_capital_needed = margin_required + total_charges
     
     log_event("POSITION_SIZE", f"Calculated position for {symbol}",
-             price=price, quantity=quantity, margin=margin_required, 
-             charges=total_charges, total_needed=total_capital_needed)
+             symbol=symbol,
+             price=price, 
+             quantity=quantity, 
+             ml_score=round(ml_score, 3),
+             dynamic_capital=round(available_capital, 2),
+             margin=margin_required, 
+             charges=total_charges, 
+             total_needed=total_capital_needed)
     
     return quantity, margin_required + total_charges, total_charges
 
@@ -1023,6 +1087,74 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
                 "regime": regime_info
             }
         
+        # ===== ML SIGNAL FILTERING: Validate signal quality before execution =====
+        try:
+            from .ml_signal_filter import validate_with_ml
+            is_ml_valid, ml_score, ml_details = validate_with_ml(symbol, alert, price)
+            
+            log_event("ML_VALIDATION", f"{symbol} ML score: {ml_score:.3f} (threshold: 0.60)",
+                     symbol=symbol, ml_score=ml_score, is_valid=is_ml_valid)
+            
+            if not is_ml_valid:
+                log_event("ML_REJECTED", f"Trade blocked for {symbol} - ML score too low: {ml_score:.3f}",
+                         symbol=symbol, ml_score=ml_score, threshold=0.60)
+                log_trade_execution("ML_REJECTED", symbol, "BUY",
+                                  ml_score=ml_score,
+                                  threshold=0.60,
+                                  reason=f"ML quality score below threshold: {ml_score:.3f} < 0.60")
+                
+                # Log as missed trade for paper trading
+                try:
+                    if MISSED_TRADE_LOGGER_AVAILABLE:
+                        log_missed_alert(
+                            symbol=symbol,
+                            action="BUY",
+                            entry_price=price,
+                            quantity=1,
+                            reason=f"ML_SCORE_LOW:{ml_score:.3f}",
+                            alert_data=alert
+                        )
+                        log_event("MISSED_ALERT_LOGGED", 
+                                 f"Logged missed BUY alert for {symbol} (ML rejected)",
+                                 symbol=symbol, entry_price=price, ml_score=ml_score)
+                except Exception as e:
+                    log_event("MISSED_ALERT_LOG_ERROR", f"Failed to log missed alert: {e}")
+                
+                # Log missed opportunity for PNL analysis
+                try:
+                    from .pnl_analytics import get_pnl_analytics
+                    pnl_analytics = get_pnl_analytics()
+                    pnl_analytics.log_missed_signal(
+                        symbol=symbol,
+                        action="BUY",
+                        signal_price=price,
+                        reason=f"ML score too low: {ml_score:.3f}",
+                        alert_data=alert
+                    )
+                except Exception:
+                    pass
+                
+                return {
+                    "status": "rejected",
+                    "reason": f"ML quality score below threshold: {ml_score:.3f} < 0.60",
+                    "symbol": symbol,
+                    "ml_score": ml_score,
+                    "ml_details": ml_details
+                }
+            
+            # ML approved - log success
+            log_event("ML_APPROVED", f"Trade approved for {symbol} - ML score: {ml_score:.3f}",
+                     symbol=symbol, ml_score=ml_score)
+            log_trade_execution("ML_APPROVED", symbol, "BUY",
+                              ml_score=ml_score,
+                              threshold=0.60)
+            
+        except Exception as ml_error:
+            # If ML fails, log error but don't block trade
+            log_event("ML_ERROR", f"ML validation failed for {symbol}, allowing trade: {ml_error}",
+                     symbol=symbol, error=str(ml_error))
+            ml_score = 0.5  # Neutral score on error
+        
         # Enhanced Analytics Validation - validate TradingView signal with AngelOne technical analysis
         analytics_validation = validate_buy_signal_with_analytics(alert)
         if not analytics_validation["approved"]:
@@ -1085,13 +1217,14 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
                           tv_score=alert.get('score'),
                           analytics_signal=analytics_validation.get('signal'))
         
-        # Calculate position size
-        quantity, required_capital, charges = calculate_position_size(symbol, price)
+        # Calculate position size with dynamic capital allocation based on ML score
+        quantity, required_capital, charges = calculate_position_size(symbol, price, ml_score=ml_score, alert=alert)
         
         log_trade_execution("POSITION_SIZE_CALCULATED", symbol, "BUY",
                           quantity=quantity,
                           required_capital=required_capital,
-                          charges=charges)
+                          charges=charges,
+                          ml_score=round(ml_score, 3))
         
         if quantity <= 0:
             log_trade_execution("EXECUTION_FAILED", symbol, "BUY",
@@ -1437,13 +1570,14 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
                  difference=price - filled_price)
         
         # Calculate stop loss price and ROUND to valid NSE tick size (multiple of ₹0.05)
-        # 🔴 FIX: Must round SL price to avoid "not a multiple of .05 paise" errors from broker
+        # 🔴 FIX: Must round SL price to avoid tick size errors from broker
+        # AngelOne STOPLOSS orders require 0.10 (10 paise) tick size, NOT 0.05!
         # Use the FILLED price, not alert price, for SL calculation
         sl_price_raw = filled_price * (1 - TradingConfig.DEFAULT_SL_PERCENTAGE / 100)
-        # Round down to nearest 0.05 paise (conservative - below raw calculated price)
-        # Convert to paise, round down to nearest 5, convert back
+        # Round down to nearest 0.10 paise (10 paise intervals for SL orders)
+        # Convert to paise, round down to nearest 10, convert back
         sl_paise = int(sl_price_raw * 100)  # Convert to paise
-        sl_paise_rounded = (sl_paise // 5) * 5  # Round DOWN to nearest 5 paise
+        sl_paise_rounded = (sl_paise // 10) * 10  # Round DOWN to nearest 10 paise (0.10 tick)
         sl_price = sl_paise_rounded / 100.0  # Convert back to rupees
         
         log_event("SL_PRICE_ROUNDING", f"Rounded SL price for {symbol}",
@@ -2329,10 +2463,11 @@ def process_learning_queue():
                     # 🎯 PAPER_TRADE MARKER - ML Training Marker #2
                     # This explicit marker helps ML learn from unlimited paper trades
                     entry_price = alert.get('price', 0)
-                    # 🔴 FIX: Round SL price to valid NSE tick size (multiple of ₹0.05)
+                    # 🔴 FIX: Round SL price to valid STOPLOSS order tick size (multiple of ₹0.10)
+                    # AngelOne requires 10 paise intervals for SL orders, not 5 paise
                     sl_price_raw = entry_price * (1 - TradingConfig.DEFAULT_SL_PERCENTAGE / 100)
                     sl_paise = int(sl_price_raw * 100)
-                    sl_paise_rounded = (sl_paise // 5) * 5  # Round DOWN to nearest 5 paise
+                    sl_paise_rounded = (sl_paise // 10) * 10  # Round DOWN to nearest 10 paise
                     sl_price = sl_paise_rounded / 100.0
                     
                     log_event("PAPER_TRADE", 
@@ -2527,7 +2662,7 @@ def square_off_all_positions():
                     closed_count += 1
                 else:
                     log_error("SQUARE_OFF_ORDER_FAILED", f"No order ID returned for {symbol}", 
-                             symbol=symbol, close_order=str(close_order))
+                             context={'symbol': symbol, 'close_order': str(close_order)})
                 
                 # Calculate P&L
                 if action == 'BUY':
@@ -2589,7 +2724,8 @@ def square_off_all_positions():
                 
             except Exception as e:
                 error_msg = f"Failed to close {position.get('symbol')}: {str(e)}"
-                log_error("SQUARE_OFF_ERROR", error_msg, e)
+                log_error("SQUARE_OFF_ERROR", error_msg, exception=e,
+                         context={'symbol': position.get('symbol')})
                 errors.append(error_msg)
         
         log_event("SQUARE_OFF_COMPLETE", 
@@ -4108,15 +4244,18 @@ if __name__ == "__main__":
     else:
         print(f"❌ Alert validation failed: {error}")
     
-    # Test position size calculation
+    # Test position size calculation with different ML scores
     symbol = "RELIANCE-EQ"
     price = 2450.50
-    quantity, capital, charges = calculate_position_size(symbol, price)
     
-    print(f"✅ Position size calculation:")
+    print(f"✅ Position size calculation with dynamic capital allocation:")
     print(f"   Symbol: {symbol}")
     print(f"   Price: ₹{price}")
-    print(f"   Quantity: {quantity}")
+    
+    # Test different ML scores
+    for ml_score in [0.90, 0.75, 0.65, 0.58]:
+        quantity, capital, charges = calculate_position_size(symbol, price, ml_score=ml_score)
+        print(f"   ML={ml_score:.2f}: Qty={quantity}, Capital=₹{capital:.0f}")
     print(f"   Capital required: ₹{capital}")
     print(f"   Charges: ₹{charges}")
     

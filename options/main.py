@@ -33,6 +33,7 @@ from optcode.angelone_options import get_options_broker
 from optcode.optmonitor import get_option_monitor
 from optcode.optapi import get_options_api_server
 from optcode.optlogging import logger, log_event, log_state, print_session_summary
+from optcode.instrument_manager import get_instrument_manager
 
 # =============================================================================
 # Options Trading Bot
@@ -48,6 +49,7 @@ class OptionsTradingBot:
         self.monitor = None
         self.api_server = None
         self.position_monitor_thread = None
+        self.instrument_manager = None
     
     def initialize(self):
         """Initialize options bot components"""
@@ -91,6 +93,17 @@ class OptionsTradingBot:
         print(f"✅ Monitor ready - loaded {len(self.monitor.positions)} existing positions")
         logger.info(f"BOT_INIT: MONITOR_READY | positions_loaded={len(self.monitor.positions)}")
         
+        # Initialize instrument manager
+        print(f"\n📦 Initializing instrument manager...")
+        logger.debug(f"BOT_INIT: INSTRUMENT_MGR_INIT")
+        self.instrument_manager = get_instrument_manager()
+        stats = self.instrument_manager.get_stats()
+        print(f"✅ Instrument manager ready")
+        print(f"   - Total instruments: {stats['total_instruments']}")
+        print(f"   - F&O stocks: {stats['fo_stocks']}")
+        print(f"   - Last updated: {stats['last_updated'] or 'Loading...'}")
+        logger.info(f"BOT_INIT: INSTRUMENT_MGR_READY | total={stats['total_instruments']} | fo_stocks={stats['fo_stocks']}")
+        
         # Get API server
         self.api_server = get_options_api_server()
         logger.debug(f"BOT_INIT: API_SERVER_READY | port={WebhookConfig.PORT}")
@@ -133,6 +146,12 @@ class OptionsTradingBot:
             
             while self.running:
                 try:
+                    # CRITICAL: Refresh LTP for all positions from broker
+                    if len(self.monitor.positions) > 0:
+                        refresh_stats = self.monitor.refresh_position_ltps()
+                        if refresh_stats['ltps_updated'] > 0:
+                            logger.debug(f"POSITION_MONITOR: LTP_REFRESH | updated={refresh_stats['ltps_updated']}/{len(self.monitor.positions)}")
+                    
                     # Check and close expired positions
                     expired = self.monitor.check_expiry_close()
                     if expired:
@@ -212,49 +231,24 @@ class OptionsTradingBot:
     
     def _start_instrument_refresh(self):
         """Start daily instrument refresh thread"""
-        def refresh_instruments_loop():
-            from datetime import time as dt_time, timedelta
-            import schedule
-            
-            # Schedule refresh at 9:15 AM every day
-            schedule.every().day.at("09:15").do(self._refresh_instruments_now)
-            
-            logger.info("INSTRUMENT_REFRESH: SCHEDULED | time=09:15 AM")
-            
-            while self.running:
-                schedule.run_pending()
-                time.sleep(60)  # Check every minute
-        
-        instrument_thread = threading.Thread(
-            target=refresh_instruments_loop,
-            daemon=True,
-            name="OptionsInstrumentRefresh"
-        )
-        instrument_thread.start()
-        print("   ✅ Instrument refresh thread started (daily at 09:15 AM)")
+        if self.instrument_manager:
+            # The scheduler is already running in the background
+            logger.info("INSTRUMENT_REFRESH: SCHEDULER_ACTIVATED | managed by InstrumentManager")
+            print("   ✅ Instrument refresh scheduler activated (daily at 09:00 AM)")
+        else:
+            logger.warning("INSTRUMENT_REFRESH: MANAGER_NOT_READY")
     
     def _refresh_instruments_now(self):
-        """Refresh instruments from broker immediately"""
+        """Refresh instruments from broker immediately (legacy, not used)"""
         try:
-            logger.info("INSTRUMENT_REFRESH: START")
-            
-            from tools.fetch_nfo_instruments import fetch_nfo_instruments
-            
-            instruments = fetch_nfo_instruments()
-            
-            if instruments:
-                import json
-                from pathlib import Path
-                
-                output_file = Path(__file__).parent / "tools" / "instrument.json"
-                with open(output_file, 'w') as f:
-                    json.dump(instruments, f, indent=2)
-                
-                logger.info(f"INSTRUMENT_REFRESH: SUCCESS | instruments={len(instruments)}")
-                print(f"   ✅ Instrument refresh: {len(instruments)} contracts updated")
-            else:
-                logger.warning("INSTRUMENT_REFRESH: FAILED | no instruments returned")
-                
+            if self.instrument_manager:
+                logger.info("INSTRUMENT_REFRESH: MANUAL_START")
+                if self.instrument_manager.download_instruments():
+                    stats = self.instrument_manager.get_stats()
+                    print(f"   ✅ Instrument refresh: {stats['total_instruments']} contracts updated")
+                    logger.info(f"INSTRUMENT_REFRESH: SUCCESS | total={stats['total_instruments']}")
+                else:
+                    logger.warning("INSTRUMENT_REFRESH: FAILED")
         except Exception as e:
             logger.error(f"INSTRUMENT_REFRESH: ERROR | {str(e)}")
     
@@ -290,6 +284,10 @@ class OptionsTradingBot:
         if self.api_server:
             self.api_server.stop()
             logger.debug(f"BOT_STOP: API_SERVER_STOPPED")
+        
+        if self.instrument_manager:
+            self.instrument_manager.stop_scheduler()
+            logger.debug(f"BOT_STOP: INSTRUMENT_MGR_STOPPED")
         
         if self.monitor:
             summary = self.monitor.get_position_summary()

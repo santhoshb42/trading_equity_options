@@ -11,8 +11,10 @@ build/
 venv/
 *.egg
 
-# Logs
+# Logs - ignore all logs directories
 logs/
+equity/logs/
+options/logs/
 *.log
 *.log.*
 

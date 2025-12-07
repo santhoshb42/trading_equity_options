@@ -325,7 +325,7 @@ class InstrumentCEExtractor:
         expiry_date = datetime.strptime(expiry, '%Y-%m-%d')
         expiry_pattern = expiry_date.strftime('%d%b%y').upper()  # e.g., "30DEC25"
         
-        # Build grep pattern: SYMBOL+DDMMMYY (e.g., "AMBER30DEC25")
+        # Build grep pattern: SYMBOL+DDMMMYY (e.g., "TECHM30DEC251600CE")
         search_pattern = f"{underlying_clean}{expiry_pattern}"
         
         logger.debug(f"Grepping for: {search_pattern}")

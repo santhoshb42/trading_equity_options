@@ -22,6 +22,12 @@ from .config import TradingConfig, CapitalConfig, BASE_DIR
 from .angelone import AngelOneBroker, Order, OrderStatus
 from .logging import log_event, log_trade
 from .priority_queue import PriorityAPIQueue, APIPriority
+from .adaptive_exit_engine import (
+    get_adaptive_exit_engine, 
+    record_exit_for_ml,
+    ExitReason,
+    PositionStage
+)
 
 # =============================================================================
 # LTP BUCKET MANAGER - Reduce API calls via rotation
@@ -342,6 +348,9 @@ class PositionMonitor:
         # Priority 3 (Rare): Paper trading (1 call/min)
         self.api_priority = APIPriorityManager()
         
+        # 🆕 ADAPTIVE EXIT ENGINE: Smart multi-stage exit management
+        self.adaptive_exit = get_adaptive_exit_engine()
+        
         # 🆕 BUCKETED LTP CHECKING: Divide positions into buckets
         # Reduces API calls: 20 positions → 5 calls/second instead of 20/second
         bucket_size = getattr(TradingConfig, 'LTP_BUCKET_SIZE', 5)
@@ -362,6 +371,20 @@ class PositionMonitor:
         
         # Initialize buckets after loading positions
         self._initialize_ltp_buckets()
+        
+        # 🆕 Start adaptive exit tracking for all existing positions
+        for symbol, position in self.positions.items():
+            if position.action == "BUY" and position.status == "OPEN":
+                try:
+                    self.adaptive_exit.start_tracking(
+                        symbol=symbol,
+                        entry_price=position.entry_price,
+                        entry_time=position.created_at
+                    )
+                    log_event("ADAPTIVE_TRACKING_STARTED", f"Started adaptive tracking for existing position {symbol}",
+                             symbol=symbol, entry_price=position.entry_price)
+                except Exception as e:
+                    log_event("ERROR", f"Failed to start adaptive tracking for {symbol}: {e}")
         
         # Mark startup as complete - now SL placement is allowed
         self.startup_complete = True
@@ -386,6 +409,30 @@ class PositionMonitor:
                 
         except Exception as e:
             log_event("ERROR", f"Failed to save positions: {str(e)}")
+    
+    def _round_price_to_nearest_5paise(self, price: float) -> float:
+        """
+        🔧 CRITICAL FIX: Round price to nearest 5 paise (NSE tick size)
+        Uses intelligent rounding: if remainder <= 2 paise, round down, else round up
+        This is used for SL price calculations throughout the monitor
+        
+        Args:
+            price: Price in rupees (e.g., 2110.495)
+            
+        Returns:
+            Price rounded to nearest 5 paise (e.g., 2110.50)
+        """
+        paise = int(price * 100)  # Convert to paise: 2110.495 → 211049
+        remainder = paise % 5  # Get remainder: 211049 % 5 = 4
+        
+        if remainder <= 2:
+            # Round down: remainder 0, 1, 2 → subtract remainder
+            rounded_paise = paise - remainder  # 211049 - 4 = 211045
+        else:
+            # Round up: remainder 3, 4 → add (5 - remainder)
+            rounded_paise = paise + (5 - remainder)  # Example: 211049 + (5 - 4) = 211050
+        
+        return rounded_paise / 100.0  # Convert back to rupees
     
     def load_positions(self):
         """
@@ -621,9 +668,7 @@ class PositionMonitor:
                     
                     # Calculate SL price with proper NSE tick rounding (multiple of 0.05 paise)
                     sl_price_raw = avg_price * (1 - sl_percentage / 100)
-                    sl_paise = int(sl_price_raw * 100)  # Convert to paise
-                    sl_paise_rounded = (sl_paise // 5) * 5  # Round DOWN to nearest 5 paise
-                    sl_price = sl_paise_rounded / 100.0  # Convert back to rupees
+                    sl_price = self._round_price_to_nearest_5paise(sl_price_raw)  # 🔧 FIXED: Use intelligent rounding
                     
                     target_price = round(avg_price * (1 + target_percentage / 100), 2)
                     
@@ -737,6 +782,16 @@ class PositionMonitor:
                 # 🆕 REBUILD BUCKETS when new position added
                 self._initialize_ltp_buckets()
                 
+                # 🆕 START ADAPTIVE EXIT TRACKING
+                if position.action == "BUY":
+                    self.adaptive_exit.start_tracking(
+                        symbol=symbol,
+                        entry_price=position.entry_price,
+                        entry_time=position.created_at
+                    )
+                    log_event("ADAPTIVE_TRACKING_STARTED", f"Started adaptive exit tracking for {symbol}",
+                             symbol=symbol, entry_price=position.entry_price)
+                
                 log_event("POSITION_ADDED", f"Added position for monitoring",
                          symbol=symbol, action=position.action, quantity=position.quantity)
                 
@@ -763,7 +818,7 @@ class PositionMonitor:
     
     def remove_position(self, symbol: str) -> bool:
         """
-        Remove position from monitoring
+        Remove position from monitoring and cancel its SL order on broker
         
         Args:
             symbol: Symbol to remove
@@ -775,6 +830,20 @@ class PositionMonitor:
             with self.lock:
                 if symbol in self.positions:
                     position = self.positions.pop(symbol)
+                    
+                    # 🔧 CRITICAL FIX: Cancel SL order on broker before removing position
+                    if position.sl_order_id:
+                        try:
+                            success = self.broker.cancel_order(position.sl_order_id)
+                            if success:
+                                log_event("SL_CANCELLED", f"Cancelled SL order on broker for {symbol}",
+                                         symbol=symbol, sl_order_id=position.sl_order_id)
+                            else:
+                                log_event("SL_CANCEL_FAILED", f"Failed to cancel SL order on broker for {symbol}",
+                                         symbol=symbol, sl_order_id=position.sl_order_id)
+                        except Exception as cancel_error:
+                            log_event("SL_CANCEL_ERROR", f"Error cancelling SL order for {symbol}: {str(cancel_error)}",
+                                     symbol=symbol, sl_order_id=position.sl_order_id, error=str(cancel_error))
                     
                     # 🔧 CRITICAL FIX #5: Save to file WITH ERROR HANDLING
                     try:
@@ -847,9 +916,7 @@ class PositionMonitor:
                 new_sl_raw = position.entry_price - (atr * 2.0)
                 
                 # Round to nearest 0.05 paise (NSE tick size)
-                new_sl_paise = int(new_sl_raw * 100)
-                new_sl_paise_rounded = (new_sl_paise // 5) * 5
-                new_sl = new_sl_paise_rounded / 100.0
+                new_sl = self._round_price_to_nearest_5paise(new_sl_raw)  # 🔧 FIXED: Use intelligent rounding
                 
                 # Only update if new SL is higher than current (protects profits)
                 if new_sl > position.sl_price:
@@ -1077,8 +1144,9 @@ class PositionMonitor:
                 paise = int(price_decimal * 100)
                 
                 # Nearest: round to nearest 5 paise
+                # remainder is an integer (0-4), so use integer comparison
                 remainder = paise % 5
-                if remainder < 2.5:
+                if remainder <= 2:
                     nearest_paise = paise - remainder  # Round down
                 else:
                     nearest_paise = paise + (5 - remainder)  # Round up
@@ -1550,34 +1618,43 @@ class PositionMonitor:
     
     def _update_trailing_sl(self, position: Position, current_ltp: float):
         """
-        Update trailing stop-loss using stepped approach (every 0.5% profit milestone)
+        Update trailing stop-loss with ADAPTIVE BUFFER
         
-        🔴 PERMANENT STRATEGY - DO NOT MODIFY
-        Decision: Dec 1, 2025 - This is the official SL strategy for all positions
+        🆕 NEW STRATEGY - ADAPTIVE EXIT ENGINE (Dec 5, 2025)
         
-        STRATEGY DETAILS:
-        - Initial SL: entry_price * (1 - 0.5%)  [0.5% below entry]
-        - Trailing SL activates IMMEDIATELY for ALL positions (from entry)
-        - Every 0.5% LTP gain → Move SL up by 0.5%
-        - At LTP = entry_price: SL → entry_price - 0.5% (initial, protect entry)
-        - At LTP +0.5%: SL → entry_price (break-even)
-        - At LTP +1.0%: SL → entry_price + 0.5%
-        - At LTP +1.5%: SL → entry_price + 1.0%
-        - At LTP +2.0%: SL → entry_price + 1.5%
-        - Pattern: SL always stays ~0.5% below LTP (continuous profit protection)
+        ADAPTIVE TRAILING LOGIC:
+        - Base SL calculation: Same as before (every 0.5% profit milestone)
+        - NEW: Adaptive buffer based on profit level and time
+        - Small profits (0-1%): Tight buffer (0.2-0.3%)
+        - Medium profits (1-2%): Medium buffer (0.5%)
+        - Large profits (2%+): Loose buffer (0.8-1.0%) ⭐
+        - Extended time (30+ min): Buffer tightens over time
         
-        KEY POINTS (DO NOT CHANGE):
-        - SL protection starts from ENTRY PRICE, not after profit
-        - Every position gets trailing SL immediately
-        - Step size is FIXED at 0.5% profit
-        - SL increase per step is FIXED at 0.5%
-        - Buffer distance from LTP is FIXED at ~0.5%
+        PROTECTS BIG WINNERS FROM PREMATURE EXITS:
+        - At +2.5% profit: Gets 1.0% pullback tolerance
+        - At +1.5% profit: Gets 0.8% pullback tolerance
+        - At +0.5% profit: Gets only 0.3% tolerance
         
         Args:
             position: Position object
             current_ltp: Current LTP
         """
         try:
+            # Update adaptive exit engine with new price
+            self.adaptive_exit.update_price(position.symbol, current_ltp, datetime.now())
+            
+            # Check for early exit triggers
+            early_exit_check = self.adaptive_exit.check_early_exit(position.symbol, current_ltp)
+            if early_exit_check:
+                exit_reason, details = early_exit_check
+                log_event("EARLY_EXIT_TRIGGERED", f"Early exit triggered for {position.symbol}",
+                         symbol=position.symbol,
+                         exit_reason=exit_reason,
+                         details=details)
+                # Mark for exit (will be handled by check_exits)
+                position._early_exit_reason = exit_reason
+                position._early_exit_details = details
+            
             # DEBUG: Log all trailing SL checks (temporary, for verification)
             profit_percentage = ((current_ltp - position.entry_price) / position.entry_price) * 100
             log_event("TRAIL_DEBUG", f"Trailing SL check for {position.symbol}",
@@ -1603,12 +1680,11 @@ class PositionMonitor:
                 position.trail_activated = True
                 position.last_executed_step = -1  # Start at step -1 (before step 0)
                 position.last_trail_update = datetime.now().isoformat()
-                log_event("TRAIL_ACTIVATED", f"Trailing SL activated for {position.symbol}",
+                log_event("TRAIL_ACTIVATED", f"Trailing SL activated for {position.symbol} - will step up 0.5% for every 0.5% LTP gain",
                          symbol=position.symbol,
                          profit_pct=profit_percentage,
                          current_ltp=current_ltp,
-                         entry_price=position.entry_price,
-                         message="✅ Trailing SL activated - will step up 0.5% for every 0.5% LTP gain")
+                         entry_price=position.entry_price)
             
             # Check if we've crossed into a new 0.5% step
             if current_step <= getattr(position, 'last_executed_step', -1):
@@ -1627,9 +1703,30 @@ class PositionMonitor:
             new_trail_sl_raw = position.entry_price * (1 + sl_profit_percentage / 100.0)
             
             # Round to nearest 0.05 paise (NSE tick size)
-            new_trail_sl_paise = int(new_trail_sl_raw * 100)
-            new_trail_sl_paise_rounded = (new_trail_sl_paise // 5) * 5
-            new_trail_sl = new_trail_sl_paise_rounded / 100.0
+            base_trail_sl = self._round_price_to_nearest_5paise(new_trail_sl_raw)  # 🔧 FIXED: Use intelligent rounding
+            
+            # 🆕 APPLY ADAPTIVE BUFFER (Phase 3 & 4)
+            elapsed_minutes = (datetime.now() - position.created_at).total_seconds() / 60
+            adaptive_sl, exit_type = self.adaptive_exit.calculate_adaptive_sl(
+                position.symbol,
+                current_ltp,
+                base_trail_sl
+            )
+            
+            # Use adaptive SL (with buffer) as the new trailing SL
+            new_trail_sl = self._round_price_to_nearest_5paise(adaptive_sl)
+            
+            # 🔍 DEBUG: Log adaptive vs base SL comparison
+            sl_improvement = new_trail_sl - base_trail_sl
+            log_event("ADAPTIVE_SL_CALCULATED", f"Adaptive SL vs Base SL for {position.symbol}",
+                     symbol=position.symbol,
+                     base_trail_sl=base_trail_sl,
+                     adaptive_sl=adaptive_sl,
+                     final_trail_sl=new_trail_sl,
+                     improvement=round(sl_improvement, 2),
+                     improvement_pct=round((sl_improvement / base_trail_sl) * 100, 3) if base_trail_sl > 0 else 0,
+                     exit_type=exit_type,
+                     current_ltp=current_ltp)
             
             # Only update if new SL is better (higher) than current SL
             current_sl = getattr(position, 'trail_sl_price', position.sl_price)
@@ -1656,15 +1753,16 @@ class PositionMonitor:
             position.last_executed_step = current_step
             position.last_trail_update = datetime.now().isoformat()
             
-            log_event("TRAIL_SL_STEPPED", f"Trailing SL stepped up for {position.symbol}",
+            log_event("TRAIL_SL_STEPPED", f"✅ Trailing SL stepped up for {position.symbol}",
                      symbol=position.symbol,
                      step=current_step,
                      profit_pct=profit_percentage,
                      old_sl=old_sl,
                      new_sl=new_trail_sl,
+                     sl_increase=round(new_trail_sl - old_sl, 2),
                      current_ltp=current_ltp,
-                     distance_from_ltp_pct=((current_ltp - new_trail_sl) / current_ltp) * 100,
-                     message="🔄 Stepped SL: +0.5% for every +0.5% LTP gain")
+                     distance_from_ltp_pct=round(((current_ltp - new_trail_sl) / current_ltp) * 100, 2),
+                     action="Will modify broker order")
             
             # 🔧 CRITICAL FIX: Check if SL order exists before trying to modify
             # If SL order is missing, log warning and don't update local state
@@ -1837,12 +1935,30 @@ class PositionMonitor:
             exit_reason = None
             decision_details = {}
             
-            if position.should_exit_sl():
-                exit_reason = "SL_HIT"
+            # Check 1: Early exit triggers (from adaptive engine)
+            if hasattr(position, '_early_exit_reason'):
+                exit_reason = position._early_exit_reason
+                decision_details = position._early_exit_details
+                log_event("EARLY_EXIT_DETECTED", f"Early exit condition met for {symbol}",
+                         symbol=symbol,
+                         exit_reason=exit_reason,
+                         details=decision_details)
+            
+            # Check 2: Standard SL hit
+            elif position.should_exit_sl():
+                # Determine if this is standard SL or adaptive trailing SL
+                effective_sl = position.get_effective_sl()
+                if hasattr(position, 'trail_activated') and position.trail_activated:
+                    # This is a trailing SL hit - check if it was adaptive
+                    exit_reason = ExitReason.TRAILING_SL  # Will be refined below
+                else:
+                    exit_reason = ExitReason.SL_HIT
+                
                 decision_details = {
                     "sl_price": position.sl_price,
                     "current_ltp": ltp,
-                    "trail_sl_price": getattr(position, 'trail_sl_price', position.sl_price)
+                    "trail_sl_price": getattr(position, 'trail_sl_price', position.sl_price),
+                    "effective_sl": effective_sl
                 }
                 
                 # 🎯 SL_HIT MARKER - ML Training Marker #3
@@ -2053,6 +2169,48 @@ class PositionMonitor:
             position.realized_pnl = realized_pnl
             position.status = "CLOSED"
             
+            # 🆕 GENERATE EXIT SUMMARY AND RECORD FOR ML
+            try:
+                exit_reason = getattr(position, '_early_exit_reason', ExitReason.SL_HIT if realized_pnl < 0 else ExitReason.TARGET_HIT)
+                
+                log_event("ML_TRAINING_DATA_GENERATION", f"🤖 Generating ML training data for {symbol}",
+                         symbol=symbol,
+                         exit_reason=exit_reason,
+                         exit_price=exit_price,
+                         entry_price=position.entry_price,
+                         realized_pnl=realized_pnl,
+                         profit_pct=round(((exit_price - position.entry_price) / position.entry_price) * 100, 2))
+                
+                exit_summary = self.adaptive_exit.get_exit_summary(
+                    symbol=symbol,
+                    exit_reason=exit_reason,
+                    exit_price=exit_price
+                )
+                
+                # Add actual PnL to summary
+                exit_summary['realized_pnl'] = realized_pnl
+                exit_summary['quantity'] = position.quantity
+                
+                # Record for ML learning
+                record_exit_for_ml(exit_summary)
+                
+                log_event("ML_TRAINING_DATA_READY", f"📈 ML training data generated for {symbol}",
+                         symbol=symbol,
+                         ml_outcome=exit_summary['ml_outcome'],
+                         profit_pct=exit_summary.get('profit_pct'),
+                         hold_duration=exit_summary.get('hold_duration_minutes'),
+                         max_profit_pct=exit_summary.get('max_profit_pct'),
+                         gave_back_pct=exit_summary.get('gave_back_pct'),
+                         exit_reason_category=exit_summary.get('exit_reason_category'),
+                         action="Data recorded for ML model training")
+                
+                # Stop adaptive tracking
+                self.adaptive_exit.stop_tracking(symbol)
+                
+            except Exception as ml_error:
+                log_event("ML_RECORDING_ERROR", f"Failed to record exit for ML: {ml_error}",
+                         symbol=symbol)
+            
             # Update PNL tracking for completed trade
             try:
                 # Get trade_id from position data if available
@@ -2081,7 +2239,7 @@ class PositionMonitor:
             except Exception as e:
                 log_event("ERROR", f"Failed to update PNL tracking for {symbol}: {e}")
             
-            # Log trade closure
+            # Log trade closure with comprehensive exit details
             log_trade(
                 action="SELL",
                 symbol=symbol,
@@ -2091,7 +2249,14 @@ class PositionMonitor:
                 capital_used=position.capital_used,
                 sl_price=position.get_effective_sl(),
                 pnl=realized_pnl,
-                status="CLOSED"
+                status="CLOSED",
+                # Add exit summary fields if available
+                exit_reason=exit_summary.get('exit_reason', 'UNKNOWN') if 'exit_summary' in locals() else 'UNKNOWN',
+                exit_reason_category=exit_summary.get('exit_reason_category', '') if 'exit_summary' in locals() else '',
+                hold_duration_minutes=exit_summary.get('hold_duration_minutes', 0) if 'exit_summary' in locals() else 0,
+                max_profit_pct=exit_summary.get('max_profit_pct', 0) if 'exit_summary' in locals() else 0,
+                gave_back_pct=exit_summary.get('gave_back_pct', 0) if 'exit_summary' in locals() else 0,
+                ml_outcome=exit_summary.get('ml_outcome', '') if 'exit_summary' in locals() else ''
             )
             
             log_event("POSITION_CLOSED", f"Position closed for {symbol}",

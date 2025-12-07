@@ -911,5 +911,203 @@
     "duration": 5.327803,
     "exit_reason": "EXPIRY",
     "closed_at": "2025-12-03T17:56:25.633769"
+  },
+  {
+    "symbol": "BANKNIFTY07DEC2547000CE",
+    "entry_premium": 100.0,
+    "exit_premium": 25.0,
+    "quantity": 1,
+    "pnl": -75.0,
+    "pnl_percent": -75.0,
+    "duration": 0.017613,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T12:07:18.291498"
+  },
+  {
+    "symbol": "BANKNIFTY11DEC2547000CE",
+    "entry_premium": 100.0,
+    "exit_premium": 25.0,
+    "quantity": 1,
+    "pnl": -75.0,
+    "pnl_percent": -75.0,
+    "duration": 0.011614,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T12:07:36.802061"
+  },
+  {
+    "symbol": "BANKNIFTY25DEC47000CE",
+    "entry_premium": 100.0,
+    "exit_premium": 50.0,
+    "quantity": 1,
+    "pnl": -50.0,
+    "pnl_percent": -50.0,
+    "duration": 0.011961,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T12:08:34.569763"
+  },
+  {
+    "symbol": "TECHM30DEC251600CE",
+    "entry_premium": 50.0,
+    "exit_premium": 19.45,
+    "quantity": 1,
+    "pnl": -30.55,
+    "pnl_percent": -61.1,
+    "duration": 538.840453,
+    "exit_reason": "LOSS",
+    "closed_at": "2025-12-07T12:26:06.311114"
+  },
+  {
+    "symbol": "TECHM30DEC251600CE",
+    "entry_premium": 50.0,
+    "exit_premium": 19.45,
+    "quantity": 1,
+    "pnl": -30.55,
+    "pnl_percent": -61.1,
+    "duration": 556.199182,
+    "exit_reason": "LOSS",
+    "closed_at": "2025-12-07T12:35:44.101625"
+  },
+  {
+    "symbol": "TECHM30DEC251300CE",
+    "entry_premium": 50.0,
+    "exit_premium": 217.0,
+    "quantity": 1,
+    "pnl": 167.0,
+    "pnl_percent": 334.0,
+    "duration": 13467.033933,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:23:48.624409"
+  },
+  {
+    "symbol": "INFY30DEC251620CE",
+    "entry_premium": 32.33,
+    "exit_premium": 28.2,
+    "quantity": 1,
+    "pnl": -4.129999999999999,
+    "pnl_percent": -12.774512836374882,
+    "duration": 2.41208,
+    "exit_reason": "LOSS",
+    "closed_at": "2025-12-07T16:32:30.155747"
+  },
+  {
+    "symbol": "TECHM30DEC251880CE",
+    "entry_premium": 57.01,
+    "exit_premium": 69.3,
+    "quantity": 1,
+    "pnl": 12.29,
+    "pnl_percent": 21.557621469917557,
+    "duration": 10.971175,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:33:01.583951"
+  },
+  {
+    "symbol": "TECHM30DEC251580CE",
+    "entry_premium": 31.416,
+    "exit_premium": 27.8,
+    "quantity": 1,
+    "pnl": -3.6159999999999997,
+    "pnl_percent": -11.510058568882096,
+    "duration": 4.992708,
+    "exit_reason": "LOSS",
+    "closed_at": "2025-12-07T16:44:42.731241"
+  },
+  {
+    "symbol": "INDIGO30DEC255350CE",
+    "entry_premium": 107.41,
+    "exit_premium": 162.85,
+    "quantity": 1,
+    "pnl": 55.44,
+    "pnl_percent": 51.615305837445305,
+    "duration": 9.313313,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T16:48:35.864312"
+  },
+  {
+    "symbol": "INDUSTOWER30DEC25415CE",
+    "entry_premium": 8.315,
+    "exit_premium": 13.45,
+    "quantity": 1,
+    "pnl": 5.135,
+    "pnl_percent": 61.755862898376435,
+    "duration": 9.624392,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T16:49:17.144584"
+  },
+  {
+    "symbol": "LTF30DEC25310CE",
+    "entry_premium": 6.192,
+    "exit_premium": 8.25,
+    "quantity": 1,
+    "pnl": 2.058,
+    "pnl_percent": 33.23643410852713,
+    "duration": 3.305964,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:49:38.592459"
+  },
+  {
+    "symbol": "INDIGO30DEC255350CE",
+    "entry_premium": 107.41,
+    "exit_premium": 162.85,
+    "quantity": 1,
+    "pnl": 55.44,
+    "pnl_percent": 51.615305837445305,
+    "duration": 7.62517,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T16:50:39.414234"
+  },
+  {
+    "symbol": "INDUSTOWER30DEC25415CE",
+    "entry_premium": 8.315,
+    "exit_premium": 13.45,
+    "quantity": 1,
+    "pnl": 5.135,
+    "pnl_percent": 61.755862898376435,
+    "duration": 7.725686,
+    "exit_reason": "FALSE_MOVE",
+    "closed_at": "2025-12-07T16:50:40.250928"
+  },
+  {
+    "symbol": "LTF30DEC25310CE",
+    "entry_premium": 6.192,
+    "exit_premium": 8.25,
+    "quantity": 1,
+    "pnl": 2.058,
+    "pnl_percent": 33.23643410852713,
+    "duration": 7.687551,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:50:40.953900"
+  },
+  {
+    "symbol": "INDIGO30DEC255400CE",
+    "entry_premium": 107.41,
+    "exit_premium": 134.85,
+    "quantity": 1,
+    "pnl": 27.439999999999998,
+    "pnl_percent": 25.546969555907268,
+    "duration": 18.50629,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:52:54.194756"
+  },
+  {
+    "symbol": "INDUSTOWER30DEC25420CE",
+    "entry_premium": 8.315,
+    "exit_premium": 11.0,
+    "quantity": 1,
+    "pnl": 2.6850000000000005,
+    "pnl_percent": 32.291040288635,
+    "duration": 10.172385,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:52:54.205156"
+  },
+  {
+    "symbol": "LTF30DEC25310CE",
+    "entry_premium": 6.192,
+    "exit_premium": 8.25,
+    "quantity": 1,
+    "pnl": 2.058,
+    "pnl_percent": 33.23643410852713,
+    "duration": 9.305339,
+    "exit_reason": "PROFIT",
+    "closed_at": "2025-12-07T16:52:54.218649"
   }
 ]

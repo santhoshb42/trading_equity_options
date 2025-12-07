@@ -13,8 +13,8 @@ import requests
 from datetime import datetime
 from pathlib import Path
 
-# Setup logging
-log_dir = Path("/root/santhosh/trading/logs")
+# Setup logging - use shared logs directory
+log_dir = Path("/root/santhosh/trading/equity/logs")  # Store router logs with equity
 log_dir.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(

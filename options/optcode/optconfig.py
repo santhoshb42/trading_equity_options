@@ -117,8 +117,40 @@ class OptionsTradingConfig:
     # Trading mode - PAPER ONLY for now
     TRADING_MODE = "PAPER"  # PAPER mode only - no LIVE trading
     
-    # Underlying indexes for options trading
+    # Underlying indexes for options trading (legacy - keep for backward compatibility)
     UNDERLYING_INDEXES = ["BANKNIFTY", "NIFTY", "FINNIFTY"]  # Preferred underlying indexes
+    
+    # F&O Universe - Complete NSE stock list for deriving strikes
+    FO_UNIVERSE = [
+        "PEL", "AARTIIND", "ABB", "ABCAPITAL", "ABFRL", "ACC", "ADANIENSOL", "ADANIENT", 
+        "ADANIGREEN", "ADANIPORTS", "ALKEM", "AMBER", "AMBUJACEM", "ANGELONE", "APLAPOLLO", 
+        "APOLLOHOSP", "ASHOKLEY", "ASIANPAINT", "ASTRAL", "ATGL", "AUBANK", "AUROPHARMA", 
+        "AXISBANK", "BAJAJFINSV", "BAJAJ_AUTO", "BAJFINANCE", "BALKRISIND", "BANKBARODA", 
+        "BDL", "BEL", "BHARATFORG", "BHARTIARTL", "BHEL", "BIOCON", "BLUESTARCO", "BOSCHLTD", 
+        "BPCL", "BRITANNIA", "BSE", "BSOFT", "CAMS", "CANBK", "CESC", "CGPOWER", "CHAMBLFERT", 
+        "CHOLAFIN", "CIPLA", "COALINDIA", "COFORGE", "COLPAL", "CONCOR", "CROMPTON", 
+        "CUMMINSIND", "CYIENT", "DABUR", "DALBHARAT", "DELHIVERY", "DIVISLAB", "DIXON", "DLF", 
+        "DRREDDY", "EICHERMOT", "ESCORTS", "ETERNAL", "EXIDEIND", "FORTIS", "GAIL", "GLENMARK", 
+        "GMRAIRPORT", "GODREJCP", "GODREJPROP", "GRANULES", "GRASIM", "HAL", "HAVELLS", 
+        "HCLTECH", "HDFCAMC", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HFCL", "HINDALCO", 
+        "HINDCOPPER", "HINDPETRO", "HINDUNILVR", "HINDZINC", "HUDCO", "ICICIBANK", "ICICIGI", 
+        "ICICIPRULI", "IDEA", "IDFCFIRSTB", "IEX", "IGL", "IIFL", "INDHOTEL", "INDIANB", 
+        "INDIGO", "INDUSINDBK", "INDUSTOWER", "INFY", "INOXWIND", "IOC", "IRB", "IRCTC", 
+        "IREDA", "IRFC", "ITC", "JINDALSTEL", "JIOFIN", "JSWENERGY", "JSWSTEEL", "JUBLFOOD", 
+        "KALYANKJIL", "KAYNES", "KFINTECH", "KOTAKBANK", "KPITTECH", "LAURUSLABS", "LICHSGFIN", 
+        "LODHA", "LT", "LTF", "LTIM", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", "MANKIND", "MARICO", 
+        "MARUTI", "MAXHEALTH", "MAZDOCK", "MCX", "MFSL", "MGL", "MOTHERSON", "MPHASIS", 
+        "MUTHOOTFIN", "NATIONALUM", "NAUKRI", "NBCC", "NCC", "NESTLEIND", "NHPC", "NMDC", "NTPC", 
+        "NUVAMA", "NYKAA", "OBEROIRLTY", "OFSS", "ONGC", "PAGEIND", "PAYTM", "PERSISTENT", 
+        "PETRONET", "PFC", "PGEL", "PHOENIXLTD", "PIDILITIND", "PIIND", "PNB", "PNBHOUSING", 
+        "POLICYBZR", "POLYCAB", "POONAWALLA", "POWERGRID", "POWERINDIA", "PRESTIGE", "RECLTD", 
+        "RELIANCE", "RVNL", "SAIL", "SAMMAANCAP", "SBICARD", "SBILIFE", "SBIN", "SHREECEM", 
+        "SHRIRAMFIN", "SIEMENS", "SJVN", "SOLARINDS", "SONACOMS", "SRF", "SUNPHARMA", "SUPREMEIND", 
+        "SYNGENE", "TATACHEM", "TATACOMM", "TATACONSUM", "TATAELXSI", "TATAPOWER", "TATASTEEL", 
+        "TATATECH", "TCS", "TECHM", "TIINDIA", "TITAGARH", "TITAN", "TMPV", "TORNTPHARM", 
+        "TORNTPOWER", "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO", "UNIONBANK", "UNITDSPR", 
+        "UNOMINDA", "UPL", "VBL", "VEDL", "VOLTAS", "WIPRO", "ZYDUSLIFE"
+    ]
     
     # Strike selection strategy
     STRIKE_OFFSET = int(os.getenv("OPTIONS_STRIKE_OFFSET", "0"))  # ATM = 0, OTM = 1+ 
@@ -200,6 +232,79 @@ class DevConfig:
     ENABLE_CRASH_RECOVERY = os.getenv("OPTIONS_CRASH_RECOVERY", "True").lower() == "true"
 
 # =============================================================================
+# F&O Universe Utilities
+# =============================================================================
+
+class FOUniverseUtils:
+    """Utilities for working with F&O universe and deriving strikes"""
+    
+    @staticmethod
+    def get_fo_symbols() -> list:
+        """Get all F&O universe symbols"""
+        return OptionsTradingConfig.FO_UNIVERSE
+    
+    @staticmethod
+    def get_symbol_count() -> int:
+        """Get count of F&O universe symbols"""
+        return len(OptionsTradingConfig.FO_UNIVERSE)
+    
+    @staticmethod
+    def is_in_fo_universe(symbol: str) -> bool:
+        """Check if symbol is in F&O universe"""
+        # Normalize symbol (remove NSE: prefix if present, handle case variations)
+        clean_symbol = symbol.replace("NSE:", "").upper()
+        return clean_symbol in [s.upper() for s in OptionsTradingConfig.FO_UNIVERSE]
+    
+    @staticmethod
+    def derive_strikes(current_price: float, strike_step: int = 100, atm_offset: int = 0) -> Dict[str, float]:
+        """
+        Derive option strike prices for a given underlying price
+        
+        Args:
+            current_price: Current LTP of underlying
+            strike_step: Strike interval (typically 100 for stock options, 50 for indices)
+            atm_offset: Offset for ATM selection (0=ATM, -1=OTM CE, +1=OTM PE)
+        
+        Returns:
+            Dictionary with strike prices: {'ATM': price, 'CE_OTM1': price, 'CE_OTM2': price, ...}
+        """
+        # Find ATM strike
+        atm = (int(current_price / strike_step) + atm_offset) * strike_step
+        
+        strikes = {
+            'ATM': float(atm),
+            'CE_OTM1': float(atm + strike_step),      # +1 strike CE (OTM call)
+            'CE_OTM2': float(atm + 2 * strike_step),  # +2 strikes CE
+            'PE_OTM1': float(atm - strike_step),      # -1 strike PE (OTM put)
+            'PE_OTM2': float(atm - 2 * strike_step),  # -2 strikes PE
+        }
+        return strikes
+    
+    @staticmethod
+    def get_strike_range(current_price: float, num_strikes: int = 3, strike_step: int = 100) -> Dict[str, list]:
+        """
+        Get range of strikes around current price
+        
+        Args:
+            current_price: Current LTP
+            num_strikes: Number of strikes on each side of ATM
+            strike_step: Strike interval
+        
+        Returns:
+            Dictionary with lists of CE and PE strikes
+        """
+        atm = (int(current_price / strike_step)) * strike_step
+        
+        calls = [float(atm + (i * strike_step)) for i in range(num_strikes + 1)]
+        puts = [float(atm - (i * strike_step)) for i in range(num_strikes + 1)]
+        
+        return {
+            'calls': calls,
+            'puts': puts,
+            'atm': float(atm)
+        }
+
+# =============================================================================
 # Utilities
 # =============================================================================
 
@@ -218,6 +323,11 @@ def get_optconfig_summary() -> Dict[str, Any]:
             "strike_offset": OptionsTradingConfig.STRIKE_OFFSET,
             "max_delta": OptionsTradingConfig.MAX_DELTA,
             "iv_range": [OptionsTradingConfig.IV_PERCENTILE_MIN, OptionsTradingConfig.IV_PERCENTILE_MAX]
+        },
+        "fo_universe": {
+            "symbol_count": FOUniverseUtils.get_symbol_count(),
+            "symbols_sample": OptionsTradingConfig.FO_UNIVERSE[:10],
+            "total_symbols": len(OptionsTradingConfig.FO_UNIVERSE)
         },
         "monitoring": {
             "default_interval": MonitoringConfig.MONITOR_INTERVAL_SECONDS,

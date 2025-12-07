@@ -234,10 +234,18 @@ def log_trade(
         'sl_price': f"{sl_price:.2f}" if sl_price > 0 else "",
         'pnl': f"{pnl:+.2f}" if pnl != 0 else "0.00",
         'status': status,
+        'exit_reason': kwargs.get('exit_reason', ''),
+        'exit_reason_category': kwargs.get('exit_reason_category', ''),
+        'hold_duration_min': kwargs.get('hold_duration_minutes', ''),
+        'max_profit_pct': kwargs.get('max_profit_pct', ''),
+        'gave_back_pct': kwargs.get('gave_back_pct', ''),
+        'ml_outcome': kwargs.get('ml_outcome', ''),
     }
     
-    # Add extra fields
-    row.update(kwargs)
+    # Add any additional extra fields from kwargs
+    for key, value in kwargs.items():
+        if key not in row:
+            row[key] = value
     
     # Write to CSV
     try:

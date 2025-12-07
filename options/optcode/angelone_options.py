@@ -16,10 +16,18 @@ from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 
 try:
-    from SmartApi import SmartConnect, SmartWebSocketV2
+    from SmartApi import SmartConnect
+    try:
+        from SmartApi import SmartWebSocketV2
+    except ImportError:
+        SmartWebSocketV2 = None  # Not all versions have WebSocket
 except ImportError:
     try:
-        from smartapi import SmartConnect, SmartWebSocketV2
+        from smartapi import SmartConnect
+        try:
+            from smartapi import SmartWebSocketV2
+        except ImportError:
+            SmartWebSocketV2 = None
     except ImportError:
         SmartConnect = None
         SmartWebSocketV2 = None
@@ -185,10 +193,14 @@ class OptionChain:
         if not available_strikes:
             return None
         
-        # Find the strike NEAREST to current spot (ATM)
-        atm_strike = min(available_strikes, key=lambda x: abs(x - current_spot))
+        # Find the NEXT HIGHER strike (strike >= current_spot)
+        higher_strikes = [s for s in available_strikes if s >= current_spot]
+        if higher_strikes:
+            atm_strike = higher_strikes[0]  # First strike >= price
+        else:
+            atm_strike = available_strikes[-1]  # If price is above all strikes, use highest
         
-        logger.debug(f"ATM: LTP={current_spot} | nearest_strike={atm_strike} | available={available_strikes[:5]}...")
+        logger.debug(f"ATM: LTP={current_spot} | next_higher_strike={atm_strike} | available={available_strikes[:5]}...")
         
         # Apply offset if requested
         strike_index = available_strikes.index(atm_strike)
@@ -410,6 +422,11 @@ class AngelOneOptionsBroker:
         Strategy: Load all real contracts from instrument.json for current month,
         then get_atm_contracts() will pick the nearest strike to current LTP.
         
+        CRITICAL: If symbol is NOT in F&O (no real contracts available):
+        - Return EMPTY chain (not synthetic data)
+        - This will cause alert processing to skip the alert
+        - Non-F&O stocks should be skipped, not traded with fake data
+        
         Args:
             underlying: Stock or index symbol
             expiry: Expiry date YYYY-MM-DD
@@ -422,7 +439,10 @@ class AngelOneOptionsBroker:
         contracts_data = extractor.build_real_option_chain(underlying, expiry, center_price=current_price)
         
         if not contracts_data:
-            logger.warning(f"CHAIN_MOCK: No contracts found for {underlying} {expiry}")
+            # CRITICAL: Symbol is NOT in F&O - SKIP IT (don't generate synthetic data)
+            logger.warning(f"CHAIN_MOCK: {underlying} NOT in F&O - symbol has no real option contracts available")
+            logger.warning(f"CHAIN_MOCK: Skipping alert - returning EMPTY chain (no synthetic fallback)")
+            # Return empty chain - this will cause alert processing to fail chain validation
             return chain
         
         # Mock spot prices for reference
@@ -450,9 +470,31 @@ class AngelOneOptionsBroker:
         
         # Add contracts to chain
         for contract_data in contracts_data:
+            # Extract strike from symbol
+            # Symbol format: UNDERLYING + DDMMMYY + STRIKE + TYPE
+            # Example: TECHM30DEC251600CE -> strike is 1600
+            # DDMMMYY = 7 chars (e.g., 30DEC25 = 2 digits + 3 letters + 2 digits)
+            symbol = contract_data['symbol']
+            
+            # Remove underlying name, date (DDMMMYY=7 chars), and type (CE/PE=2 chars)
+            underlying_prefix = symbol[:len(contract_data['underlying'])]
+            strike_portion = symbol[len(underlying_prefix):-2]  # Remove last 2 chars (CE/PE)
+            
+            # The strike portion is now like "30DEC251600"
+            # We need to remove the date part (first 7 chars: 30DEC25)
+            # and keep just the strike (1600)
+            if len(strike_portion) > 7:
+                strike_str = strike_portion[7:]  # Remove DDMMMYY (7 chars), keep strike
+                try:
+                    strike = float(strike_str)
+                except ValueError:
+                    strike = 0  # Fallback if parsing fails
+            else:
+                strike = 0
+            
             contract = OptionContract(
                 underlying=contract_data['underlying'],
-                strike=0,  # Don't need to parse, get_atm_contracts extracts from symbol
+                strike=strike,  # Proper strike value
                 expiry=contract_data['expiry'],
                 contract_type=contract_data['contract_type'],
                 symbol=contract_data['symbol']
