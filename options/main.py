@@ -146,6 +146,13 @@ class OptionsTradingBot:
             
             while self.running:
                 try:
+                    # Check and refresh authentication if needed
+                    if not self.broker.ensure_authenticated():
+                        logger.error("POSITION_MONITOR: AUTH_FAILED | cannot proceed without valid session")
+                        print("❌ Authentication failed - waiting for reconnection")
+                        time.sleep(60)
+                        continue
+                    
                     # CRITICAL: Refresh LTP for all positions from broker
                     if len(self.monitor.positions) > 0:
                         refresh_stats = self.monitor.refresh_position_ltps()

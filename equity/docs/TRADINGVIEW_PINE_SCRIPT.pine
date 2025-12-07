@@ -1,11 +1,9 @@
 //@version=6
-indicator("Sniper v7.7 - Enhanced Filters + Per-Symbol Alert Control", overlay=true)
+indicator("Sniper v7.10 – Adaptive Early-Market Filters + 9:33 Valid Alerts", overlay=true)
 
-// ⚠️ IMPORTANT: Apply this script to 3-MINUTE CHART (3m timeframe)
-// Alerts trigger at 9:33 AM (after 9:30-9:33 candle closes)
-// Trading window: 9:30 AM - 10:30 AM IST (Mon-Fri)
-
-// — Inputs —
+//────────────────────────────────────────────
+// INPUTS
+//────────────────────────────────────────────
 emaShort = input.int(9,  "EMA Short")
 emaLong  = input.int(20, "EMA Long")
 rsiLen   = input.int(14, "RSI Length")
@@ -15,19 +13,19 @@ volLen   = input.int(20, "Vol MA Length")
 volMult  = input.float(1.4, "Vol Spike ×", step=0.1)
 minRsi   = input.float(58.0, "Min RSI")
 maxRsi   = input.float(85.0, "Max RSI")
-minAdx   = input.float(20.0, "Min ADX")
-minAtrPc = input.float(0.15, "Min ATR%")
+minAdx   = input.float(20.0, "Min ADX (strict after 9:45)")
+minAtrPc = input.float(0.15, "Min ATR% (strict after 9:45)")
 minBody  = input.float(0.55, "Min Body Ratio")
 exhaustPc= input.float(2.5, "Exhaustion % Above EMA9")
 
-// Resistance lookback
-useResistance = input.bool(true, "Require Resistance Break")
+useResistance  = input.bool(true, "Require Resistance Break")
 resistanceBars = input.int(3, "Resistance Lookback Bars")
 
-// Gap filter
 maxGap = input.float(3.0, "Max Gap % Allowed")
 
-// — Core Calculations —
+//────────────────────────────────────────────
+// CORE CALCULATIONS
+//────────────────────────────────────────────
 ema9  = ta.ema(close, emaShort)
 ema20 = ta.ema(close, emaLong)
 vwap  = ta.vwap(hlc3)
@@ -36,41 +34,79 @@ atr   = ta.atr(atrLen)
 atrPc = (atr / close) * 100.0
 [_, _, adxVal] = ta.dmi(dmiLen, dmiLen)
 
-// Body ratio
 body      = math.abs(close - open)
 barRange  = math.max(high - low, 0.0)
 bodyRatio = barRange == 0.0 ? 0.0 : body / barRange
 
-// Enhanced volume logic
-volAvg    = ta.sma(volume, volLen)
-volSpike  = volume > volAvg * volMult
-volConsistent = volume > ta.sma(volume, 5) * 0.9
-prevVolOk = na(volume[1]) ? true : volume >= volume[1] * 0.8
-volOk     = volSpike and volConsistent and prevVolOk
-
-// Exhaustion guard
-exhaust   = (close - ema9) / ema9 * 100.0
-exhaustOk = exhaust < exhaustPc
-
-// — Trading Time Window (9:30 AM - 10:30 AM IST ONLY) —
+//────────────────────────────────────────────
+// TIME WINDOWS
+//────────────────────────────────────────────
 sessionStart     = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
 sessionEnd       = timestamp("GMT+5:30", year, month, dayofmonth, 10, 30)
+inSession        = time >= sessionStart and time <= sessionEnd
 
-inSession = time >= sessionStart and time <= sessionEnd
-fTime = inSession
-
-// — Alert Trigger Time (9:33 AM - after 9:30-9:33 candle closes on 3min chart) —
 alertTriggerTime = timestamp("GMT+5:30", year, month, dayofmonth, 9, 33)
+is933 = time >= alertTriggerTime and time < alertTriggerTime + 3*60000
 
-// — Non-Repainting Resistance —
-prevHigh = ta.highest(high[1], resistanceBars)
-fResistance = useResistance ? close > prevHigh * 1.002 : true
+// Adaptive time buckets
+early1 = time < alertTriggerTime + 3*60000      // 9:30–9:36
+early2 = time < alertTriggerTime + 12*60000     // 9:36–9:45
+
+//────────────────────────────────────────────
+// ADAPTIVE FILTERS
+//────────────────────────────────────────────
+
+// ADX adaptive requirement
+adxReq = is933 ? 12 : early2 ? 16 : minAdx
+fADX   = adxVal >= adxReq
+
+// ATR% adaptive requirement
+atrReq = is933 ? 0.06 : early2 ? 0.10 : minAtrPc
+fATR   = atrPc >= atrReq
+
+// Adaptive Volume Logic (ANY strength signal passes)
+volAvg   = ta.sma(volume, volLen)
+volOk_adapt =
+     (volume > volAvg * volMult) or               // long MA spike
+     (volume > ta.sma(volume, 5) * 1.1) or        // short MA spike
+     (volume > volume[1] * 1.05)                  // rising vs previous bar
+
+fVolume = volOk_adapt
+
+// Other filters
+exhaust   = (close - ema9) / ema9 * 100.0
+fExhaust  = exhaust < exhaustPc
+
+fAboveMA  = close > ema9 and close > ema20 and close > vwap
+fRSI      = rsi >= minRsi and rsi <= maxRsi
+fBody     = bodyRatio >= minBody
 
 // Gap filter
 open_gap_pct = na(close[1]) ? 0.0 : (open - close[1]) / close[1] * 100.0
 fGap = math.abs(open_gap_pct) < maxGap
 
-// Helper metrics
+// Resistance break (non repaint)
+prevHigh = ta.highest(high[1], resistanceBars)
+fResistance = useResistance ? close > prevHigh * 1.002 : true
+
+//────────────────────────────────────────────
+// FINAL FILTER DECISION (STRICT + ADAPTIVE)
+//────────────────────────────────────────────
+allFilters =
+     fAboveMA and
+     fRSI and
+     fATR and
+     fADX and
+     fBody and
+     fVolume and
+     fExhaust and
+     fResistance and
+     fGap and
+     inSession
+
+//────────────────────────────────────────────
+// SCORING (unchanged)
+//────────────────────────────────────────────
 vwapLeadPct = (close - vwap) / vwap * 100.0
 emaGapPct   = (close - ema9) / ema9 * 100.0
 hlRangePct  = barRange == 0.0 ? 0.0 : (barRange / close) * 100.0
@@ -78,7 +114,6 @@ closeToHigh = barRange == 0.0 ? 0.0 : ((close - low) / barRange) * 100.0
 atrJump     = na(atrPc[1]) ? 0.0 : atrPc - atrPc[1]
 pdh         = request.security(syminfo.tickerid, "D", high[1])
 
-// Z-scores
 volStd  = ta.stdev(volume, volLen)
 vol_z   = volStd == 0.0 ? 0.0 : (volume - volAvg) / volStd
 rsiMean = ta.sma(rsi, rsiLen)
@@ -88,19 +123,6 @@ pc_lead_pct = na(close[1]) ? 0.0 : (close - close[1]) / close[1] * 100.0
 
 ultra_pass = (vwapLeadPct >= 0.35 and adxVal >= 27 and vol_z >= 1.2) ? 1 : 0
 
-// — Filters —
-fAboveMA = close > ema9 and close > ema20 and close > vwap
-fRSI     = rsi >= minRsi and rsi <= maxRsi
-fATR     = atrPc >= minAtrPc
-fADX     = adxVal >= minAdx
-fBody    = bodyRatio >= minBody
-fVolume  = volOk
-fExhaust = exhaustOk
-
-// All filters
-allOk = fAboveMA and fRSI and fATR and fADX and fBody and fVolume and fExhaust and fTime and fResistance and fGap
-
-// — Scoring —
 score = 0.0
 score += fAboveMA ? 12.5 : 0
 score += fRSI ? 12.5 : 0
@@ -111,29 +133,33 @@ score += fVolume ? 12.5 : 0
 score += fExhaust ? 12.5 : 0
 score += (vwapLeadPct >= 0.10) ? 12.5 : 0
 
-verdict     = allOk ? 1.0 : 0.0
-confidence  = allOk ? math.min(95.0, 80.0 + score * 0.3) : 0.0
+verdict    = allFilters ? 1.0 : 0.0
+confidence = allFilters ? math.min(95.0, 80.0 + score * 0.3) : 0.0
 
-// — JSON Payload (MOVED BEFORE ALERT) —
+//────────────────────────────────────────────
+// JSON PAYLOAD
+//────────────────────────────────────────────
 fmt(x) => str.tostring(x, format.mintick)
 
-jsonMsg = "{\"Alerts\":[{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"price\":\"" + fmt(close) + "\",\"score\":\"" + fmt(score) + "\",\"confidence\":\"" + fmt(confidence) + "\",\"verdict\":\"" + fmt(verdict) + "\",\"vwap\":\"" + fmt(vwap) + "\",\"rsi\":\"" + fmt(rsi) + "\",\"atr\":\"" + fmt(atr) + "\",\"adx\":\"" + fmt(adxVal) + "\",\"volume\":\"" + fmt(volume) + "\",\"ema9\":\"" + fmt(ema9) + "\",\"ema20\":\"" + fmt(ema20) + "\",\"pdh\":\"" + fmt(pdh) + "\",\"ema_gap_pct\":\"" + fmt(emaGapPct) + "\",\"vwap_lead_pct\":\"" + fmt(vwapLeadPct) + "\",\"atr_pct\":\"" + fmt(atrPc) + "\",\"vol_z\":\"" + fmt(vol_z) + "\",\"z_rsi\":\"" + fmt(z_rsi) + "\",\"heat_ok\":\"" + fmt(allOk ? 1 : 0) + "\",\"body_ratio\":\"" + fmt(bodyRatio) + "\",\"open_gap_pct\":\"" + fmt(math.abs(open_gap_pct)) + "\",\"hl_range_pct\":\"" + fmt(hlRangePct) + "\",\"pc_lead_pct\":\"" + fmt(pc_lead_pct) + "\",\"close_to_high\":\"" + fmt(closeToHigh) + "\",\"atr_jump\":\"" + fmt(atrJump) + "\",\"ultra_pass\":\"" + fmt(ultra_pass) + "\",\"above_vwap\":\"" + fmt(fAboveMA ? 1 : 0) + "\",\"time_ok\":\"" + fmt(fTime ? 1 : 0) + "\",\"resistance_break\":\"" + fmt(fResistance ? 1 : 0) + "\",\"vol_quality\":\"" + fmt(fVolume ? 1 : 0) + "\"}]}"
+jsonMsg = "{\"Alerts\":[{\"symbol\":\""+syminfo.ticker+"\",\"action\":\"BUY\",\"price\":\""+fmt(close)+"\",\"score\":\""+fmt(score)+"\",\"confidence\":\""+fmt(confidence)+"\",\"verdict\":\""+fmt(verdict)+"\",\"vwap\":\""+fmt(vwap)+"\",\"rsi\":\""+fmt(rsi)+"\",\"atr\":\""+fmt(atr)+"\",\"adx\":\""+fmt(adxVal)+"\",\"volume\":\""+fmt(volume)+"\",\"ema9\":\""+fmt(ema9)+"\",\"ema20\":\""+fmt(ema20)+"\",\"pdh\":\""+fmt(pdh)+"\",\"ema_gap_pct\":\""+fmt(emaGapPct)+"\",\"vwap_lead_pct\":\""+fmt(vwapLeadPct)+"\",\"atr_pct\":\""+fmt(atrPc)+"\",\"vol_z\":\""+fmt(vol_z)+"\",\"z_rsi\":\""+fmt(z_rsi)+"\",\"heat_ok\":\""+fmt(allFilters ? 1 : 0)+"\",\"body_ratio\":\""+fmt(bodyRatio)+"\",\"open_gap_pct\":\""+fmt(math.abs(open_gap_pct))+"\",\"hl_range_pct\":\""+fmt(hlRangePct)+"\",\"pc_lead_pct\":\""+fmt(pc_lead_pct)+"\",\"close_to_high\":\""+fmt(closeToHigh)+"\",\"atr_jump\":\""+fmt(atrJump)+"\",\"ultra_pass\":\""+fmt(ultra_pass)+"\",\"above_vwap\":\""+fmt(fAboveMA ? 1 : 0)+"\",\"time_ok\":\""+fmt(inSession ? 1 : 0)+"\",\"resistance_break\":\""+fmt(fResistance ? 1 : 0)+"\",\"vol_quality\":\""+fmt(fVolume ? 1 : 0)+"\"}]}"
 
-// — ONE ALERT PER SYMBOL PER DAY (9:33 AM trigger) —
+//────────────────────────────────────────────
+// ONE ALERT PER SYMBOL PER DAY
+//────────────────────────────────────────────
 var alertedToday = false
 newDay = ta.change(time("D")) != 0
 if newDay
     alertedToday := false
 
-// Alert fires on 3-min candle that closes at/after 9:33 AM
-// This captures the 9:30-9:33 candle on 3-min timeframe
-alertCond = (time >= alertTriggerTime) and allOk and not alertedToday
+alertCond = allFilters and time >= alertTriggerTime and not alertedToday
 
 if alertCond
     alertedToday := true
     alert(jsonMsg, alert.freq_once_per_bar_close)
 
-// — Plots —
+//────────────────────────────────────────────
+// PLOTS
+//────────────────────────────────────────────
 plot(ema9,  "EMA9",  color=color.yellow)
 plot(ema20, "EMA20", color=color.orange)
 plot(vwap,  "VWAP",  color=color.blue)

@@ -276,6 +276,18 @@ class AngelOneOptionsBroker:
         # Positions tracking
         self.option_positions: Dict[str, Dict[str, Any]] = {}  # {symbol: position_data}
     
+    def _check_session_valid(self) -> bool:
+        """Check if current session is still valid (max 24 hours)"""
+        if not self.authenticated or not self.last_auth_time:
+            return False
+        
+        session_age = (datetime.now() - self.last_auth_time).total_seconds() / 3600
+        if session_age > 23:  # Refresh before 24 hour limit
+            logger.warning(f"BROKER_SESSION: EXPIRED | age={session_age:.1f}h")
+            return False
+        
+        return True
+    
     def authenticate(self) -> bool:
         """Authenticate with AngelOne API"""
         logger.debug("BROKER_AUTHENTICATE: Attempting broker authentication")
@@ -318,7 +330,7 @@ class AngelOneOptionsBroker:
                 self.refresh_token = data['data']['refreshToken']
                 self.authenticated = True
                 self.last_auth_time = datetime.now()
-                logger.info(f"BROKER_AUTHENTICATE: SUCCESS | client={self.client_code}")
+                logger.info(f"BROKER_AUTHENTICATE: SUCCESS | client={self.client_code} | session_valid_until={self.last_auth_time + timedelta(hours=24)}")
                 print(f"✅ Options broker authenticated: {self.client_code}")
                 return True
             else:
@@ -329,6 +341,14 @@ class AngelOneOptionsBroker:
             logger.error(f"BROKER_AUTHENTICATE: ERROR | {str(e)}")
             print(f"❌ Options broker auth error: {str(e)}")
             return False
+    
+    def ensure_authenticated(self) -> bool:
+        """Check and refresh authentication if needed - called before critical operations"""
+        if not self._check_session_valid():
+            logger.info("BROKER_SESSION: REFRESHING | current session expired or invalid")
+            print("🔄 Refreshing broker session...")
+            return self.authenticate()
+        return True
     
     def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
         """
