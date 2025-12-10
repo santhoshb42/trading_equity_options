@@ -115,6 +115,28 @@ class InstrumentManager:
         contracts = self.symbol_index[symbol]
         return contracts[0] if contracts else None
     
+    def get_lot_size(self, symbol: str) -> int:
+        """
+        Get lot size for a symbol
+        
+        Args:
+            symbol: Full symbol (e.g., "RELIANCE30DEC251600CE")
+        
+        Returns:
+            Lot size as integer, or 1 if not found
+        """
+        contract = self.get_strike_by_symbol(symbol)
+        if contract:
+            try:
+                lotsize = contract.get('lotsize')
+                if lotsize:
+                    return int(lotsize)
+            except (ValueError, TypeError):
+                logger.warning(f"INSTRUMENT_MGR: LOT_SIZE_INVALID | symbol={symbol} | lotsize={lotsize}")
+        
+        logger.debug(f"INSTRUMENT_MGR: LOT_SIZE_NOT_FOUND | symbol={symbol} | using default=1")
+        return 1
+    
     def get_strikes_for_underlying(self, underlying: str, exch_seg="NFO", 
                                    instrument_types=("OPTSTK", "FUTSTK")) -> List[Dict]:
         """

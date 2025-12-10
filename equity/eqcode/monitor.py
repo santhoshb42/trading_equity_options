@@ -795,6 +795,15 @@ class PositionMonitor:
                 log_event("POSITION_ADDED", f"Added position for monitoring",
                          symbol=symbol, action=position.action, quantity=position.quantity)
                 
+                # 🔧 CRITICAL FIX: Save positions immediately after adding
+                # This ensures background SL retry loop can find the position
+                try:
+                    self.save_positions()
+                    log_event("POSITIONS_SAVED", f"Position persisted to disk after add", symbol=symbol)
+                except Exception as save_err:
+                    log_event("SAVE_ERROR", f"Failed to persist position {symbol}: {str(save_err)}", symbol=symbol)
+                    # Continue anyway - in-memory position exists
+                
                 # Place stop-loss order for BUY positions that are already OPEN (filled immediately)
                 # 🔴 CRITICAL FIX: Skip initial SL placement on startup to avoid rate limiter timeouts
                 # The background _sl_retry_loop will handle SL placement with proper delays
@@ -803,7 +812,9 @@ class PositionMonitor:
                 if position.action == "BUY" and position.status == "OPEN":
                     log_event("SL_DEFERRED", f"SL placement deferred for {symbol} - will retry in background loop",
                              reason="Avoiding initial SL spike that causes rate limiter timeouts at startup",
-                             symbol=symbol)
+                             symbol=symbol,
+                             sl_price=position.sl_price,
+                             entry_price=position.entry_price)
                     # Don't place SL here - let background retry loop handle it
                     # This prevents rate limit timeouts from multiple simultaneous placeOrder calls
                 else:
@@ -1002,18 +1013,118 @@ class PositionMonitor:
                         self.handle_position_exit(position, exit_price, "FILLED")
                     
                     elif exit_order.status == OrderStatus.REJECTED:
-                        # Exit order rejected - reset exit request
+                        # Exit order rejected - reset exit request and CANCEL SL ORDER
                         log_event("EXIT_REJECTED", f"Exit order rejected for {symbol}",
                                  order_id=position.exit_order_id)
+                        
+                        # CRITICAL: Cancel SL order when exit is rejected to prevent hanging SL orders
+                        if hasattr(position, 'sl_order_id') and position.sl_order_id:
+                            try:
+                                cancel_success = self.broker.cancel_order(position.sl_order_id)
+                                if cancel_success:
+                                    log_event("SL_CANCELLED_AFTER_EXIT_REJECT",
+                                             f"SL order cancelled after exit rejection for {symbol}",
+                                             sl_order_id=position.sl_order_id)
+                                    position.sl_order_id = None
+                            except Exception as e:
+                                log_event("ERROR", f"Failed to cancel SL after exit rejection for {symbol}: {str(e)}")
+                        
                         position.exit_order_id = None
                         position.exit_requested_at = None
                         self.save_positions()
+                    
+                    elif exit_order.status == OrderStatus.PENDING:
+                        # Exit order still pending - check if it's been too long
+                        exit_pending_seconds = (datetime.now() - position.last_updated).total_seconds() if position.exit_requested_at else 0
+                        
+                        # If exit order has been pending for 30+ seconds, cancel and restart
+                        if exit_pending_seconds > 30:
+                            log_event("EXIT_TIMEOUT", f"Exit order pending too long for {symbol}, will retry",
+                                     order_id=position.exit_order_id,
+                                     pending_duration_seconds=exit_pending_seconds)
+                            
+                            # Try to cancel the stale exit order
+                            try:
+                                self.broker.cancel_order(position.exit_order_id)
+                            except:
+                                pass
+                            
+                            # Reset exit request to allow retry
+                            position.exit_order_id = None
+                            position.exit_requested_at = None
+                            self.save_positions()
                 
                 # Add small delay between order checks
                 time.sleep(0.1)  # 100ms delay
                 
             except Exception as e:
                 log_event("ERROR", f"Error checking exit order for {symbol}: {str(e)}")
+    
+    def _cleanup_orphaned_orders(self):
+        """
+        Cleanup orphaned orders:
+        1. Cancel pending SL orders if NO active positions exist
+        2. Cancel pending exit/SL orders for positions that don't exist
+        3. Cancel exit orders that have been pending > 2 minutes
+        
+        Called periodically (every 2-3 minutes) to prevent stale orders
+        """
+        try:
+            # Get current open orders from broker (limited API call)
+            if not self.broker:
+                return
+            
+            # Get list of symbols with active positions
+            active_symbols = set(self.positions.keys())
+            
+            # If NO active positions but broker might have pending orders, warn user
+            if not active_symbols:
+                log_event("CLEANUP_ORDER", f"No active positions - checking for orphaned pending orders",
+                         active_positions=len(self.positions))
+            
+            # Check each position for stale orders
+            for symbol, position in list(self.positions.items()):
+                # Check for stale SL orders (SL without active position)
+                if (hasattr(position, 'sl_order_id') and position.sl_order_id and 
+                    position.status != "OPEN"):
+                    # SL exists but position not OPEN - cancel it
+                    log_event("CLEANUP_SL_ORPHAN", f"Cancelling orphaned SL order for {symbol}",
+                             symbol=symbol,
+                             status=position.status,
+                             sl_order_id=position.sl_order_id)
+                    try:
+                        self.broker.cancel_order(position.sl_order_id)
+                        position.sl_order_id = None
+                        self.save_positions()
+                    except Exception as e:
+                        log_event("ERROR", f"Failed to cancel orphaned SL for {symbol}: {str(e)}")
+                
+                # Check for exit orders pending too long (> 2 minutes)
+                if (hasattr(position, 'exit_order_id') and position.exit_order_id and 
+                    hasattr(position, 'exit_requested_at') and position.exit_requested_at):
+                    try:
+                        exit_requested = datetime.fromisoformat(position.exit_requested_at)
+                        pending_duration = (datetime.now() - exit_requested).total_seconds()
+                        
+                        if pending_duration > 120:  # 2+ minutes
+                            log_event("CLEANUP_EXIT_TIMEOUT", f"Exit order pending 2+ minutes for {symbol}, will retry",
+                                     symbol=symbol,
+                                     exit_order_id=position.exit_order_id,
+                                     pending_duration_seconds=pending_duration)
+                            
+                            try:
+                                self.broker.cancel_order(position.exit_order_id)
+                            except:
+                                pass
+                            
+                            position.exit_order_id = None
+                            position.exit_requested_at = None
+                            self.save_positions()
+                    except Exception as e:
+                        log_event("ERROR", f"Error checking exit order timeout for {symbol}: {str(e)}")
+        
+        except Exception as e:
+            log_event("ERROR", f"Error in _cleanup_orphaned_orders: {str(e)}")
     
     def sync_manual_sl_orders(self):
         """
@@ -1483,15 +1594,17 @@ class PositionMonitor:
     
     def _check_ltp_for_bucket(self):
         """
-        🆕 BUCKETED LTP CHECKING
+        🆕 BUCKETED LTP CHECKING WITH BULK OPTIMIZATION
         
         This method is the KEY to reducing API calls:
         - Gets current bucket (5 positions max)
-        - Checks LTP only for those positions (direct API calls)
+        - Fetches LTP for all positions in bucket USING SINGLE BULK API CALL (NEW!)
         - Rotates to next bucket next cycle
         
-        Result: 5-10 API calls per second instead of 20+ ✅
-        Each position still checked every 5 seconds (acceptable for SL) ✅
+        OPTIMIZATION: Uses broker.get_ltp_bulk() instead of get_ltp() in loop
+        - Instead of 5 separate API calls: 1 bulk call for all 5 positions
+        - Result: ~80% reduction in LTP API calls
+        - Each position still checked every 5 seconds (acceptable for SL) ✅
         
         NOTE: Priority queue integration is available but currently disabled.
         See priority_queue.py and PRIORITY_QUEUE_IMPLEMENTATION.md for details.
@@ -1509,34 +1622,29 @@ class PositionMonitor:
             bucket_number = self.bucket_manager.current_bucket_index
             total_buckets = len(self.bucket_manager.buckets)
             
-            log_event("BUCKET_LTP_CHECK", f"Checking bucket {bucket_number}/{total_buckets}",
+            log_event("BUCKET_LTP_CHECK", f"Checking bucket {bucket_number}/{total_buckets} (bulk fetch)",
                      symbols=symbols_to_check, count=len(symbols_to_check))
             
             checked_count = 0
             skipped_count = 0
             
-            for symbol in symbols_to_check:
-                if symbol not in self.positions:
-                    skipped_count += 1
-                    continue
+            # 🆕 OPTIMIZATION: Fetch LTP for all symbols in bucket with SINGLE API call
+            # Instead of: 5 API calls for 5 positions
+            # Now: 1 bulk API call for all 5 positions
+            # Rate limit impact: Reduced from 5 req/sec to ~1 req/sec for LTP!
+            try:
+                ltps = self.broker.get_ltp_bulk(symbols_to_check)
                 
-                position = self.positions[symbol]
+                log_event("BUCKET_LTP_BULK_SUCCESS", f"Bulk fetched {len([v for v in ltps.values() if v])} LTPs",
+                         requested=len(symbols_to_check), succeeded=len([v for v in ltps.values() if v]))
                 
-                try:
-                    # 🔧 RATE LIMITER FIX: Smart delay between position checks
-                    # Previous: 0.25s per position = wastes 1.25s per bucket = blocks orders
-                    # Without delay: 5+ LTP calls back-to-back = exhausts 6 RPS limit immediately
-                    # Solution: ~0.17s delay per position = 6 calls/second (matches RPS limit exactly)
-                    # This allows 5 LTP calls + 1 order call per second = no blockage
-                    #
-                    # With 50 positions across 10 buckets:
-                    # - 0.17s × 5 positions = 0.85s per bucket (acceptable)
-                    # - Still leaves 1.15s per second for order placement without blocking
-                    if checked_count > 0:
-                        time.sleep(0.15)  # Smart delay: 167ms between checks = ~6 req/sec
+                for symbol in symbols_to_check:
+                    if symbol not in self.positions:
+                        skipped_count += 1
+                        continue
                     
-                    # Get LTP for this position (direct API call)
-                    ltp = self.broker.get_ltp(symbol)
+                    position = self.positions[symbol]
+                    ltp = ltps.get(symbol)
                     
                     if ltp and ltp > 0:
                         # 🔧 CRITICAL FIX: Use position.update_ltp() instead of manual field updates
@@ -1552,20 +1660,46 @@ class PositionMonitor:
                         checked_count += 1
                     else:
                         skipped_count += 1
+                        log_event("BUCKET_LTP_SKIP", f"No LTP for {symbol}")
+            
+            except Exception as e:
+                # Fallback to individual get_ltp() calls if bulk fetch fails
+                log_event("BUCKET_LTP_BULK_FALLBACK", f"Bulk fetch failed: {str(e)}, falling back to individual calls")
                 
-                except Exception as e:
-                    log_event("ERROR", f"Failed to get LTP for {symbol}: {str(e)}")
-                    skipped_count += 1
-                    # Keep using last known price if API fails
+                for symbol in symbols_to_check:
+                    if symbol not in self.positions:
+                        skipped_count += 1
+                        continue
+                    
+                    position = self.positions[symbol]
+                    
+                    try:
+                        # Fallback to individual call with small delay
+                        if checked_count > 0:
+                            time.sleep(0.15)  # Smart delay: 167ms between checks = ~6 req/sec
+                        
+                        ltp = self.broker.get_ltp(symbol)
+                        
+                        if ltp and ltp > 0:
+                            position.update_ltp(ltp)
+                            self.bucket_manager.record_check(symbol)
+                            checked_count += 1
+                        else:
+                            skipped_count += 1
+                    
+                    except Exception as e:
+                        log_event("ERROR", f"Failed to get LTP for {symbol}: {str(e)}")
+                        skipped_count += 1
             
             if checked_count > 0:
                 log_event("BUCKET_LTP_RESULT", 
-                         f"Bucket LTP check complete",
+                         f"Bucket LTP check complete (bulk optimization)",
                          checked=checked_count, skipped=skipped_count,
                          bucket_number=bucket_number, total_buckets=total_buckets)
         
         except Exception as e:
             log_event("ERROR", f"Bucket LTP check failed: {str(e)}")
+
     
     def _check_stop_losses(self):
         """🔧 FIX GAP-006: CRITICAL SL check that never gets skipped
@@ -1935,8 +2069,69 @@ class PositionMonitor:
             exit_reason = None
             decision_details = {}
             
+            # ===== NEW: SMART EXIT DETECTION (Candle-based) =====
+            # Check if position should exit based on technical indicators
+            try:
+                from .candle_integration import SmartExitEngine
+                
+                exit_engine = SmartExitEngine(self.broker)
+                
+                # Get token for symbol (hardcoded mapping)
+                SYMBOL_TOKEN_MAP = {
+                    "RELIANCE": "3045",
+                    "SBIN": "4119",
+                    "INFY": "4963",
+                    "TCS": "3789",
+                    "HDFC": "1333",
+                    "ICICIBANK": "5920",
+                    "WIPRO": "7229",
+                    "AXIS": "3456",
+                    "BAJAJFINSV": "5087",
+                    "JSWSTEEL": "5980",
+                    "MARUTI": "7718",
+                    "M&M": "7701",
+                    "BAJAJ-AUTO": "5040",
+                    "HCLTECH": "5010",
+                    "ITC": "4419",
+                    "BHARTIARTL": "4957",
+                }
+                
+                token = SYMBOL_TOKEN_MAP.get(symbol)
+                
+                if token:
+                    should_exit, exit_signal_reason, exit_strength = exit_engine.should_exit_position(
+                        symbol=symbol,
+                        exchange="NSE",
+                        token=token,
+                        entry_price=position.entry_price,
+                        current_price=ltp
+                    )
+                    
+                    if should_exit:
+                        exit_reason = "SMART_EXIT_TECHNICAL"
+                        decision_details = {
+                            "reason": exit_signal_reason,
+                            "strength": exit_strength,
+                            "entry_price": position.entry_price,
+                            "current_ltp": ltp
+                        }
+                        
+                        log_event("SMART_EXIT_SIGNAL", f"Smart exit detected for {symbol}: {exit_signal_reason}",
+                                 symbol=symbol,
+                                 reason=exit_signal_reason,
+                                 strength=exit_strength,
+                                 pnl_percent=pnl_percent)
+            
+            except Exception as e:
+                log_event("SMART_EXIT_ERROR", f"Smart exit check error for {symbol}: {str(e)}",
+                         symbol=symbol, error=str(e))
+                # Continue with standard exit checks (fail-safe)
+            
             # Check 1: Early exit triggers (from adaptive engine)
-            if hasattr(position, '_early_exit_reason'):
+            if exit_reason:
+                # Smart exit was triggered - use it
+                pass
+            elif hasattr(position, '_early_exit_reason'):
                 exit_reason = position._early_exit_reason
                 decision_details = position._early_exit_details
                 log_event("EARLY_EXIT_DETECTED", f"Early exit condition met for {symbol}",
@@ -2448,6 +2643,7 @@ class PositionMonitor:
         
         consecutive_rate_limit_errors = 0
         base_interval = TradingConfig.MONITOR_INTERVAL_SECONDS
+        cleanup_counter = 0  # Counter for periodic cleanup
         
         while self.monitoring:
             try:
@@ -2577,6 +2773,12 @@ class PositionMonitor:
                 
                 # Save positions periodically
                 self.save_positions()
+                
+                # Cleanup orphaned orders periodically (every 3 minutes = 9 cycles at 20s interval)
+                cleanup_counter += 1
+                if cleanup_counter >= 9:  # Every ~3 minutes
+                    self._cleanup_orphaned_orders()
+                    cleanup_counter = 0
                 
                 # Sleep for calculated interval
                 log_event("MONITOR_SLEEP", f"Sleeping for {monitor_interval}s (base={base_interval}s, consecutive_errors={consecutive_rate_limit_errors}, monitoring_suspended={skip_monitoring})")

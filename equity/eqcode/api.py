@@ -720,6 +720,30 @@ def validate_buy_signal_with_analytics(alert: Dict[str, Any]) -> Dict[str, Any]:
                 "details": {"mode": "paper_trading"}
             }
         
+        # CRITICAL FIX: Skip analytics validation if rate limiter is exhausted
+        # This prevents order rejection due to burst of validation API calls
+        try:
+            rate_limiter = trading_state.broker.rate_limiter
+            if hasattr(rate_limiter, 'get_statistics'):
+                stats = rate_limiter.get_statistics()
+                second_bucket = stats.get('second_bucket', {})
+                available_tokens = second_bucket.get('tokens', 1)
+                
+                # If <3 tokens available, skip analytics to reserve tokens for order placement
+                if available_tokens < 3:
+                    log_event("ANALYTICS_SKIPPED_RATE_LIMIT", 
+                             f"Skipping analytics for {symbol} - rate limiter exhausted ({available_tokens:.1f} tokens available)",
+                             symbol=symbol, available_tokens=round(available_tokens, 1))
+                    return {
+                        "approved": True,
+                        "reason": "Rate limit protection - analytics validation skipped to preserve tokens for order placement",
+                        "signal": "RATE_LIMIT_PROTECTED",
+                        "details": {"tokens_available": round(available_tokens, 1)}
+                    }
+        except Exception as e:
+            # If rate limiter check fails, continue normally
+            log_event("RATE_LIMIT_CHECK_ERROR", f"Error checking rate limiter: {e}")
+        
         # Get enhanced analytics from AngelOne
         log_event("ANALYTICS", f"Fetching enhanced analytics for {symbol}")
         analytics = trading_state.broker.get_enhanced_analytics(
@@ -1437,6 +1461,118 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
                                   regime_multiplier=regime_multiplier,
                                   combined_multiplier=combined_multiplier)
         
+        # ===== CANDLE CONFIRMATION (NEW - Entry Validation) =====
+        # Confirm BUY signal with candle analysis to reduce false signals
+        try:
+            from .candle_integration import EntryConfirmationEngine
+            
+            confirmation_engine = EntryConfirmationEngine(
+                broker_api=trading_state.broker,
+                smart_api=trading_state.smart_api,
+                min_confidence=0.75  # 75% minimum confidence
+            )
+            
+            # Get token for symbol (hardcoded mapping for now)
+            SYMBOL_TOKEN_MAP = {
+                "RELIANCE": "3045",
+                "SBIN": "4119",
+                "INFY": "4963",
+                "TCS": "3789",
+                "HDFC": "1333",
+                "ICICIBANK": "5920",
+                "WIPRO": "7229",
+                "AXIS": "3456",
+                "BAJAJFINSV": "5087",
+                "JSWSTEEL": "5980",
+                "MARUTI": "7718",
+                "M&M": "7701",
+                "BAJAJ-AUTO": "5040",
+                "HCLTECH": "5010",
+                "ITC": "4419",
+                "BHARTIARTL": "4957",
+            }
+            
+            token = SYMBOL_TOKEN_MAP.get(symbol)
+            
+            # Only confirm if we have token mapping
+            if token:
+                confirmed, reason, confidence = confirmation_engine.confirm_buy_signal(
+                    symbol=symbol,
+                    exchange="NSE",
+                    token=token
+                )
+                
+                if not confirmed:
+                    # Entry rejected by candle analysis
+                    log_event("ENTRY_REJECTED_CANDLE", f"BUY signal rejected by candle analysis",
+                             symbol=symbol, confidence=confidence, reason=reason)
+                    log_trade_execution("ENTRY_REJECTED_CANDLE", symbol, "BUY",
+                                      confidence=confidence,
+                                      reason=reason,
+                                      price=price)
+                    
+                    # Log missed opportunity
+                    try:
+                        from .pnl_analytics import get_pnl_analytics
+                        pnl_analytics = get_pnl_analytics()
+                        pnl_analytics.log_missed_signal(
+                            symbol=symbol,
+                            action="BUY",
+                            signal_price=price,
+                            reason=f"Candle confirmation failed: {reason}",
+                            alert_data=alert
+                        )
+                    except:
+                        pass
+                    
+                    return {
+                        "status": "rejected",
+                        "reason": f"Candle confirmation failed: {reason}",
+                        "symbol": symbol,
+                        "confidence": confidence
+                    }
+                
+                log_event("ENTRY_CONFIRMED_CANDLE", f"BUY signal confirmed by candles",
+                         symbol=symbol, confidence=confidence)
+                log_trade_execution("ENTRY_CONFIRMED_CANDLE", symbol, "BUY",
+                                  confidence=confidence,
+                                  price=price)
+            else:
+                log_event("CANDLE_CONFIRMATION_SKIPPED", f"No token mapping for {symbol}",
+                         symbol=symbol)
+        
+        except Exception as e:
+            log_event("CANDLE_CONFIRMATION_ERROR", f"Candle confirmation error: {str(e)}",
+                     symbol=symbol, error=str(e))
+            # Continue with order (fail-open)
+        
+        # ===== DYNAMIC STOP LOSS CALCULATION (NEW) =====
+        dynamic_sl_price = None
+        try:
+            from .candle_integration import DynamicStopLossEngine
+            
+            sl_engine = DynamicStopLossEngine(trading_state.broker)
+            
+            if token:
+                sl_price_dyn, sl_reason = sl_engine.calculate_stop_loss(
+                    symbol=symbol,
+                    exchange="NSE",
+                    token=token,
+                    entry_price=price,
+                    multiplier=2.0  # 2x ATR (medium volatility)
+                )
+                
+                dynamic_sl_price = sl_price_dyn
+                log_event("DYNAMIC_SL_CALCULATED", f"Dynamic SL calculated for {symbol}",
+                         symbol=symbol, sl_price=sl_price_dyn, reason=sl_reason)
+                log_trade_execution("DYNAMIC_SL_CALCULATED", symbol, "BUY",
+                                  sl_price=sl_price_dyn, reason=sl_reason)
+        
+        except Exception as e:
+            log_event("DYNAMIC_SL_ERROR", f"Dynamic SL calculation error: {str(e)}",
+                     symbol=symbol, error=str(e))
+            # Will use hardcoded SL below
+        
         # Place BUY order
         log_trade_execution("ORDER_PLACING", symbol, "BUY",
                           quantity=quantity,
@@ -1573,11 +1709,24 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         # 🔴 FIX: Must round SL price to avoid tick size errors from broker
         # AngelOne STOPLOSS orders require 0.10 (10 paise) tick size, NOT 0.05!
         # Use the FILLED price, not alert price, for SL calculation
-        sl_price_raw = filled_price * (1 - TradingConfig.DEFAULT_SL_PERCENTAGE / 100)
-        # Round down to nearest 0.10 paise (10 paise intervals for SL orders)
-        # Convert to paise, round down to nearest 10, convert back
-        sl_paise = int(sl_price_raw * 100)  # Convert to paise
-        sl_paise_rounded = (sl_paise // 10) * 10  # Round DOWN to nearest 10 paise (0.10 tick)
+        
+        # ===== USE DYNAMIC SL IF CALCULATED, OTHERWISE FALLBACK TO FIXED PERCENTAGE =====
+        if dynamic_sl_price is not None:
+            # Use calculated dynamic SL
+            sl_price_raw = dynamic_sl_price
+            log_event("SL_SOURCE", f"Using dynamic ATR-based stop loss",
+                     symbol=symbol, sl_price=sl_price_raw)
+        else:
+            # Fallback to fixed percentage
+            sl_price_raw = filled_price * (1 - TradingConfig.DEFAULT_SL_PERCENTAGE / 100)
+            log_event("SL_SOURCE", f"Using fixed {TradingConfig.DEFAULT_SL_PERCENTAGE}% stop loss",
+                     symbol=symbol, sl_price=sl_price_raw)
+        
+        # Round to nearest 0.05 rupees (5 paise intervals - NSE tick size)
+        # Use NEAREST rounding (not floor) to minimize distance from target SL
+        # Convert to paise, round to nearest 5, convert back
+        sl_paise = round(sl_price_raw * 100)  # Convert to paise (with rounding)
+        sl_paise_rounded = round(sl_paise / 5) * 5  # Round to nearest 5 paise (0.05 tick)
         sl_price = sl_paise_rounded / 100.0  # Convert back to rupees
         
         log_event("SL_PRICE_ROUNDING", f"Rounded SL price for {symbol}",
@@ -1693,6 +1842,7 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         )
         
         # Track successful execution for analytics
+        # 🔧 CRITICAL FIX: Wrap in try-except to ensure trading never breaks for analytics
         try:
             from .analytics.alert_integration import track_execution_success
             trade_results = {
@@ -1702,8 +1852,12 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
                 "execution_price": price
             }
             track_execution_success(alert, trade_results)
-        except Exception:
-            pass  # Never break trading for analytics
+            log_event("ANALYTICS_TRACKED", f"Successfully tracked execution for analytics", symbol=symbol)
+        except Exception as analytics_error:
+            # Log but never break trading for analytics failures
+            log_event("ANALYTICS_ERROR", f"Analytics tracking failed but trade succeeded: {str(analytics_error)}",
+                     symbol=symbol, error_type=type(analytics_error).__name__)
+            # Continue execution - trading must complete
         
         log_trade_execution("EXECUTION_COMPLETE", symbol, "BUY",
                           order_id=order.order_id,
@@ -2009,6 +2163,30 @@ def validate_sell_signal_with_analytics(alert: Dict[str, Any], position: Dict[st
             profit_pct = ((current_price - entry_price) / entry_price) * 100
         else:
             profit_pct = 0
+        
+        # CRITICAL FIX: Skip analytics validation if rate limiter is exhausted
+        # This prevents order rejection due to burst of validation API calls
+        try:
+            rate_limiter = trading_state.broker.rate_limiter
+            if hasattr(rate_limiter, 'get_statistics'):
+                stats = rate_limiter.get_statistics()
+                second_bucket = stats.get('second_bucket', {})
+                available_tokens = second_bucket.get('tokens', 1)
+                
+                # If <3 tokens available, skip analytics to reserve tokens for order placement
+                if available_tokens < 3:
+                    log_event("ANALYTICS_SKIPPED_RATE_LIMIT_SELL", 
+                             f"Skipping analytics for SELL {symbol} - rate limiter exhausted ({available_tokens:.1f} tokens available)",
+                             symbol=symbol, available_tokens=round(available_tokens, 1), profit_pct=round(profit_pct, 2))
+                    return {
+                        "approved": True,
+                        "reason": "Rate limit protection - analytics validation skipped to preserve tokens for order placement",
+                        "signal": "RATE_LIMIT_PROTECTED",
+                        "details": {"tokens_available": round(available_tokens, 1), "profit_pct": round(profit_pct, 2)}
+                    }
+        except Exception as e:
+            # If rate limiter check fails, continue normally
+            log_event("RATE_LIMIT_CHECK_ERROR", f"Error checking rate limiter for SELL: {e}")
         
         # Get enhanced analytics
         log_event("ANALYTICS", f"Fetching enhanced analytics for SELL signal {symbol}")
@@ -2463,11 +2641,11 @@ def process_learning_queue():
                     # 🎯 PAPER_TRADE MARKER - ML Training Marker #2
                     # This explicit marker helps ML learn from unlimited paper trades
                     entry_price = alert.get('price', 0)
-                    # 🔴 FIX: Round SL price to valid STOPLOSS order tick size (multiple of ₹0.10)
-                    # AngelOne requires 10 paise intervals for SL orders, not 5 paise
+                    # 🔴 FIX: Round SL price to valid STOPLOSS order tick size (multiple of ₹0.05)
+                    # NSE requires 5 paise intervals for all orders
                     sl_price_raw = entry_price * (1 - TradingConfig.DEFAULT_SL_PERCENTAGE / 100)
-                    sl_paise = int(sl_price_raw * 100)
-                    sl_paise_rounded = (sl_paise // 10) * 10  # Round DOWN to nearest 10 paise
+                    sl_paise = round(sl_price_raw * 100)
+                    sl_paise_rounded = round(sl_paise / 5) * 5  # Round to nearest 5 paise
                     sl_price = sl_paise_rounded / 100.0
                     
                     log_event("PAPER_TRADE", 

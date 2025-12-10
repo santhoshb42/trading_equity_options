@@ -53,6 +53,12 @@ def track_execution_success(alert_data: Dict[str, Any], trade_result: Dict[str, 
     Integration point: Add after successful order placement
     """
     try:
+        # 🔧 DEFENSIVE: Ensure we have valid data before passing to tracker
+        if not alert_data or not isinstance(alert_data, dict):
+            return
+        if not trade_result or not isinstance(trade_result, dict):
+            return
+            
         execution_data = {
             'capital_used': trade_result.get('capital_used', 0),
             'quantity': trade_result.get('quantity', 0),
@@ -60,9 +66,12 @@ def track_execution_success(alert_data: Dict[str, Any], trade_result: Dict[str, 
             'execution_price': trade_result.get('execution_price', 0)
         }
         track_alert_executed(alert_data, execution_data)
-    except Exception:
+    except Exception as e:
         # Silently fail - never break trading
-        pass
+        # Log to help debug but don't raise
+        from ..bot_logging import log_event
+        log_event("ANALYTICS_SILENT_FAIL", f"Analytics tracking silently failed: {str(e)}",
+                 error_type=type(e).__name__)
 
 
 def track_execution_failure(alert_data: Dict[str, Any], rejection_reason: str) -> None:

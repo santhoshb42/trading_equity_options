@@ -288,19 +288,40 @@ class AngelOneBroker:
         self.session_refresh_enabled = True
         self.session_refresh_lock = threading.Lock()
         
-        # Initialize rate limiter (use shared limiter from rate_limiter module)
+        # Initialize PRIORITY rate limiter - ensures orders NEVER fail due to rate limits
         try:
-            # prefer using the centralized limiter instance
-            self.rate_limiter = get_rate_limiter()
-        except Exception:
-            # fallback to local implementation if global factory not available
-            self.rate_limiter = AngelOneRateLimiter()
+            from .priority_rate_limiter import PriorityRateLimiter
+            self.rate_limiter = PriorityRateLimiter(
+                rps_limit=AngelOneConfig.REQUESTS_PER_SECOND,
+                rpm_limit=AngelOneConfig.REQUESTS_PER_MINUTE
+            )
+            log_event("BROKER_INIT", "✅ Priority rate limiter initialized - orders have reserved capacity")
+        except Exception as e:
+            log_event("BROKER_INIT", f"⚠️ Failed to load priority limiter, using fallback: {e}")
+            # fallback to standard rate limiter if priority limiter not available
+            try:
+                self.rate_limiter = get_rate_limiter()
+            except Exception:
+                from .rate_limiter import AngelOneRateLimiter
+                self.rate_limiter = AngelOneRateLimiter()
         
         # Create data directory if not exists
         self.session_file.parent.mkdir(parents=True, exist_ok=True)
         
         # Load instruments
         self.load_instruments()
+        
+        # Initialize bulk LTP fetcher (reduces API calls and rate limiting)
+        try:
+            from .bulk_ltp_fetcher import BulkLTPFetcher
+            self.bulk_ltp_fetcher = BulkLTPFetcher(
+                smart_api=None,  # Will set after authentication
+                cache_ttl_seconds=5
+            )
+            log_event("BROKER_INIT", "✅ Bulk LTP fetcher initialized - will fetch up to 50 symbols per request")
+        except Exception as e:
+            log_event("BROKER_INIT", f"⚠️ Failed to initialize bulk LTP fetcher: {e}")
+            self.bulk_ltp_fetcher = None
     
     def _safe_api_call_with_ag8001_retry(self, func, *args, max_retries: int = 3, initial_backoff: float = 1.0, **kwargs):
         """
@@ -402,17 +423,23 @@ class AngelOneBroker:
         )
         return None
     
-    def _safe_api_call(self, func, *args, timeout: float = 5.0, **kwargs):
+    def _safe_api_call(self, func, *args, timeout: float = None, **kwargs):
         """
-        Make a rate-limited API call safely with token expiry detection
+        Make a PRIORITY rate-limited API call safely
         
-        CRITICAL: On rate limit timeout, queue the request for retry instead of returning None
-        This prevents order loss due to rate limiting.
+        CRITICAL: Order operations (placeOrder, modifyOrder, cancelOrder) have:
+        - Reserved capacity (50% of rate limit)
+        - Infinite timeout (will NEVER fail due to rate limits)
+        - Priority over all other API calls
+        
+        Non-critical operations (LTP, positions) have:
+        - Shared capacity
+        - Quick timeout to avoid blocking
         
         Args:
             func: API function to call
             *args: Function arguments
-            timeout: Maximum time to wait for rate limit
+            timeout: Maximum time to wait (None = use priority default)
             **kwargs: Function keyword arguments
             
         Returns:
@@ -420,147 +447,146 @@ class AngelOneBroker:
         """
         from .bot_logging import log_broker_error
         
-        # Log the timeout being used
+        # Get endpoint name and priority
         endpoint_name = func.__name__ if hasattr(func, '__name__') else str(func)
-        log_event("RATE_LIMIT_WAIT_START", f"Waiting for rate limit clearance",
-                 endpoint=endpoint_name, timeout_seconds=timeout)
         
-        # Wait for rate limit clearance
-        if not self.rate_limiter.wait_for_request(timeout):
-            log_event("RATE_LIMIT_TIMEOUT", f"API call timed out waiting for rate limit clearance - QUEUEING FOR RETRY",
-                     endpoint=endpoint_name, timeout_requested=timeout)
-            
-            # Log rate limit exhaustion to broker errors
-            log_broker_error(
-                error_type="RATE_LIMIT_EXCEEDED",
-                message=f"Timeout waiting {timeout}s for rate limit clearance - Request queued for automatic retry",
-                endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
-                context={
-                    "timeout": timeout,
-                    "rate_limiter_stats": self.get_rate_limiter_stats(),
-                    "action": "QUEUED_FOR_RETRY"
-                }
-            )
-            
-            # 🔥 CRITICAL FIX: Queue the request for automatic retry instead of losing it
-            # This prevents order loss when rate limit is exceeded
-            def retry_callback():
-                """Callback to retry the API call"""
-                return func(*args, **kwargs)
-            
-            self.rate_limiter.queue_request(
-                request_type=endpoint_name,
-                callback=retry_callback,
-                args=(),  # Already bound in retry_callback
-                kwargs={}
-            )
-            
-            # Return a special marker indicating it was queued
-            # Caller should check for this and handle accordingly
-            return {"__QUEUED_FOR_RETRY__": True, "endpoint": endpoint_name}
+        # Check if using priority rate limiter
+        has_priority = hasattr(self.rate_limiter, 'acquire')
         
-        # Consume token and make call
-        if self.rate_limiter.consume_token():
-            try:
-                # DEBUG: Log before API call
-                endpoint_name = func.__name__ if hasattr(func, '__name__') else str(func)
-                log_event("API_CALL_DEBUG", f"About to call {endpoint_name} with args={args}, kwargs={kwargs}")
+        if has_priority:
+            # PRIORITY SYSTEM: Orders get infinite timeout, others get priority-based timeout
+            log_event("PRIORITY_API_CALL", f"Requesting priority access for {endpoint_name}",
+                     endpoint=endpoint_name,
+                     timeout="PRIORITY_DEFAULT" if timeout is None else timeout)
+            
+            # Acquire with priority (orders automatically get infinite timeout + reserved capacity)
+            if not self.rate_limiter.acquire(endpoint_name, timeout):
+                # Should NEVER happen for CRITICAL operations (placeOrder, modifyOrder, cancelOrder)
+                # But can happen for non-critical operations (LTP, positions)
+                log_event("PRIORITY_RATE_LIMIT_BLOCKED", 
+                         f"⛔ {endpoint_name} blocked by rate limiter after timeout",
+                         endpoint=endpoint_name)
                 
-                result = func(*args, **kwargs)
+                log_broker_error(
+                    error_type="RATE_LIMIT_EXCEEDED",
+                    message=f"{endpoint_name} blocked after waiting for rate limit",
+                    endpoint=endpoint_name,
+                    context={
+                        "timeout": timeout,
+                        "priority_system": "enabled"
+                    }
+                )
+                return None
+        else:
+            # LEGACY SYSTEM: Fall back to old wait_for_request method
+            log_event("RATE_LIMIT_WAIT_START", f"Waiting for rate limit clearance",
+                     endpoint=endpoint_name, timeout_seconds=timeout if timeout else 30.0)
+            
+            if not self.rate_limiter.wait_for_request(timeout if timeout else 30.0):
+                log_event("RATE_LIMIT_TIMEOUT", f"⛔ {endpoint_name} timed out waiting for rate limit",
+                         endpoint=endpoint_name)
+                return None
+        
+        # Rate limit acquired - make the API call
+        try:
+            # DEBUG: Log before API call
+            log_event("API_CALL_DEBUG", f"About to call {endpoint_name} with args={args}, kwargs={kwargs}")
+            
+            result = func(*args, **kwargs)
+            
+            # DEBUG: Log after API call
+            log_event("API_CALL_DEBUG", f"{endpoint_name} returned: {result}")
+            
+            # Handle None response (SmartAPI v1.5.5 returns None for AG8001 errors)
+            endpoint_name = func.__name__ if hasattr(func, '__name__') else str(func)
+            
+            # For placeOrder, log None but don't auto-recover (caller handles it)
+            if result is None and endpoint_name == 'placeOrder':
+                log_event("ORDER_API_NONE", "placeOrder returned None - likely token invalid")
+                log_broker_error(
+                    error_type="TOKEN_INVALID",
+                    error_code="AG8001",
+                    message="placeOrder returned None - Invalid Token suspected",
+                    endpoint=endpoint_name,
+                    context={
+                        "session_age_minutes": (datetime.now() - self.session_created_at).total_seconds() / 60 if hasattr(self, 'session_created_at') and self.session_created_at else None
+                    }
+                )
+                return None
+            
+            # For other endpoints, attempt auto-recovery
+            if result is None:
+                log_event("SESSION_EXPIRED", "API returned None - likely Invalid Token (AG8001)")
                 
-                # DEBUG: Log after API call
-                log_event("API_CALL_DEBUG", f"{endpoint_name} returned: {result}")
+                # Log session expiry
+                log_broker_error(
+                    error_type="SESSION_EXPIRED",
+                    error_code="AG8001",
+                    message="API returned None - Invalid Token suspected",
+                    endpoint=endpoint_name,
+                    context={
+                        "session_age_minutes": (datetime.now() - self.session_created_at).total_seconds() / 60 if hasattr(self, 'session_created_at') and self.session_created_at else None
+                    },
+                    recovery_attempted=True
+                )
                 
-                # Handle None response (SmartAPI v1.5.5 returns None for AG8001 errors)
-                endpoint_name = func.__name__ if hasattr(func, '__name__') else str(func)
+                # Clear session cache and force re-login
+                self.session_token = None
+                self.refresh_token = None
+                if self.session_file.exists():
+                    self.session_file.unlink()
                 
-                # For placeOrder, log None but don't auto-recover (caller handles it)
-                if result is None and endpoint_name == 'placeOrder':
-                    log_event("ORDER_API_NONE", "placeOrder returned None - likely token invalid")
-                    log_broker_error(
-                        error_type="TOKEN_INVALID",
-                        error_code="AG8001",
-                        message="placeOrder returned None - Invalid Token suspected",
-                        endpoint=endpoint_name,
-                        context={
-                            "session_age_minutes": (datetime.now() - self.session_created_at).total_seconds() / 60 if hasattr(self, 'session_created_at') and self.session_created_at else None
-                        }
-                    )
-                    return None
-                
-                # For other endpoints, attempt auto-recovery
-                if result is None:
-                    log_event("SESSION_EXPIRED", "API returned None - likely Invalid Token (AG8001)")
-                    
-                    # Log session expiry
+                # Attempt recovery
+                if self.login():
+                    log_event("SESSION_RECOVERED", "Successfully re-authenticated after None response")
                     log_broker_error(
                         error_type="SESSION_EXPIRED",
                         error_code="AG8001",
-                        message="API returned None - Invalid Token suspected",
-                        endpoint=endpoint_name,
-                        context={
-                            "session_age_minutes": (datetime.now() - self.session_created_at).total_seconds() / 60 if hasattr(self, 'session_created_at') and self.session_created_at else None
-                        },
-                        recovery_attempted=True
+                        message="Token recovery successful after None response",
+                        endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
+                        recovery_attempted=True,
+                        recovery_success=True
                     )
-                    
-                    # Clear session cache and force re-login
-                    self.session_token = None
-                    self.refresh_token = None
-                    if self.session_file.exists():
-                        self.session_file.unlink()
-                    
-                    # Attempt recovery
-                    if self.login():
-                        log_event("SESSION_RECOVERED", "Successfully re-authenticated after None response")
-                        log_broker_error(
-                            error_type="SESSION_EXPIRED",
-                            error_code="AG8001",
-                            message="Token recovery successful after None response",
-                            endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
-                            recovery_attempted=True,
-                            recovery_success=True
-                        )
-                        # Brief delay to let new session propagate
-                        import time
-                        time.sleep(0.5)
-                        # Retry the original call once (directly, without rate limiter check since we already consumed token)
-                        try:
-                            retry_result = func(*args, **kwargs)
-                            if retry_result is None:
-                                log_event("SESSION_RECOVERY_RETRY_FAILED", "Retry after recovery still returned None")
-                                log_broker_error(
-                                    error_type="SESSION_EXPIRED",
-                                    error_code="AG8001",
-                                    message="Retry failed after successful login - still getting None response",
-                                    endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
-                                    recovery_attempted=True,
-                                    recovery_success=False
-                                )
-                            return retry_result
-                        except Exception as retry_err:
-                            log_event("SESSION_RECOVERY_RETRY_EXCEPTION", f"Retry after recovery threw exception: {str(retry_err)}")
+                    # Brief delay to let new session propagate
+                    import time
+                    time.sleep(0.5)
+                    # Retry the original call once (directly, without rate limiter check since we already consumed token)
+                    try:
+                        retry_result = func(*args, **kwargs)
+                        if retry_result is None:
+                            log_event("SESSION_RECOVERY_RETRY_FAILED", "Retry after recovery still returned None")
                             log_broker_error(
-                                error_type="API_ERROR",
-                                message=f"Retry exception after recovery: {str(retry_err)}",
+                                error_type="SESSION_EXPIRED",
+                                error_code="AG8001",
+                                message="Retry failed after successful login - still getting None response",
                                 endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
-                                context={"exception_type": type(retry_err).__name__}
+                                recovery_attempted=True,
+                                recovery_success=False
                             )
-                            return None
-                    else:
-                        log_event("SESSION_RECOVERY_FAILED", "Failed to re-authenticate")
+                        return retry_result
+                    except Exception as retry_err:
+                        log_event("SESSION_RECOVERY_RETRY_EXCEPTION", f"Retry after recovery threw exception: {str(retry_err)}")
                         log_broker_error(
-                            error_type="SESSION_EXPIRED",
-                            error_code="AG8001",
-                            message="Token recovery failed after None response",
+                            error_type="API_ERROR",
+                            message=f"Retry exception after recovery: {str(retry_err)}",
                             endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
-                            recovery_attempted=True,
-                            recovery_success=False
+                            context={"exception_type": type(retry_err).__name__}
                         )
                         return None
-                
-                # Check for invalid token error (AG8001) in dict response
-                if isinstance(result, dict):
+                else:
+                    log_event("SESSION_RECOVERY_FAILED", "Failed to re-authenticate")
+                    log_broker_error(
+                        error_type="SESSION_EXPIRED",
+                        error_code="AG8001",
+                        message="Token recovery failed after None response",
+                        endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
+                        recovery_attempted=True,
+                        recovery_success=False
+                    )
+                    return None
+            
+            # Check for invalid token error (AG8001) in dict response
+            if isinstance(result, dict):
                     # Try both errorCode (capitalized) and errorcode (lowercase) for compatibility
                     error_code = result.get('errorcode') or result.get('errorCode')
                     
@@ -598,15 +624,15 @@ class AngelOneBroker:
                             error_code=error_code,
                             message=error_message,
                             endpoint=func.__name__ if hasattr(func, '__name__') else str(func),
-                            context={
-                                "full_response": result,
-                                "args": str(args)[:200],  # Truncate for safety
-                                "kwargs": str(kwargs)[:200]
-                            }
-                        )
-                
-                return result
-            except Exception as e:
+                        context={
+                            "full_response": result,
+                            "args": str(args)[:200],  # Truncate for safety
+                            "kwargs": str(kwargs)[:200]
+                        }
+                    )
+            
+            return result
+        except Exception as e:
                 error_msg = str(e)
                 exception_type = type(e).__name__
                 
@@ -1321,7 +1347,6 @@ class AngelOneBroker:
         
         return f"{rupees:.2f}"
     
-    @rate_limited(call_type="place_order", timeout=30.0)
     def place_order(
         self,
         symbol: str,
@@ -1605,7 +1630,6 @@ class AngelOneBroker:
                      symbol=symbol, action=action)
             return None
     
-    @rate_limited(call_type="modify_order", timeout=30.0)
     def modify_order(self, order_id: str, symbol: str, quantity: int, price: float, 
                     order_type: str = "STOPLOSS_MARKET", product_type: str = "INTRADAY") -> bool:
         """
@@ -2223,6 +2247,92 @@ class AngelOneBroker:
         except Exception as e:
             log_event("ERROR", f"Error getting LTP for {symbol}: {str(e)}")
             return None
+    
+    @rate_limited(call_type="ltp", timeout=10.0)
+    def get_ltp_bulk(self, symbols: List[str]) -> Dict[str, Optional[float]]:
+        """
+        Get LTP for multiple symbols in fewer API calls using bulk marketData endpoint.
+        
+        OPTIMIZATION: Instead of calling get_ltp() N times (N API calls), this fetches
+        up to 50 symbols in a single request, dramatically reducing API usage and rate limiting.
+        
+        Args:
+            symbols: List of stock symbols (e.g., ["RELIANCE-EQ", "INFY-EQ"])
+        
+        Returns:
+            Dictionary mapping symbol -> LTP value (None if not available)
+        
+        Example:
+            ltps = broker.get_ltp_bulk(["RELIANCE-EQ", "INFY-EQ", "TECHM-EQ"])
+            # Returns: {"RELIANCE-EQ": 2945.5, "INFY-EQ": 1850.3, "TECHM-EQ": 1580.2}
+        """
+        if not symbols:
+            return {}
+        
+        if DevConfig.is_paper_trading():
+            # Return mock prices for paper trading
+            return {sym: DevConfig.MOCK_PRICES.get(sym, 0.0) for sym in symbols}
+        
+        if not self.ensure_session():
+            return {sym: None for sym in symbols}
+        
+        try:
+            # Update bulk fetcher with current smart_api instance
+            if self.bulk_ltp_fetcher and not self.bulk_ltp_fetcher.smart_api:
+                self.bulk_ltp_fetcher.smart_api = self.smart_api
+            
+            # Build token dictionary, grouped by exchange
+            token_dict = {}
+            symbol_to_token = {}
+            
+            for symbol in symbols:
+                # Determine exchange based on symbol suffix
+                if "-EQ" in symbol or "NSE" in symbol.upper():
+                    exchange = "NSE"
+                elif "NFO" in symbol.upper() or any(x in symbol for x in ["DEC", "JAN", "FEB", "MAR"]):
+                    exchange = "NFO"
+                else:
+                    # Default to NSE for safety
+                    exchange = "NSE"
+                
+                token = self.get_instrument_token(symbol)
+                if not token:
+                    log_event("BULK_LTP_NO_TOKEN", f"No token found for {symbol}")
+                    continue
+                
+                if exchange not in token_dict:
+                    token_dict[exchange] = []
+                
+                token_dict[exchange].append(token)
+                symbol_to_token[token] = symbol
+            
+            if not token_dict:
+                log_event("BULK_LTP_NO_TOKENS", f"Could not map any symbols to tokens")
+                return {sym: None for sym in symbols}
+            
+            log_event("BULK_LTP_FETCH", f"Fetching LTP for {len(symbol_to_token)} symbols",
+                     exchanges=list(token_dict.keys()), symbol_count=len(symbol_to_token))
+            
+            # Fetch bulk LTP with batching for >50 symbols
+            ltp_by_token = self.bulk_ltp_fetcher.fetch_bulk_ltp_batched(token_dict)
+            
+            # Convert back to symbol mapping
+            result = {sym: None for sym in symbols}
+            for token_key, ltp in ltp_by_token.items():
+                parts = token_key.split("_", 1)
+                if len(parts) == 2:
+                    token = parts[1]
+                    symbol = symbol_to_token.get(token)
+                    if symbol:
+                        result[symbol] = float(ltp)
+            
+            log_event("BULK_LTP_SUCCESS", f"Successfully fetched LTP for {sum(1 for v in result.values() if v)} symbols")
+            
+            return result
+        
+        except Exception as e:
+            log_event("BULK_LTP_ERROR", f"Error fetching bulk LTP: {str(e)}", error=str(e))
+            return {sym: None for sym in symbols}
     
     def get_rate_limiter_stats(self) -> Dict[str, Any]:
         """Get rate limiter statistics (compat shim)

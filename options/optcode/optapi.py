@@ -334,14 +334,20 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.debug(f"ALERT_PROCESS: GREEKS_OK | delta={selected_contract.delta:.3f} | gamma={selected_contract.gamma:.5f}")
         
-        # Place order
-        lot_size = 1
-        logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={lot_size} | premium=₹{selected_contract.ltp:.2f}")
+        # Get lot size from instrument manager and apply NO_OF_LOTS multiplier for scaling
+        from optcode.optconfig import OptionsTradingConfig
+        base_lot_size = state['instrument_manager'].get_lot_size(selected_contract.symbol)
+        no_of_lots = OptionsTradingConfig.NO_OF_LOTS
+        quantity = base_lot_size * no_of_lots
+        
+        logger.debug(f"ALERT_PROCESS: LOT_SIZE | contract={selected_contract.symbol} | base_lotsize={base_lot_size} | no_of_lots={no_of_lots} | qty={quantity}")
+        
+        logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | premium=₹{selected_contract.ltp:.2f}")
         
         order_id = state['broker'].place_options_order(
             symbol=selected_contract.symbol,
             action='BUY',
-            quantity=lot_size,
+            quantity=quantity,
             price=selected_contract.ltp,
             order_type='MARKET'
         )
@@ -365,9 +371,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             expiry=expiry,
             contract_type=contract_type,
             action='BUY',
-            quantity=lot_size,
+            quantity=quantity,
             entry_premium=selected_contract.ltp,
-            order_id=order_id
+            order_id=order_id,
+            underlying_alert_price=alert_price if alert_price > 0 else None
         )
         
         logger.info(f"ALERT_PROCESS: SUCCESS | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id}")

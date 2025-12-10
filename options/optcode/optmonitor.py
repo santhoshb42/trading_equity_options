@@ -18,6 +18,79 @@ from .fake_move_detector import get_fake_move_detector
 from .trade_logger import get_trade_logger
 
 # =============================================================================
+# LTP Bucket Manager (for bulk fetching optimization)
+# =============================================================================
+
+class LTPBucketManager:
+    """
+    Manages bucketed LTP checking to reduce API calls for options positions.
+    
+    Instead of checking LTP for all positions every cycle,
+    divide positions into buckets and rotate through them.
+    
+    Example: 10 positions → 2 buckets of 5 each
+    Cycle 1: Check bucket 1 (5 get_market_data calls)
+    Cycle 2: Check bucket 2 (5 get_market_data calls)
+    Cycle 3: Back to bucket 1
+    
+    Result: 5 API calls/second instead of 10! ✅
+    """
+    
+    def __init__(self, bucket_size: int = 5):
+        """Initialize bucket manager"""
+        self.bucket_size = bucket_size
+        self.buckets: List[List[str]] = []
+        self.current_bucket_index = 0
+        self.last_update_time: Dict[str, datetime] = {}
+    
+    def create_buckets(self, symbols: List[str]):
+        """Divide symbols into buckets"""
+        self.buckets = []
+        
+        for i in range(0, len(symbols), self.bucket_size):
+            bucket = symbols[i:i+self.bucket_size]
+            self.buckets.append(bucket)
+        
+        self.current_bucket_index = 0
+        
+        if self.buckets:
+            log_event("OPTIONS_BUCKET_MANAGER", f"Created {len(self.buckets)} buckets",
+                     bucket_size=self.bucket_size,
+                     total_positions=len(symbols),
+                     bucket_distribution=[len(b) for b in self.buckets])
+    
+    def get_current_bucket(self) -> List[str]:
+        """Get current bucket and advance to next"""
+        if not self.buckets:
+            return []
+        
+        current_bucket = self.buckets[self.current_bucket_index]
+        self.current_bucket_index = (self.current_bucket_index + 1) % len(self.buckets)
+        
+        return current_bucket
+    
+    def record_check(self, symbol: str):
+        """Record when symbol was last checked"""
+        self.last_update_time[symbol] = datetime.now()
+    
+    def get_check_status(self) -> Dict[str, Any]:
+        """Get check status for all symbols"""
+        status = {
+            "total_buckets": len(self.buckets),
+            "current_bucket_index": self.current_bucket_index,
+            "bucket_size": self.bucket_size,
+            "symbols_per_bucket": [len(b) for b in self.buckets],
+            "last_checks": {}
+        }
+        
+        now = datetime.now()
+        for symbol, check_time in self.last_update_time.items():
+            seconds_ago = (now - check_time).total_seconds()
+            status["last_checks"][symbol] = f"{seconds_ago:.1f}s ago"
+        
+        return status
+
+# =============================================================================
 # Options Position Model
 # =============================================================================
 
@@ -31,10 +104,11 @@ class OptionPosition:
                  expiry: str,  # YYYY-MM-DD
                  contract_type: str,  # CE or PE
                  action: str,  # BUY or SELL (opening action)
-                 quantity: int,  # Lot size
-                 entry_premium: float,  # Entry premium paid
+                 quantity: int,  # Lot size or total quantity (contracts)
+                 entry_premium: float,  # Entry premium paid per contract
                  entry_time: datetime,
-                 order_id: str = ""):
+                 order_id: str = "",
+                 underlying_alert_price: Optional[float] = None):
         self.symbol = symbol
         self.underlying = underlying
         self.strike = strike
@@ -46,9 +120,11 @@ class OptionPosition:
         self.entry_time = entry_time
         self.order_id = order_id
         self.trade_id = None  # Track trade_id from trade_logger
+        self.underlying_alert_price = underlying_alert_price
         
         # Current state
         self.current_premium = entry_premium
+        self.highest_premium = entry_premium  # Track highest premium for trailing exit
         self.current_greeks = {
             'delta': 0.5,
             'gamma': 0.05,
@@ -78,6 +154,11 @@ class OptionPosition:
     def update_market_data(self, current_premium: float, greeks: Dict[str, float], iv: float):
         """Update position with current market data"""
         self.current_premium = current_premium
+        
+        # Track highest premium reached (for trailing exit)
+        if current_premium > self.highest_premium:
+            self.highest_premium = current_premium
+        
         self.current_greeks = greeks
         self.current_iv = iv
         self.last_updated = datetime.now()
@@ -110,12 +191,16 @@ class OptionPosition:
         return {
             'symbol': self.symbol,
             'entry_premium': self.entry_premium,
+            'entry_premium_total': self.entry_premium * self.quantity,
             'exit_premium': exit_premium,
+            'exit_premium_total': exit_premium * self.quantity,
             'quantity': self.quantity,
             'pnl': self.realized_pnl,
             'pnl_percent': (premium_difference / self.entry_premium * 100) if self.entry_premium else 0,
             'duration': (self.exit_time - self.entry_time).total_seconds(),
-            'exit_reason': exit_reason
+            'exit_reason': exit_reason,
+            'underlying_alert_price': self.underlying_alert_price,
+            'entry_time': self.entry_time.isoformat() if isinstance(self.entry_time, datetime) else self.entry_time
         }
     
     def is_expired(self) -> bool:
@@ -139,14 +224,18 @@ class OptionPosition:
             'action': self.action,
             'quantity': self.quantity,
             'entry_premium': self.entry_premium,
+            'entry_premium_total': self.entry_premium * self.quantity,
             'entry_time': self.entry_time.isoformat() if isinstance(self.entry_time, datetime) else self.entry_time,
             'order_id': self.order_id,
             'current_premium': self.current_premium,
+            'current_premium_total': self.current_premium * self.quantity,
             'current_greeks': self.current_greeks,
             'current_iv': self.current_iv,
             'unrealized_pnl': self.unrealized_pnl,
+            'highest_premium': self.highest_premium,
             'days_to_expiry': self.days_to_expiry(),
-            'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated
+            'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated,
+            'underlying_alert_price': self.underlying_alert_price
         }
 
 # =============================================================================
@@ -166,6 +255,9 @@ class OptionPositionMonitor:
         self.positions_file = BASE_DIR / "data" / "option_positions.json"
         self.pnl_history_file = BASE_DIR / "data" / "option_pnl_history.json"
         
+        # Bucket manager for bulk LTP fetching (optimization)
+        self.ltp_bucket_manager = LTPBucketManager(bucket_size=5)
+        
         # Load existing positions
         self._load_positions()
     
@@ -178,7 +270,8 @@ class OptionPositionMonitor:
                     action: str,
                     quantity: int,
                     entry_premium: float,
-                    order_id: str) -> bool:
+                    order_id: str,
+                    underlying_alert_price: Optional[float] = None) -> bool:
         """Add new option position"""
         try:
             logger.debug(f"POSITION_ADD: {symbol} | qty={quantity} | premium={entry_premium:.2f}")
@@ -198,7 +291,8 @@ class OptionPositionMonitor:
                 quantity=quantity,
                 entry_premium=entry_premium,
                 entry_time=datetime.now(),
-                order_id=order_id
+                order_id=order_id,
+                underlying_alert_price=underlying_alert_price
             )
             
             self.positions[symbol] = position
@@ -234,7 +328,8 @@ class OptionPositionMonitor:
                 'expiry': expiry,
                 'quantity': quantity,
                 'entry_premium': entry_premium,
-                'order_id': order_id
+                'order_id': order_id,
+                'underlying_alert_price': underlying_alert_price
             })
             
             return True
@@ -336,20 +431,58 @@ class OptionPositionMonitor:
         return closed
     
     def check_profit_targets(self) -> List[Dict[str, Any]]:
-        """Close positions at profit targets"""
+        """Close positions with intelligent trailing exit strategy
+        
+        Strategy:
+        1. Lock in initial profit target (5%)
+        2. Trail by configured buffer (2%) from peak
+        3. Exit when price pulls back from peak
+        
+        This lets winners run while protecting against reversals.
+        """
         closed = []
         profit_target = OptionsTradingConfig.PROFIT_TARGET_PERCENTAGE
+        enable_trailing = OptionsTradingConfig.ENABLE_TRAILING_EXIT
+        trailing_buffer = OptionsTradingConfig.TRAILING_BUFFER_PERCENTAGE
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
             
             if position.unrealized_pnl > 0:
-                profit_percent = (position.unrealized_pnl / (position.entry_premium * position.quantity)) * 100
+                # Calculate current and peak profit percentages
+                current_profit_pct = (position.current_premium - position.entry_premium) / position.entry_premium * 100
+                peak_profit_pct = (position.highest_premium - position.entry_premium) / position.entry_premium * 100
                 
-                if profit_percent >= profit_target:
-                    pnl = self.close_position(symbol, position.current_premium, "PROFIT")
+                should_exit = False
+                exit_reason = "PROFIT"
+                
+                if enable_trailing and peak_profit_pct >= profit_target:
+                    # Trailing exit: exit when price pulls back from peak
+                    # Current price is more than trailing_buffer% below peak
+                    if current_profit_pct <= (peak_profit_pct - trailing_buffer):
+                        should_exit = True
+                        exit_reason = f"TRAILING_EXIT (peak={peak_profit_pct:.1f}%, current={current_profit_pct:.1f}%, buffer={trailing_buffer:.1f}%)"
+                        logger.info(f"TRAILING_EXIT: {symbol} | Peak profit: {peak_profit_pct:.1f}% → Current: {current_profit_pct:.1f}% | Exiting at: ₹{position.current_premium:.2f}")
+                else:
+                    # Standard exit: exit at initial profit target (for non-trailing mode)
+                    if current_profit_pct >= profit_target:
+                        should_exit = True
+                        exit_reason = f"PROFIT_TARGET ({current_profit_pct:.1f}%)"
+                
+                if should_exit:
+                    pnl = self.close_position(symbol, position.current_premium, exit_reason)
                     if pnl:
+                        # Track max profit that was available
+                        max_profit = position.highest_premium - position.entry_premium
+                        pnl['max_profit'] = max_profit
+                        pnl['peak_profit_percent'] = peak_profit_pct
                         closed.append(pnl)
+                        
+                        # Log for analysis
+                        logger.info(f"PROFIT_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
+                                   f"Peak: ₹{position.highest_premium:.2f} ({peak_profit_pct:.1f}%) | "
+                                   f"Exit: ₹{position.current_premium:.2f} ({current_profit_pct:.1f}%) | "
+                                   f"PnL: ₹{pnl['pnl']:.2f}")
         
         return closed
     
@@ -399,37 +532,70 @@ class OptionPositionMonitor:
     
     def refresh_position_ltps(self) -> Dict[str, Any]:
         """
-        Refresh LTP and Greeks for all open positions from broker.
-        Fetches real market data including Greeks, IV, bid-ask, volume, OI.
+        Refresh LTP and Greeks for all open positions from broker using BUCKETED approach.
+        
+        OPTIMIZATION: Uses bucketing to reduce API calls
+        - Divides N positions into buckets of 5
+        - Only fetches 1 bucket per call to this method
+        - Reduces rate limit consumption by 5-10x
+        
+        Instead of: 10 positions = 10 API calls per refresh cycle
+        Now: 10 positions = 2 API calls per refresh cycle (5 per bucket)
         
         Returns:
             Dictionary with refresh statistics
         """
         refresh_stats = {
-            'positions_checked': len(self.positions),
+            'positions_checked': 0,
             'ltps_updated': 0,
             'greeks_updated': 0,
             'failed_fetches': 0,
-            'errors': []
+            'errors': [],
+            'bucket_info': {}
         }
         
         if not self.broker:
             logger.warning("REFRESH_LTP: No broker available")
             return refresh_stats
         
-        for symbol in list(self.positions.keys()):
+        # Setup buckets if we have positions
+        if self.positions and not self.ltp_bucket_manager.buckets:
+            symbols = list(self.positions.keys())
+            self.ltp_bucket_manager.create_buckets(symbols)
+            logger.info(f"REFRESH_LTP: Initialized {len(self.ltp_bucket_manager.buckets)} buckets for {len(symbols)} positions")
+        
+        # Get current bucket to process
+        current_bucket = self.ltp_bucket_manager.get_current_bucket()
+        
+        if not current_bucket:
+            logger.warning("REFRESH_LTP: No bucket available")
+            return refresh_stats
+        
+        refresh_stats['bucket_info'] = {
+            'current_bucket_index': self.ltp_bucket_manager.current_bucket_index - 1,
+            'total_buckets': len(self.ltp_bucket_manager.buckets),
+            'symbols_in_bucket': current_bucket
+        }
+        
+        # BULK FETCH: Get LTP for all symbols in current bucket
+        ltps = self.broker.get_ltp_bulk(current_bucket, exchange="NFO")
+        
+        # Process each symbol in the bucket
+        for symbol in current_bucket:
             try:
-                position = self.positions[symbol]
-                
-                # STEP 1: Fetch current market data (LTP, OHLC, volume)
-                market_data = self.broker.get_market_data(symbol, exchange="NFO")
-                
-                if not market_data or market_data.get('ltp', 0) <= 0:
-                    refresh_stats['failed_fetches'] += 1
-                    logger.warning(f"REFRESH_LTP: Failed to fetch market data for {symbol}")
+                if symbol not in self.positions:
                     continue
                 
-                current_ltp = market_data['ltp']
+                position = self.positions[symbol]
+                refresh_stats['positions_checked'] += 1
+                
+                # Get LTP from bulk fetch result
+                current_ltp = ltps.get(symbol)
+                
+                if not current_ltp or current_ltp <= 0:
+                    refresh_stats['failed_fetches'] += 1
+                    logger.warning(f"REFRESH_LTP: Failed to fetch LTP for {symbol}")
+                    continue
                 
                 # STEP 2: Fetch real Greeks and IV from option chain
                 # Use fallback defaults
@@ -495,14 +661,24 @@ class OptionPositionMonitor:
                         logger.debug(f"REFRESH_LTP: Chain search | {symbol} | looking for strike={position.strike} ({type(position.strike).__name__}), type={position.contract_type} | chain has {len(option_chain.contracts)} contracts")
                         
                         if contract:
-                            # Use REAL Greeks from broker
-                            real_greeks = {
-                                'delta': contract.delta,
-                                'gamma': contract.gamma,
-                                'theta': contract.theta,
-                                'vega': contract.vega
-                            }
-                            real_iv = contract.iv
+                            # Use REAL Greeks from broker if available, otherwise use fallbacks
+                            # Check if Greeks were actually fetched (non-zero values)
+                            if (contract.delta != 0.0 or contract.gamma != 0.0 or 
+                                contract.theta != 0.0 or contract.vega != 0.0):
+                                # Contract has real Greeks data
+                                real_greeks = {
+                                    'delta': contract.delta,
+                                    'gamma': contract.gamma,
+                                    'theta': contract.theta,
+                                    'vega': contract.vega
+                                }
+                                real_iv = contract.iv if contract.iv > 0 else 20.0
+                                refresh_stats['greeks_updated'] += 1
+                                logger.debug(f"REFRESH_LTP: GREEKS_REAL | {symbol} | delta={contract.delta:.3f} | gamma={contract.gamma:.4f} | theta={contract.theta:.4f} | vega={contract.vega:.3f} | iv={real_iv:.2f}")
+                            else:
+                                # Contract found but no Greeks data (AngelOne API limitation)
+                                # Keep fallback Greeks already set above
+                                logger.debug(f"REFRESH_LTP: GREEKS_FALLBACK | {symbol} | No real Greeks available from broker")
                             
                             # Track market liquidity data
                             position.bid_price = contract.bid if contract.bid > 0 else current_ltp
@@ -513,13 +689,10 @@ class OptionPositionMonitor:
                             # Track entry IV for IV crush detection
                             if position.entry_iv is None:
                                 position.entry_iv = real_iv
-                            
-                            logger.debug(f"REFRESH_LTP: GREEKS | {symbol} | delta={contract.delta:.3f} | gamma={contract.gamma:.4f} | theta={contract.theta:.4f} | vega={contract.vega:.3f} | iv={real_iv:.2f}")
-                            refresh_stats['greeks_updated'] += 1
                         else:
                             logger.debug(f"REFRESH_LTP: Contract not found | {symbol} | strike={position.strike} | type={position.contract_type} (using fallback Greeks)")
                     else:
-                        logger.debug(f"REFRESH_LTP: Option chain not available | {symbol} | expiry={monthly_expiry} (using fallback Greeks)")
+                        logger.debug(f"REFRESH_LTP: Option chain not available | {symbol} | expiry={monthly_expiry_iso} (using fallback Greeks)")
                         
                 except Exception as chain_error:
                     logger.debug(f"REFRESH_LTP: Could not fetch real Greeks | {symbol} | {str(chain_error)} (using fallback)")
@@ -613,9 +786,11 @@ class OptionPositionMonitor:
             if not self.positions_file.parent.exists():
                 self.positions_file.parent.mkdir(parents=True, exist_ok=True)
             
+            positions_list = [pos.to_dict() for pos in self.positions.values()]
+            positions_list.sort(key=lambda item: item.get('entry_time', ''))
             positions_data = {
                 'timestamp': datetime.now().isoformat(),
-                'positions': {sym: pos.to_dict() for sym, pos in self.positions.items()}
+                'positions': positions_list
             }
             
             with open(self.positions_file, 'w') as f:
@@ -632,7 +807,24 @@ class OptionPositionMonitor:
             with open(self.positions_file, 'r') as f:
                 data = json.load(f)
             
-            for symbol, pos_data in data.get('positions', {}).items():
+            raw_positions = data.get('positions', [])
+
+            if isinstance(raw_positions, dict):
+                positions_iter = raw_positions.items()
+            else:
+                positions_iter = (
+                    (pos.get('symbol'), pos)
+                    for pos in raw_positions
+                    if pos.get('symbol')
+                )
+
+            for symbol, pos_data in positions_iter:
+                entry_time_raw = pos_data.get('entry_time')
+                try:
+                    entry_time = datetime.fromisoformat(entry_time_raw) if entry_time_raw else datetime.now()
+                except Exception:
+                    entry_time = datetime.now()
+
                 position = OptionPosition(
                     symbol=symbol,
                     underlying=pos_data['underlying'],
@@ -642,12 +834,21 @@ class OptionPositionMonitor:
                     action=pos_data['action'],
                     quantity=pos_data['quantity'],
                     entry_premium=pos_data['entry_premium'],
-                    entry_time=datetime.fromisoformat(pos_data['entry_time']),
-                    order_id=pos_data.get('order_id', '')
+                    entry_time=entry_time,
+                    order_id=pos_data.get('order_id', ''),
+                    underlying_alert_price=pos_data.get('underlying_alert_price')
                 )
                 position.current_premium = pos_data.get('current_premium', pos_data['entry_premium'])
                 position.current_greeks = pos_data.get('current_greeks', {})
                 position.current_iv = pos_data.get('current_iv', 20.0)
+                position.unrealized_pnl = pos_data.get('unrealized_pnl', 0.0)
+                position.highest_premium = pos_data.get('highest_premium', position.highest_premium)
+                last_updated_raw = pos_data.get('last_updated')
+                if last_updated_raw:
+                    try:
+                        position.last_updated = datetime.fromisoformat(last_updated_raw)
+                    except Exception:
+                        pass
                 self.positions[symbol] = position
         except Exception as e:
             print(f"⚠️ Error loading positions: {str(e)}")

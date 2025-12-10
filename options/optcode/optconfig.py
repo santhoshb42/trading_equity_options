@@ -171,7 +171,17 @@ class OptionsTradingConfig:
     # Risk management
     MAX_LOSS_PER_TRADE = float(os.getenv("OPTIONS_MAX_LOSS_PER_TRADE", "500"))  # Max loss per trade in ₹
     STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "2.0"))  # 2% SL on premium
-    PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "5.0"))  # 5% profit target
+    PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "5.0"))  # 5% initial profit target
+    
+    # Number of lots per trade (for scaling trade size)
+    # Each option contract = 1 lot (qty = lot_size * NO_OF_LOTS)
+    # When scaling: increase this to increase trade size proportionally
+    # Example: NO_OF_LOTS=1 → qty=lot_size, NO_OF_LOTS=2 → qty=2*lot_size
+    NO_OF_LOTS = int(os.getenv("NO_OF_LOTS", "1"))  # Default 1 lot per trade
+    
+    # Trailing Exit Strategy (lock in profits while letting winners run)
+    ENABLE_TRAILING_EXIT = os.getenv("OPTIONS_ENABLE_TRAILING_EXIT", "true").lower() == "true"  # Enable trailing stops
+    TRAILING_BUFFER_PERCENTAGE = float(os.getenv("OPTIONS_TRAILING_BUFFER_PERCENTAGE", "2.0"))  # Trail by 2% from peak
     
     # Signal filtering
     MIN_CONFIDENCE = float(os.getenv("OPTIONS_MIN_CONFIDENCE", "90"))  # Min 90% confidence for options signals

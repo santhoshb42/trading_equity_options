@@ -81,7 +81,7 @@ class AdaptiveExitEngine:
             
             # Momentum confirmation (5-15 min)
             'stage2_breakeven_trigger': 0.3,        # Move to BE at +0.3%
-            'stage2_stagnation_timeout': 300,       # 5 min flat = exit
+            'stage2_stagnation_timeout': 600,       # 10 min flat = exit (increased from 5 min to allow consolidations)
             
             # 🆕 SMART PROFIT PROTECTION (immediate locking)
             'quick_profit_lock_trigger': 0.4,       # At +0.4%, lock at +0.2%
@@ -248,15 +248,13 @@ class AdaptiveExitEngine:
             log_event("PROFIT_LOCK_APPLIED", f"💰 Using profit-locked SL for {symbol}",
                      symbol=symbol,
                      profit_pct=round(profit_pct, 2),
-                     base_sl=base_sl,
-                     locked_sl=locked_sl,
-                     improvement=round(((locked_sl - base_sl) / base_sl) * 100, 2),
-                     locked_level_pct=tracking.get('locked_profit_level', 0),
-                     current_ltp=current_ltp,
-                     action="Returning locked SL instead of base trailing SL")
                      base_sl=round(base_sl, 2),
                      locked_sl=round(locked_sl, 2),
-                     locked_profit_pct=round(((locked_sl - entry_price) / entry_price) * 100, 2))
+                     improvement=round(((locked_sl - base_sl) / base_sl) * 100, 2),
+                     locked_level_pct=tracking.get('locked_profit_level', 0),
+                     locked_profit_pct=round(((locked_sl - entry_price) / entry_price) * 100, 2),
+                     current_ltp=current_ltp,
+                     action="Returning locked SL instead of base trailing SL")
             return locked_sl, ExitReason.STAGE3_PROFIT_LOCK
         
         # Get adaptive buffer for trailing SL
@@ -544,13 +542,23 @@ class AdaptiveExitEngine:
         if len(price_history) < 3:
             return False
         
+        # Only check recent prices (last 10 minutes worth) for stagnation, not entire history
+        # This prevents the entire entry-to-now range from blocking stagnation detection
+        stagnation_window_seconds = 600  # 10 minutes - check only last 10 min of prices
+        cutoff_time = current_time - timedelta(seconds=stagnation_window_seconds)
+        recent_prices = [p for p in price_history if p['time'] >= cutoff_time]
+        
+        # If we don't have recent data, use all available
+        if not recent_prices:
+            recent_prices = price_history[-10:] if len(price_history) >= 10 else price_history
+        
         # Check if all recent prices are within ±0.1% of each other
-        prices = [p['price'] for p in price_history]
+        prices = [p['price'] for p in recent_prices]
         max_price = max(prices)
         min_price = min(prices)
         range_pct = ((max_price - min_price) / min_price) * 100
         
-        if range_pct <= 0.2:  # Very narrow range
+        if range_pct <= 0.2:  # Very narrow range (±0.1%)
             if tracking['stagnation_start'] is None:
                 tracking['stagnation_start'] = current_time
             else:
