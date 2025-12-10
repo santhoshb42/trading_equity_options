@@ -100,25 +100,34 @@ class AdaptiveExitEngine:
             
             # 🆕 DUAL-MODE ADAPTIVE TRAILING (Time-based scalp vs runner)
             # ====================================================================
+            # EQUITY PROFIT RANGE: 0-4% max (NSE equity constraints)
+            # Each mode defines milestones from 0.5% profit to 4%+ profit
+            
             # SCALP MODE (9:30-9:45 AM): Aggressive trailing for quick peaks
-            # - Tight buffers (0.15-0.4%) to capture momentum at peaks
+            # - Tight buffers to capture momentum at peaks
             # - Quick exits on dips
             # - Lock profits immediately
             'scalp_buffer_tiny': 0.15,      # 0.0-0.5% profit (scalp mode)
             'scalp_buffer_small': 0.20,     # 0.5-1.0% profit (scalp mode)
             'scalp_buffer_medium': 0.30,    # 1.0-1.5% profit (scalp mode)
             'scalp_buffer_large': 0.40,     # 1.5-2.5% profit (scalp mode)
-            'scalp_buffer_huge': 0.50,      # 2.5%+ profit (scalp mode)
+            'scalp_buffer_xlarge': 0.45,    # 2.5-3.0% profit (scalp mode) - NEW
+            'scalp_buffer_xxlarge': 0.48,   # 3.0-3.5% profit (scalp mode) - NEW
+            'scalp_buffer_huge': 0.50,      # 3.5-4.0% profit (scalp mode) - TIGHTENED
+            'scalp_buffer_max': 0.50,       # 4.0%+ profit (scalp mode) - LOCKED
             
             # RUNNER MODE (9:45+ AM): Loose trailing for multi-minute runners
-            # - Wider buffers (0.5-1.2%) to let profits run
+            # - Wider buffers to let profits run
             # - Slower SL updates
             # - Capture extended moves
             'runner_buffer_tiny': 0.35,     # 0.0-0.5% profit (runner mode)
             'runner_buffer_small': 0.50,    # 0.5-1.0% profit (runner mode)
             'runner_buffer_medium': 0.70,   # 1.0-1.5% profit (runner mode)
             'runner_buffer_large': 1.0,     # 1.5-2.5% profit (runner mode)
-            'runner_buffer_huge': 1.2,      # 2.5%+ profit (runner mode)
+            'runner_buffer_xlarge': 1.10,   # 2.5-3.0% profit (runner mode) - NEW
+            'runner_buffer_xxlarge': 1.15,  # 3.0-3.5% profit (runner mode) - NEW
+            'runner_buffer_huge': 1.18,     # 3.5-4.0% profit (runner mode) - TIGHTENED
+            'runner_buffer_max': 1.20,      # 4.0%+ profit (runner mode) - LOCKED
             
             # Legacy mode (fallback): Use standard buffers
             'buffer_tiny': 0.2,      # 0.0-0.5% profit
@@ -214,8 +223,10 @@ class AdaptiveExitEngine:
         """
         Calculate adaptive trailing buffer based on:
         1. Entry time (scalp vs runner mode)
-        2. Profit level 
-        3. Time elapsed
+        2. Profit level (0.5% to 4%+ in equity)
+        3. Time elapsed (decay after 30 min)
+        
+        EQUITY CONSTRAINT: Max 4% profit (NSE equity limits)
         
         Returns buffer percentage (e.g., 0.8 for 0.8%)
         """
@@ -233,31 +244,45 @@ class AdaptiveExitEngine:
         is_scalp_mode = (hour == 9 and minute >= 30 and minute <= 45) or \
                         (hour == 10 and minute <= 45)  # Allow 10:00-10:45 if alert was late
         
-        # Select buffer config based on mode
+        # Select buffer config based on mode with proper 0-4% EQUITY RANGE
         if is_scalp_mode:
             # SCALP MODE: Use aggressive tight trailing buffers
+            # Profit milestones: 0.5%, 1.0%, 1.5%, 2.5%, 3.0%, 3.5%, 4.0%+
             if profit_pct < 0.5:
-                base_buffer = self.config['scalp_buffer_tiny']
+                base_buffer = self.config['scalp_buffer_tiny']           # 0.15%
             elif profit_pct < 1.0:
-                base_buffer = self.config['scalp_buffer_small']
+                base_buffer = self.config['scalp_buffer_small']          # 0.20%
             elif profit_pct < 1.5:
-                base_buffer = self.config['scalp_buffer_medium']
+                base_buffer = self.config['scalp_buffer_medium']         # 0.30%
             elif profit_pct < 2.5:
-                base_buffer = self.config['scalp_buffer_large']
+                base_buffer = self.config['scalp_buffer_large']          # 0.40%
+            elif profit_pct < 3.0:
+                base_buffer = self.config['scalp_buffer_xlarge']         # 0.45%
+            elif profit_pct < 3.5:
+                base_buffer = self.config['scalp_buffer_xxlarge']        # 0.48%
+            elif profit_pct < 4.0:
+                base_buffer = self.config['scalp_buffer_huge']           # 0.50%
             else:
-                base_buffer = self.config['scalp_buffer_huge']
+                base_buffer = self.config['scalp_buffer_max']            # 0.50% (LOCKED at 4%+)
         else:
             # RUNNER MODE: Use loose trailing buffers for extended moves
+            # Profit milestones: 0.5%, 1.0%, 1.5%, 2.5%, 3.0%, 3.5%, 4.0%+
             if profit_pct < 0.5:
-                base_buffer = self.config['runner_buffer_tiny']
+                base_buffer = self.config['runner_buffer_tiny']          # 0.35%
             elif profit_pct < 1.0:
-                base_buffer = self.config['runner_buffer_small']
+                base_buffer = self.config['runner_buffer_small']         # 0.50%
             elif profit_pct < 1.5:
-                base_buffer = self.config['runner_buffer_medium']
+                base_buffer = self.config['runner_buffer_medium']        # 0.70%
             elif profit_pct < 2.5:
-                base_buffer = self.config['runner_buffer_large']
+                base_buffer = self.config['runner_buffer_large']         # 1.00%
+            elif profit_pct < 3.0:
+                base_buffer = self.config['runner_buffer_xlarge']        # 1.10%
+            elif profit_pct < 3.5:
+                base_buffer = self.config['runner_buffer_xxlarge']       # 1.15%
+            elif profit_pct < 4.0:
+                base_buffer = self.config['runner_buffer_huge']          # 1.18%
             else:
-                base_buffer = self.config['runner_buffer_huge']
+                base_buffer = self.config['runner_buffer_max']           # 1.20% (LOCKED at 4%+)
 
         # Apply time decay in extended stage (30+ min) - overrides mode
         if elapsed_minutes >= 30 and self.config['stage4_buffer_decay']:
@@ -277,7 +302,8 @@ class AdaptiveExitEngine:
                  entry_minute=minute,
                  profit_pct=round(profit_pct, 2),
                  base_buffer=base_buffer,
-                 elapsed_minutes=round(elapsed_minutes, 1))
+                 elapsed_minutes=round(elapsed_minutes, 1),
+                 profit_range="0-4% EQUITY CONSTRAINT")
         
         return base_buffer
     
