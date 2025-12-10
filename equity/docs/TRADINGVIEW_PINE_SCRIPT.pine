@@ -38,6 +38,9 @@ body      = math.abs(close - open)
 barRange  = math.max(high - low, 0.0)
 bodyRatio = barRange == 0.0 ? 0.0 : body / barRange
 
+// Previous Day Close (PDC) - required for hybrid strategy
+pdc = request.security(syminfo.tickerid, "D", close[1])
+
 //────────────────────────────────────────────
 // TIME WINDOWS
 //────────────────────────────────────────────
@@ -57,20 +60,20 @@ openingRush3 = time >= alertTriggerTime and time < alertTriggerTime + 15*60000  
 // ADAPTIVE FILTERS
 //────────────────────────────────────────────
 
-// ADX adaptive requirement - ULTRA RELAXED FOR OPENING RUSH SCALPING
-// 9:30-9:35: ADX >= 6 (MOST RELAXED, catch opening momentum any direction)
-// 9:35-9:40: ADX >= 8 (RELAXED, early momentum)
-// 9:40-9:45: ADX >= 10 (MODERATE, building momentum)
+// ADX adaptive requirement - HYBRID QUALITY APPROACH (balanced for opening rush)
+// 9:30-9:35: ADX >= 12 (catch momentum, filter noise)
+// 9:35-9:40: ADX >= 13 (slight relaxation as volume builds)
+// 9:40-9:45: ADX >= 15 (moderate, normal opening momentum)
 // 9:45+: ADX >= 20 (STRICT, normal market conditions)
-adxReq = is933 ? 6 : openingRush2 ? 8 : openingRush3 ? 10 : minAdx
+adxReq = is933 ? 12 : openingRush2 ? 13 : openingRush3 ? 15 : minAdx
 fADX   = adxVal >= adxReq
 
-// ATR% adaptive requirement - ULTRA RELAXED FOR OPENING RUSH SCALPING
-// 9:30-9:35: ATR >= 0.02% (MOST RELAXED, catch even tiny moves)
-// 9:35-9:40: ATR >= 0.03% (RELAXED)
-// 9:40-9:45: ATR >= 0.05% (MODERATE)
+// ATR% adaptive requirement - HYBRID QUALITY APPROACH (meaningful volatility)
+// 9:30-9:35: ATR >= 0.08% (meaningful moves, not noise)
+// 9:35-9:40: ATR >= 0.10% (consistent volatility)
+// 9:40-9:45: ATR >= 0.12% (moderate, normal opening momentum)
 // 9:45+: ATR >= 0.15% (STRICT, normal)
-atrReq = is933 ? 0.02 : openingRush2 ? 0.03 : openingRush3 ? 0.05 : minAtrPc
+atrReq = is933 ? 0.08 : openingRush2 ? 0.10 : openingRush3 ? 0.12 : minAtrPc
 fATR   = atrPc >= atrReq
 
 // Adaptive Volume Logic (ANY strength signal passes)
@@ -88,8 +91,12 @@ fExhaust  = exhaust < exhaustPc
 
 fAboveMA  = close > ema9 and close > ema20 and close > vwap
 
-// RSI filter - RELAXED DURING OPENING RUSH (9:30-9:45) to catch momentum
-rsiLower = is933 ? 50.0 : openingRush2 ? 52.0 : openingRush3 ? 55.0 : minRsi
+// RSI filter - HYBRID APPROACH (balanced for quality momentum)
+// 9:30-9:35: RSI >= 55 (avoid oversold, catch building momentum)
+// 9:35-9:40: RSI >= 56 (slight relaxation as momentum builds)
+// 9:40-9:45: RSI >= 57 (moderate, normal opening momentum)
+// 9:45+: RSI >= 58 (STRICT, normal conditions)
+rsiLower = is933 ? 55.0 : openingRush2 ? 56.0 : openingRush3 ? 57.0 : minRsi
 rsiUpper = maxRsi  // Keep upper bound same
 fRSI      = rsi >= rsiLower and rsi <= rsiUpper
 fBody     = bodyRatio >= minBody
@@ -103,8 +110,11 @@ prevHigh = ta.highest(high[1], resistanceBars)
 fResistance = useResistance ? close > prevHigh * 1.002 : true
 
 //────────────────────────────────────────────
-// FINAL FILTER DECISION (STRICT + ADAPTIVE)
+// FINAL FILTER DECISION (HYBRID: QUALITY + PDC CONFIRMATION)
 //────────────────────────────────────────────
+// PDC (Previous Day Close) requirement: Current price must be above yesterday's close
+pdcConfirm = close > pdc
+
 allFilters =
      fAboveMA and
      fRSI and
@@ -115,7 +125,8 @@ allFilters =
      fExhaust and
      fResistance and
      fGap and
-     inSession
+     inSession and
+     pdcConfirm
 
 //────────────────────────────────────────────
 // SCORING (unchanged)
@@ -144,7 +155,7 @@ score += fADX ? 12.5 : 0
 score += fBody ? 12.5 : 0
 score += fVolume ? 12.5 : 0
 score += fExhaust ? 12.5 : 0
-score += (vwapLeadPct >= 0.10) ? 12.5 : 0
+score += pdcConfirm ? 12.5 : 0
 
 verdict    = allFilters ? 1.0 : 0.0
 confidence = allFilters ? math.min(95.0, 80.0 + score * 0.3) : 0.0
@@ -154,7 +165,7 @@ confidence = allFilters ? math.min(95.0, 80.0 + score * 0.3) : 0.0
 //────────────────────────────────────────────
 fmt(x) => str.tostring(x, format.mintick)
 
-jsonMsg = "{\"Alerts\":[{\"symbol\":\""+syminfo.ticker+"\",\"action\":\"BUY\",\"price\":\""+fmt(close)+"\",\"score\":\""+fmt(score)+"\",\"confidence\":\""+fmt(confidence)+"\",\"verdict\":\""+fmt(verdict)+"\",\"vwap\":\""+fmt(vwap)+"\",\"rsi\":\""+fmt(rsi)+"\",\"atr\":\""+fmt(atr)+"\",\"adx\":\""+fmt(adxVal)+"\",\"volume\":\""+fmt(volume)+"\",\"ema9\":\""+fmt(ema9)+"\",\"ema20\":\""+fmt(ema20)+"\",\"pdh\":\""+fmt(pdh)+"\",\"ema_gap_pct\":\""+fmt(emaGapPct)+"\",\"vwap_lead_pct\":\""+fmt(vwapLeadPct)+"\",\"atr_pct\":\""+fmt(atrPc)+"\",\"vol_z\":\""+fmt(vol_z)+"\",\"z_rsi\":\""+fmt(z_rsi)+"\",\"heat_ok\":\""+fmt(allFilters ? 1 : 0)+"\",\"body_ratio\":\""+fmt(bodyRatio)+"\",\"open_gap_pct\":\""+fmt(math.abs(open_gap_pct))+"\",\"hl_range_pct\":\""+fmt(hlRangePct)+"\",\"pc_lead_pct\":\""+fmt(pc_lead_pct)+"\",\"close_to_high\":\""+fmt(closeToHigh)+"\",\"atr_jump\":\""+fmt(atrJump)+"\",\"ultra_pass\":\""+fmt(ultra_pass)+"\",\"above_vwap\":\""+fmt(fAboveMA ? 1 : 0)+"\",\"time_ok\":\""+fmt(inSession ? 1 : 0)+"\",\"resistance_break\":\""+fmt(fResistance ? 1 : 0)+"\",\"vol_quality\":\""+fmt(fVolume ? 1 : 0)+"\"}]}"
+jsonMsg = "{\"Alerts\":[{\"symbol\":\""+syminfo.ticker+"\",\"action\":\"BUY\",\"price\":\""+fmt(close)+"\",\"score\":\""+fmt(score)+"\",\"confidence\":\""+fmt(confidence)+"\",\"verdict\":\""+fmt(verdict)+"\",\"vwap\":\""+fmt(vwap)+"\",\"rsi\":\""+fmt(rsi)+"\",\"atr\":\""+fmt(atr)+"\",\"adx\":\""+fmt(adxVal)+"\",\"volume\":\""+fmt(volume)+"\",\"ema9\":\""+fmt(ema9)+"\",\"ema20\":\""+fmt(ema20)+"\",\"pdc\":\""+fmt(pdc)+"\",\"pdc_confirm\":\""+fmt(pdcConfirm ? 1 : 0)+"\",\"pdh\":\""+fmt(pdh)+"\",\"ema_gap_pct\":\""+fmt(emaGapPct)+"\",\"vwap_lead_pct\":\""+fmt(vwapLeadPct)+"\",\"atr_pct\":\""+fmt(atrPc)+"\",\"vol_z\":\""+fmt(vol_z)+"\",\"z_rsi\":\""+fmt(z_rsi)+"\",\"heat_ok\":\""+fmt(allFilters ? 1 : 0)+"\",\"body_ratio\":\""+fmt(bodyRatio)+"\",\"open_gap_pct\":\""+fmt(math.abs(open_gap_pct))+"\",\"hl_range_pct\":\""+fmt(hlRangePct)+"\",\"pc_lead_pct\":\""+fmt(pc_lead_pct)+"\",\"close_to_high\":\""+fmt(closeToHigh)+"\",\"atr_jump\":\""+fmt(atrJump)+"\",\"above_vwap\":\""+fmt(fAboveMA ? 1 : 0)+"\",\"time_ok\":\""+fmt(inSession ? 1 : 0)+"\",\"resistance_break\":\""+fmt(fResistance ? 1 : 0)+"\",\"vol_quality\":\""+fmt(fVolume ? 1 : 0)+"\"}]}"
 
 //────────────────────────────────────────────
 // ONE ALERT PER SYMBOL PER DAY
