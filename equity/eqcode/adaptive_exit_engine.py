@@ -98,7 +98,29 @@ class AdaptiveExitEngine:
             'sudden_dip_threshold': -0.3,           # -0.3% in 1 check (20s)
             'profit_erosion_threshold': 0.5,        # If gave back >50% of max profit
             
-            # Adaptive trailing buffers (profit-based)
+            # 🆕 DUAL-MODE ADAPTIVE TRAILING (Time-based scalp vs runner)
+            # ====================================================================
+            # SCALP MODE (9:30-9:45 AM): Aggressive trailing for quick peaks
+            # - Tight buffers (0.15-0.4%) to capture momentum at peaks
+            # - Quick exits on dips
+            # - Lock profits immediately
+            'scalp_buffer_tiny': 0.15,      # 0.0-0.5% profit (scalp mode)
+            'scalp_buffer_small': 0.20,     # 0.5-1.0% profit (scalp mode)
+            'scalp_buffer_medium': 0.30,    # 1.0-1.5% profit (scalp mode)
+            'scalp_buffer_large': 0.40,     # 1.5-2.5% profit (scalp mode)
+            'scalp_buffer_huge': 0.50,      # 2.5%+ profit (scalp mode)
+            
+            # RUNNER MODE (9:45+ AM): Loose trailing for multi-minute runners
+            # - Wider buffers (0.5-1.2%) to let profits run
+            # - Slower SL updates
+            # - Capture extended moves
+            'runner_buffer_tiny': 0.35,     # 0.0-0.5% profit (runner mode)
+            'runner_buffer_small': 0.50,    # 0.5-1.0% profit (runner mode)
+            'runner_buffer_medium': 0.70,   # 1.0-1.5% profit (runner mode)
+            'runner_buffer_large': 1.0,     # 1.5-2.5% profit (runner mode)
+            'runner_buffer_huge': 1.2,      # 2.5%+ profit (runner mode)
+            
+            # Legacy mode (fallback): Use standard buffers
             'buffer_tiny': 0.2,      # 0.0-0.5% profit
             'buffer_small': 0.3,     # 0.5-1.0% profit
             'buffer_medium': 0.5,    # 1.0-1.5% profit
@@ -190,7 +212,10 @@ class AdaptiveExitEngine:
     
     def get_adaptive_buffer(self, symbol: str, current_ltp: float, elapsed_minutes: float) -> float:
         """
-        Calculate adaptive trailing buffer based on profit level and time
+        Calculate adaptive trailing buffer based on:
+        1. Entry time (scalp vs runner mode)
+        2. Profit level 
+        3. Time elapsed
         
         Returns buffer percentage (e.g., 0.8 for 0.8%)
         """
@@ -199,21 +224,42 @@ class AdaptiveExitEngine:
         
         tracking = self.position_tracking[symbol]
         entry_price = tracking['entry_price']
+        entry_time = tracking['entry_time']
         profit_pct = ((current_ltp - entry_price) / entry_price) * 100
         
-        # Base buffer based on profit level
-        if profit_pct < 0.5:
-            base_buffer = self.config['buffer_tiny']
-        elif profit_pct < 1.0:
-            base_buffer = self.config['buffer_small']
-        elif profit_pct < 1.5:
-            base_buffer = self.config['buffer_medium']
-        elif profit_pct < 2.5:
-            base_buffer = self.config['buffer_large']
-        else:
-            base_buffer = self.config['buffer_huge']
+        # Determine if in SCALP MODE (9:30-9:45 AM) or RUNNER MODE (9:45+ AM)
+        hour = entry_time.hour
+        minute = entry_time.minute
+        is_scalp_mode = (hour == 9 and minute >= 30 and minute <= 45) or \
+                        (hour == 10 and minute <= 45)  # Allow 10:00-10:45 if alert was late
         
-        # Apply time decay in extended stage
+        # Select buffer config based on mode
+        if is_scalp_mode:
+            # SCALP MODE: Use aggressive tight trailing buffers
+            if profit_pct < 0.5:
+                base_buffer = self.config['scalp_buffer_tiny']
+            elif profit_pct < 1.0:
+                base_buffer = self.config['scalp_buffer_small']
+            elif profit_pct < 1.5:
+                base_buffer = self.config['scalp_buffer_medium']
+            elif profit_pct < 2.5:
+                base_buffer = self.config['scalp_buffer_large']
+            else:
+                base_buffer = self.config['scalp_buffer_huge']
+        else:
+            # RUNNER MODE: Use loose trailing buffers for extended moves
+            if profit_pct < 0.5:
+                base_buffer = self.config['runner_buffer_tiny']
+            elif profit_pct < 1.0:
+                base_buffer = self.config['runner_buffer_small']
+            elif profit_pct < 1.5:
+                base_buffer = self.config['runner_buffer_medium']
+            elif profit_pct < 2.5:
+                base_buffer = self.config['runner_buffer_large']
+            else:
+                base_buffer = self.config['runner_buffer_huge']
+
+        # Apply time decay in extended stage (30+ min) - overrides mode
         if elapsed_minutes >= 30 and self.config['stage4_buffer_decay']:
             if elapsed_minutes >= 60:
                 base_buffer = min(base_buffer, self.config['stage4_60min_buffer'])
@@ -221,6 +267,17 @@ class AdaptiveExitEngine:
                 base_buffer = min(base_buffer, self.config['stage4_45min_buffer'])
             elif elapsed_minutes >= 30:
                 base_buffer = min(base_buffer, self.config['stage4_30min_buffer'])
+        
+        # Log the mode detection for debugging
+        mode_label = "SCALP" if is_scalp_mode else "RUNNER"
+        log_event("BUFFER_MODE_DETECTED", f"Using {mode_label} mode for {symbol}",
+                 symbol=symbol,
+                 mode=mode_label,
+                 entry_hour=hour,
+                 entry_minute=minute,
+                 profit_pct=round(profit_pct, 2),
+                 base_buffer=base_buffer,
+                 elapsed_minutes=round(elapsed_minutes, 1))
         
         return base_buffer
     
