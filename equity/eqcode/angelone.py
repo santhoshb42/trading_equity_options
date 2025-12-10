@@ -322,6 +322,19 @@ class AngelOneBroker:
         except Exception as e:
             log_event("BROKER_INIT", f"⚠️ Failed to initialize bulk LTP fetcher: {e}")
             self.bulk_ltp_fetcher = None
+        
+        # Initialize bulk order fetcher (prevents rate limit exhaustion during order confirmation)
+        try:
+            from .bulk_order_fetcher import BulkOrderFetcher
+            self.bulk_order_fetcher = BulkOrderFetcher(
+                self.smart_api,
+                fetch_interval_seconds=5  # Fetch orderBook every 5 seconds
+            )
+            self.bulk_order_fetcher.start()  # Start background thread
+            log_event("BROKER_INIT", "✅ Bulk order fetcher initialized - will reduce orderBook API calls")
+        except Exception as e:
+            log_event("BROKER_INIT", f"⚠️ Failed to initialize bulk order fetcher: {e}")
+            self.bulk_order_fetcher = None
     
     def _safe_api_call_with_ag8001_retry(self, func, *args, max_retries: int = 3, initial_backoff: float = 1.0, **kwargs):
         """
@@ -1784,7 +1797,11 @@ class AngelOneBroker:
     @rate_limited(call_type="order_status", timeout=15.0)
     def check_order_status(self, order: Order) -> bool:
         """
-        Check and update order status
+        Check and update order status using bulk orderBook cache
+        
+        IMPORTANT: This method now reads from bulk_order_fetcher's cache instead of
+        calling orderBook directly. The bulk fetcher calls orderBook every 5 seconds
+        in the background, reducing API calls from 30 per order to 1 per order.
         
         Args:
             order: Order object to check
@@ -1800,47 +1817,60 @@ class AngelOneBroker:
             return False
         
         try:
-            # Get order history with rate limiting
-            order_history = self._safe_api_call(self.smart_api.orderBook, timeout=5.0)
+            # 🔑 KEY FIX: Read from bulk order fetcher cache instead of calling orderBook
+            order_data = None
             
-            if order_history and order_history.get('status'):
-                orders = order_history.get('data', [])
+            if self.bulk_order_fetcher and self.bulk_order_fetcher.is_cache_fresh():
+                # Use cached orderBook result (updated every 5 seconds in background)
+                order_data = self.bulk_order_fetcher.get_order_data(order.order_id)
+                cache_status = "cache_hit"
+            else:
+                # Fallback: call orderBook directly if cache not available
+                # This happens during startup before first bulk fetch completes
+                order_history = self._safe_api_call(self.smart_api.orderBook, timeout=5.0)
                 
-                for order_data in orders:
-                    if order_data.get('orderid') == order.order_id:
-                        status = order_data.get('status', '').upper()
-                        
-                        # 🔧 FIX: Capture actual filled price (averageprice) from broker
-                        if 'averageprice' in order_data and order_data['averageprice'] > 0:
-                            order.average_price = order_data['averageprice']
-                        
-                        if status in ['COMPLETE', 'FILLED']:
-                            order.status = OrderStatus.FILLED
-                            order.filled_at = datetime.now()
-                            # Remove from pending orders
-                            if order.order_id in self.pending_orders:
-                                del self.pending_orders[order.order_id]
-                            log_event("ORDER", f"Order filled", order_id=order.order_id, 
-                                     average_price=order.average_price)
-                            return True
-                        elif status in ['REJECTED', 'CANCELLED']:
-                            order.status = OrderStatus.REJECTED
-                            order.rejection_reason = order_data.get('text', 'Unknown')
-                            # Remove from pending orders
-                            if order.order_id in self.pending_orders:
-                                del self.pending_orders[order.order_id]
-                            log_event("ORDER", f"Order rejected", 
-                                     order_id=order.order_id, reason=order.rejection_reason)
-                            return False
-                        elif status == 'PENDING':
-                            order.status = OrderStatus.PENDING
-                            return False
-                        else:
-                            order.status = OrderStatus.CONFIRMED
-                            order.confirmed_at = datetime.now()
-                            return False
+                if order_history and order_history.get('status'):
+                    orders = order_history.get('data', [])
+                    for od in orders:
+                        if od.get('orderid') == order.order_id:
+                            order_data = od
+                            break
+                cache_status = "direct_call"
             
-            return False
+            if not order_data:
+                return False
+            
+            status = order_data.get('status', '').upper()
+            
+            # 🔧 FIX: Capture actual filled price (averageprice) from broker
+            if 'averageprice' in order_data and order_data['averageprice'] > 0:
+                order.average_price = order_data['averageprice']
+            
+            if status in ['COMPLETE', 'FILLED']:
+                order.status = OrderStatus.FILLED
+                order.filled_at = datetime.now()
+                # Remove from pending orders
+                if order.order_id in self.pending_orders:
+                    del self.pending_orders[order.order_id]
+                log_event("ORDER", f"Order filled (via {cache_status})", order_id=order.order_id, 
+                         average_price=order.average_price)
+                return True
+            elif status in ['REJECTED', 'CANCELLED']:
+                order.status = OrderStatus.REJECTED
+                order.rejection_reason = order_data.get('text', 'Unknown')
+                # Remove from pending orders
+                if order.order_id in self.pending_orders:
+                    del self.pending_orders[order.order_id]
+                log_event("ORDER", f"Order rejected (via {cache_status})", 
+                         order_id=order.order_id, reason=order.rejection_reason)
+                return False
+            elif status == 'PENDING':
+                order.status = OrderStatus.PENDING
+                return False
+            else:
+                order.status = OrderStatus.CONFIRMED
+                order.confirmed_at = datetime.now()
+                return False
             
         except Exception as e:
             log_event("ERROR", f"Error checking order status: {str(e)}")
