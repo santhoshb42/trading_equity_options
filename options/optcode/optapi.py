@@ -40,10 +40,12 @@ def create_options_api_app():
     app.config['JSON_SORT_KEYS'] = False
     
     # Options trading state
+    from optcode.instrument_manager import get_instrument_manager
     state = {
         'broker': get_options_broker(),
         'monitor': get_option_monitor(),
         'signal_filter': get_options_signal_filter(),
+        'instrument_manager': get_instrument_manager(),
         'active': False,
         'startup_time': None
     }
