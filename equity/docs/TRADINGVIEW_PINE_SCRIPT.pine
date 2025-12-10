@@ -45,23 +45,32 @@ sessionStart     = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
 sessionEnd       = timestamp("GMT+5:30", year, month, dayofmonth, 10, 30)
 inSession        = time >= sessionStart and time <= sessionEnd
 
-alertTriggerTime = timestamp("GMT+5:30", year, month, dayofmonth, 9, 33)
-is933 = time >= alertTriggerTime and time < alertTriggerTime + 3*60000
+alertTriggerTime = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
+is933 = time >= alertTriggerTime and time < alertTriggerTime + 5*60000
 
-// Adaptive time buckets
-early1 = time < alertTriggerTime + 3*60000      // 9:30–9:36
-early2 = time < alertTriggerTime + 12*60000     // 9:36–9:45
+// Opening rush windows (9:30 AM onwards) - RELAXED FOR SCALPING
+openingRush1 = time >= alertTriggerTime and time < alertTriggerTime + 5*60000       // 9:30–9:35 (MOST RELAXED)
+openingRush2 = time >= alertTriggerTime and time < alertTriggerTime + 10*60000      // 9:30–9:40 (RELAXED)
+openingRush3 = time >= alertTriggerTime and time < alertTriggerTime + 15*60000      // 9:30–9:45 (MODERATE)
 
 //────────────────────────────────────────────
 // ADAPTIVE FILTERS
 //────────────────────────────────────────────
 
-// ADX adaptive requirement
-adxReq = is933 ? 12 : early2 ? 16 : minAdx
+// ADX adaptive requirement - ULTRA RELAXED FOR OPENING RUSH SCALPING
+// 9:30-9:35: ADX >= 6 (MOST RELAXED, catch opening momentum any direction)
+// 9:35-9:40: ADX >= 8 (RELAXED, early momentum)
+// 9:40-9:45: ADX >= 10 (MODERATE, building momentum)
+// 9:45+: ADX >= 20 (STRICT, normal market conditions)
+adxReq = is933 ? 6 : openingRush2 ? 8 : openingRush3 ? 10 : minAdx
 fADX   = adxVal >= adxReq
 
-// ATR% adaptive requirement
-atrReq = is933 ? 0.06 : early2 ? 0.10 : minAtrPc
+// ATR% adaptive requirement - ULTRA RELAXED FOR OPENING RUSH SCALPING
+// 9:30-9:35: ATR >= 0.02% (MOST RELAXED, catch even tiny moves)
+// 9:35-9:40: ATR >= 0.03% (RELAXED)
+// 9:40-9:45: ATR >= 0.05% (MODERATE)
+// 9:45+: ATR >= 0.15% (STRICT, normal)
+atrReq = is933 ? 0.02 : openingRush2 ? 0.03 : openingRush3 ? 0.05 : minAtrPc
 fATR   = atrPc >= atrReq
 
 // Adaptive Volume Logic (ANY strength signal passes)
@@ -73,12 +82,16 @@ volOk_adapt =
 
 fVolume = volOk_adapt
 
-// Other filters
+// Other filters - RELAXED FOR OPENING RUSH SCALPING
 exhaust   = (close - ema9) / ema9 * 100.0
 fExhaust  = exhaust < exhaustPc
 
 fAboveMA  = close > ema9 and close > ema20 and close > vwap
-fRSI      = rsi >= minRsi and rsi <= maxRsi
+
+// RSI filter - RELAXED DURING OPENING RUSH (9:30-9:45) to catch momentum
+rsiLower = is933 ? 50.0 : openingRush2 ? 52.0 : openingRush3 ? 55.0 : minRsi
+rsiUpper = maxRsi  // Keep upper bound same
+fRSI      = rsi >= rsiLower and rsi <= rsiUpper
 fBody     = bodyRatio >= minBody
 
 // Gap filter
