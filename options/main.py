@@ -25,15 +25,26 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Add parent directory for alert system
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from optcode.optconfig import (
     WebhookConfig, OptionsTradingConfig, DevConfig, MonitoringConfig,
-    get_optconfig_summary, validate_optconfig
+    get_optconfig_summary, validate_optconfig, OptionsCapitalConfig
 )
 from optcode.angelone_options import get_options_broker
 from optcode.optmonitor import get_option_monitor
 from optcode.optapi import get_options_api_server
 from optcode.optlogging import logger, log_event, log_state, print_session_summary
 from optcode.instrument_manager import get_instrument_manager
+
+# Alert system integration
+try:
+    from alert_system import AlertManager, AlertLevel, AlertCategory
+    ALERT_SYSTEM_AVAILABLE = True
+except ImportError:
+    ALERT_SYSTEM_AVAILABLE = False
+    print("⚠️  Alert system not available - alerts disabled")
 
 # =============================================================================
 # Options Trading Bot
@@ -50,6 +61,13 @@ class OptionsTradingBot:
         self.api_server = None
         self.position_monitor_thread = None
         self.instrument_manager = None
+        self.alert_manager = None
+        self.trading_stats = {
+            'orders_placed': 0,
+            'orders_filled': 0,
+            'orders_rejected': 0,
+            'total_pnl': 0.0
+        }
     
     def initialize(self):
         """Initialize options bot components"""
@@ -108,6 +126,27 @@ class OptionsTradingBot:
         self.api_server = get_options_api_server()
         logger.debug(f"BOT_INIT: API_SERVER_READY | port={WebhookConfig.PORT}")
         
+        # Initialize alert system
+        if ALERT_SYSTEM_AVAILABLE:
+            print(f"\n🔔 Initializing Alert System...")
+            self.alert_manager = AlertManager()
+            print(f"✅ Alert system ready - alerts will be logged")
+            logger.info(f"BOT_INIT: ALERT_SYSTEM_READY")
+            
+            # Send startup alert
+            try:
+                self.alert_manager.alert_bot_started(
+                    bot_type='options',
+                    config={
+                        'mode': OptionsTradingConfig.TRADING_MODE,
+                        'capital': OptionsCapitalConfig.MAX_CAPITAL
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"BOT_INIT: STARTUP_ALERT_FAILED | {str(e)}")
+        else:
+            print(f"⚠️  Alert system not available - alerts disabled")
+        
         logger.info("BOT_INIT: COMPLETE")
         print("\n" + "="*70)
         print("  ✅ OPTIONS BOT INITIALIZED")
@@ -165,6 +204,20 @@ class OptionsTradingBot:
                         for pos in expired:
                             print(f"   ✅ Expired position closed: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.info(f"POSITION_MONITOR: EXPIRY_CLOSED | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0)
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: EXPIRY_ALERT_FAILED | {str(e)}")
                     
                     # Check profit targets
                     profitable = self.monitor.check_profit_targets()
@@ -172,6 +225,20 @@ class OptionsTradingBot:
                         for pos in profitable:
                             print(f"   🎯 Profit target hit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.info(f"POSITION_MONITOR: PROFIT_TARGET | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0)
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: PROFIT_ALERT_FAILED | {str(e)}")
                     
                     # Check stop losses
                     stopped = self.monitor.check_stop_losses()
@@ -179,6 +246,20 @@ class OptionsTradingBot:
                         for pos in stopped:
                             print(f"   🛑 Stop loss hit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.warning(f"POSITION_MONITOR: STOPLOSS | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0)
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: STOPLOSS_ALERT_FAILED | {str(e)}")
                     
                     # Get position summary
                     summary = self.monitor.get_position_summary()
@@ -211,6 +292,22 @@ class OptionsTradingBot:
                         print(f"   Next check in: {current_interval}s\n")
                         
                         logger.debug(f"POSITION_MONITOR: STATE | open={summary['open_positions']} | upnl=₹{summary['total_unrealized_pnl']:.2f} | delta={summary['portfolio_delta']:.2f} | gamma={summary['portfolio_gamma']:.4f} | interval={current_interval}s")
+                        
+                        # Send portfolio monitoring alert every 30 seconds
+                        if self.alert_manager and int(time.time()) % 30 == 0:
+                            try:
+                                self.alert_manager.alert_capital_low(
+                                    bot_type='options',
+                                    capital_data={
+                                        'open_positions': summary['open_positions'],
+                                        'total_unrealized_pnl': summary['total_unrealized_pnl'],
+                                        'delta': summary['portfolio_delta'],
+                                        'gamma': summary['portfolio_gamma'],
+                                        'theta': summary['portfolio_theta']
+                                    }
+                                )
+                            except Exception as e:
+                                logger.warning(f"POSITION_MONITOR: MONITOR_ALERT_FAILED | {str(e)}")
                     
                     # Log interval changes
                     if time.time() - last_interval_log > 300:  # Log every 5 minutes

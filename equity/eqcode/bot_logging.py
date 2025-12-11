@@ -301,6 +301,164 @@ def critical(message: str):
 
 
 # =============================================================================
+# System State Logging Functions
+# =============================================================================
+
+def log_error(event_type: str, message: str, exception: Optional[Exception] = None, **kwargs):
+    """
+    Log an error event with optional exception details.
+    
+    Args:
+        event_type: Type of error (e.g., 'WEBHOOK_SERVER_START')
+        message: Error message
+        exception: Optional exception object for detailed traceback
+        **kwargs: Additional context data
+    """
+    # Log to statistics
+    if exception:
+        log_event(event_type, f"{message} | {type(exception).__name__}: {str(exception)}", **kwargs)
+    else:
+        log_event(event_type, message, **kwargs)
+
+
+def log_system_state(component: str, state: str, context: Optional[Dict[str, Any]] = None):
+    """
+    Log system state changes for monitoring bot health.
+    
+    Args:
+        component: Component name (e.g., 'BOT', 'WEBHOOK_SERVER', 'LEARNING_ENGINE')
+        state: Current state (e.g., 'STARTING', 'RUNNING', 'FAILED')
+        context: Optional dict with additional context data
+    """
+    context = context or {}
+    log_event(f"{component}_{state}", f"{component} is {state}", **context)
+
+
+def log_startup_info():
+    """
+    Log bot startup information including version, config, and environment.
+    Called once at bot initialization.
+    """
+    log_event("STARTUP", "Equity Trading Bot starting up", 
+              timestamp=datetime.now().isoformat(),
+              trading_mode='LIVE')
+
+
+# =============================================================================
+# Additional Logging Functions
+# =============================================================================
+
+def log_webhook(action: str, message: str = "", **kwargs):
+    """Log webhook-related events. Flexible signature."""
+    # Handle both (action, message) and (action, **kwargs) patterns
+    if not message and action and len(action.split()) > 1:
+        log_event("WEBHOOK", action, **kwargs)
+    else:
+        log_event("WEBHOOK", f"{action}: {message}".strip(": "), **kwargs)
+
+
+def log_order(*args, **kwargs):
+    """
+    Log order placement events. FLEXIBLE - handles multiple calling patterns:
+    - log_order("PLACING", symbol, action, quantity, price)
+    - log_order("PLACING", symbol, action, quantity, price, error=...)
+    - log_order(status, symbol, action, quantity, price)
+    """
+    # Pattern 1: (status, symbol, action, quantity, price, **kwargs)
+    if len(args) >= 5:
+        status, symbol, action, quantity, price = args[:5]
+        log_event("ORDER", f"{status} - {symbol} {action} {quantity} @ {price}", **kwargs)
+    # Pattern 2: (status, symbol, action, **kwargs with price/quantity)
+    elif len(args) >= 3:
+        status, symbol, action = args[:3]
+        quantity = kwargs.pop('quantity', '')
+        price = kwargs.pop('price', '')
+        if quantity and price:
+            log_event("ORDER", f"{status} - {symbol} {action} {quantity} @ {price}", **kwargs)
+        else:
+            log_event("ORDER", f"{status} - {symbol} {action}", **kwargs)
+    else:
+        # Fallback: just log whatever we have
+        log_event("ORDER", " ".join(str(a) for a in args), **kwargs)
+
+
+def log_monitor(action: str, message: str = "", **kwargs):
+    """Log monitoring events. Flexible signature."""
+    if message:
+        log_event("MONITOR", f"{action}: {message}", **kwargs)
+    else:
+        log_event("MONITOR", action, **kwargs)
+
+
+def log_analytics(metric: str, value: Any = None, **kwargs):
+    """Log analytics metrics. Flexible signature."""
+    if value is not None:
+        log_event("ANALYTICS", f"{metric}: {value}", **kwargs)
+    else:
+        log_event("ANALYTICS", metric, **kwargs)
+
+
+def log_broker_error(error_type: str, message: str = "", **kwargs):
+    """Log broker/API errors. Flexible signature."""
+    if message:
+        log_event("BROKER_ERROR", f"{error_type}: {message}", **kwargs)
+    else:
+        log_event("BROKER_ERROR", error_type, **kwargs)
+
+
+def log_trade_execution(*args, **kwargs):
+    """
+    Log trade execution events. FLEXIBLE - handles ALL calling patterns:
+    - log_trade_execution(event_type, symbol, action, **kwargs with price)
+    - log_trade_execution("ORDER_PLACING", symbol, "BUY", price=3000, quantity=2)
+    - Old: log_trade_execution(symbol, action, quantity, price, **kwargs)
+    """
+    # Try pattern: (event_type, symbol, action, **kwargs)
+    if len(args) >= 3:
+        arg1, arg2, arg3 = args[0], args[1], args[2]
+        
+        # Check if arg1 is an event_type (string like "ALERT_RECEIVED", "ORDER_PLACING")
+        # vs a symbol (string like "TCS-EQ", "INFY-EQ")
+        # Event types are typically ALL_CAPS, symbols have dashes
+        is_event_type = (
+            isinstance(arg1, str) and 
+            (arg1.isupper() or '_' in arg1) and 
+            not '-' in arg1
+        )
+        
+        if is_event_type:
+            # Pattern: (event_type, symbol, action, **kwargs)
+            event_type, symbol, action = arg1, arg2, arg3
+            price = kwargs.pop('price', None)
+            quantity = kwargs.pop('quantity', None)
+            
+            if price is not None and quantity is not None:
+                message = f"{event_type} {symbol} {action} {quantity} @ {price}"
+            elif price is not None:
+                message = f"{event_type} {symbol} {action} @ {price}"
+            else:
+                message = f"{event_type} {symbol} {action}"
+            
+            log_event("TRADE_EXECUTION", message, **kwargs)
+        else:
+            # Old pattern: (symbol, action, quantity, **kwargs with price)
+            # Or catch-all: just use as message
+            log_event("TRADE_EXECUTION", " ".join(str(a) for a in args), **kwargs)
+    else:
+        # Fallback: log whatever we have
+        log_event("TRADE_EXECUTION", " ".join(str(a) for a in args), **kwargs)
+
+
+def log_rate_limit(event_type: str, **kwargs):
+    """Log rate limiting events."""
+    log_event("RATE_LIMIT", event_type, **kwargs)
+
+
+
+
+
+
+# =============================================================================
 # Daily Summary Functions
 # =============================================================================
 

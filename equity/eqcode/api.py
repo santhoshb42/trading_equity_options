@@ -338,7 +338,7 @@ class TradingState:
         
         # Initialize monitor with capital release callback
         # Monitor now enabled for position tracking and SL placement
-        if True and PositionMonitor:
+        if PositionMonitor:
             try:
                 self.monitor = PositionMonitor(self.broker, self.release_capital)
                 log_event("MONITOR", "PositionMonitor instance created successfully")
@@ -354,9 +354,13 @@ class TradingState:
                 
             except Exception as e:
                 log_event("MONITOR_ERROR", f"Failed to initialize monitor: {str(e)}")
+                import traceback
+                log_event("MONITOR_ERROR_DETAIL", traceback.format_exc())
                 self.monitor = None
         else:
-            log_event("MONITOR", "PositionMonitor TEMPORARILY DISABLED for system stabilization")
+            log_event("MONITOR", "PositionMonitor NOT AVAILABLE - check import (SL orders will NOT be placed!)")
+            log_event("MONITOR_DISABLED", "PositionMonitor class is None - check for import errors in monitor.py")
+            self.monitor = None
         
         log_event("SYSTEM", "Trading system initialized successfully")
     
@@ -2897,8 +2901,16 @@ def square_off_all_positions():
                     log_error("TRADE_LOGGING_ERROR", f"Failed to log trade for {symbol}: {str(log_error_ex)}")
                     errors.append(f"{symbol}: Trade logging failed - {str(log_error_ex)}")
                 
+                # Handle order_id extraction (close_order can be Order object or dict)
+                close_order_id = None
+                if close_order:
+                    if hasattr(close_order, 'order_id'):
+                        close_order_id = close_order.order_id
+                    elif isinstance(close_order, dict):
+                        close_order_id = close_order.get('orderId') or close_order.get('order_id')
+                
                 log_event("SQUARE_OFF_POSITION_COMPLETE", f"Completed processing {symbol}",
-                         symbol=symbol, order_id=close_order.get('orderId') if close_order else None)
+                         symbol=symbol, order_id=close_order_id)
                 
             except Exception as e:
                 error_msg = f"Failed to close {position.get('symbol')}: {str(e)}"

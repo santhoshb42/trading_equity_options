@@ -3,7 +3,7 @@ Options Webhook API
 
 Flask server for TradingView alerts integrated into options bot.
 Completely independent from equity bot - shares only alert stream.
-With extensive logging for debugging.
+With extensive logging and alert system integration.
 """
 
 import json
@@ -26,6 +26,19 @@ from .optsignalvalidator import (
 )
 from .optlogging import logger, log_alert, log_signal_validation, log_event
 
+# Alert system integration
+try:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from alert_system import AlertManager, AlertLevel, AlertCategory
+    ALERT_SYSTEM_AVAILABLE = True
+except ImportError:
+    ALERT_SYSTEM_AVAILABLE = False
+    AlertManager = None
+    AlertLevel = None
+    AlertCategory = None
+
 # =============================================================================
 # Flask App Setup
 # =============================================================================
@@ -46,9 +59,17 @@ def create_options_api_app():
         'monitor': get_option_monitor(),
         'signal_filter': get_options_signal_filter(),
         'instrument_manager': get_instrument_manager(),
+        'alert_manager': None,  # Will be set by main bot
         'active': False,
         'startup_time': None
     }
+    
+    # Initialize alert manager if available
+    if ALERT_SYSTEM_AVAILABLE:
+        try:
+            state['alert_manager'] = AlertManager()
+        except Exception as e:
+            logger.warning(f"API: ALERT_SYSTEM_INIT_FAILED | {str(e)}")
     
     # ==========================================================================
     # Health Check Endpoint
@@ -160,6 +181,20 @@ def create_options_api_app():
             exchange = request.args.get('exchange', 'NFO')
             ltp = state['broker'].get_ltp(symbol, exchange)
             
+            # Log broker data fetch
+            if state['alert_manager']:
+                try:
+                    state['alert_manager'].alert_daily_pnl(
+                        bot_type='options',
+                        pnl_data={
+                            'metric': 'LTP Fetch',
+                            'symbol': symbol,
+                            'ltp': ltp
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"LTP_ALERT: FAILED | {str(e)}")
+            
             if ltp is not None:
                 return jsonify({
                     'symbol': symbol,
@@ -179,6 +214,20 @@ def create_options_api_app():
         try:
             exchange = request.args.get('exchange', 'NFO')
             data = state['broker'].get_market_data(symbol, exchange)
+            
+            # Log broker data fetch
+            if state['alert_manager'] and data:
+                try:
+                    state['alert_manager'].alert_daily_pnl(
+                        bot_type='options',
+                        pnl_data={
+                            'metric': 'Market Data Fetch',
+                            'symbol': symbol,
+                            'ltp': data.get('ltp', 0)
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"MARKET_DATA_ALERT: FAILED | {str(e)}")
             
             if data:
                 return jsonify({
@@ -203,6 +252,20 @@ def create_options_api_app():
             indicators = state['broker'].calculate_technical_indicators(
                 symbol, exchange, period_rsi, period_atr
             )
+            
+            # Log technical indicator calculation
+            if state['alert_manager'] and indicators:
+                try:
+                    state['alert_manager'].alert_daily_pnl(
+                        bot_type='options',
+                        pnl_data={
+                            'metric': 'Technical Indicators',
+                            'symbol': symbol,
+                            'rsi': indicators.get('rsi', 0)
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"INDICATORS_ALERT: FAILED | {str(e)}")
             
             if indicators:
                 return jsonify({
@@ -346,6 +409,21 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | premium=₹{selected_contract.ltp:.2f}")
         
+        # Send order placement alert
+        if state['alert_manager']:
+            try:
+                state['alert_manager'].alert_order_placed(
+                    bot_type='options',
+                    order_details={
+                        'symbol': selected_contract.symbol,
+                        'action': 'BUY',
+                        'quantity': quantity,
+                        'price': selected_contract.ltp
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"ORDER_PLACEMENT_ALERT: FAILED | {str(e)}")
+        
         order_id = state['broker'].place_options_order(
             symbol=selected_contract.symbol,
             action='BUY',
@@ -356,6 +434,22 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         if not order_id:
             logger.error(f"ALERT_PROCESS: ORDER_FAILED | symbol={symbol} | contract={selected_contract.symbol}")
+            
+            # Send order rejection alert
+            if state['alert_manager']:
+                try:
+                    state['alert_manager'].alert_order_rejected(
+                        bot_type='options',
+                        order_details={
+                            'symbol': selected_contract.symbol,
+                            'action': 'BUY',
+                            'quantity': quantity
+                        },
+                        reason="Broker failed to place order"
+                    )
+                except Exception as e:
+                    logger.warning(f"ORDER_REJECTION_ALERT: FAILED | {str(e)}")
+            
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
@@ -364,6 +458,21 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.info(f"ALERT_PROCESS: ORDER_PLACED | order_id={order_id}")
+        
+        # Send order filled/success alert
+        if state['alert_manager']:
+            try:
+                state['alert_manager'].alert_order_filled(
+                    bot_type='options',
+                    order_details={
+                        'symbol': selected_contract.symbol,
+                        'quantity': quantity,
+                        'price': selected_contract.ltp,
+                        'order_id': order_id
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"ORDER_FILLED_ALERT: FAILED | {str(e)}")
         
         # Add position to monitor
         state['monitor'].add_position(

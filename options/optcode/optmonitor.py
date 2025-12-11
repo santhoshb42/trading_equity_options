@@ -532,15 +532,10 @@ class OptionPositionMonitor:
     
     def refresh_position_ltps(self) -> Dict[str, Any]:
         """
-        Refresh LTP and Greeks for all open positions from broker using BUCKETED approach.
+        Refresh LTP and Greeks for ALL open positions from broker.
         
-        OPTIMIZATION: Uses bucketing to reduce API calls
-        - Divides N positions into buckets of 5
-        - Only fetches 1 bucket per call to this method
-        - Reduces rate limit consumption by 5-10x
-        
-        Instead of: 10 positions = 10 API calls per refresh cycle
-        Now: 10 positions = 2 API calls per refresh cycle (5 per bucket)
+        For paper trading (small portfolio), refresh all positions every cycle.
+        This ensures position data is always current and P&L reflects market reality.
         
         Returns:
             Dictionary with refresh statistics
@@ -558,30 +553,19 @@ class OptionPositionMonitor:
             logger.warning("REFRESH_LTP: No broker available")
             return refresh_stats
         
-        # Setup buckets if we have positions
-        if self.positions and not self.ltp_bucket_manager.buckets:
-            symbols = list(self.positions.keys())
-            self.ltp_bucket_manager.create_buckets(symbols)
-            logger.info(f"REFRESH_LTP: Initialized {len(self.ltp_bucket_manager.buckets)} buckets for {len(symbols)} positions")
-        
-        # Get current bucket to process
-        current_bucket = self.ltp_bucket_manager.get_current_bucket()
-        
-        if not current_bucket:
-            logger.warning("REFRESH_LTP: No bucket available")
+        if not self.positions:
             return refresh_stats
         
-        refresh_stats['bucket_info'] = {
-            'current_bucket_index': self.ltp_bucket_manager.current_bucket_index - 1,
-            'total_buckets': len(self.ltp_bucket_manager.buckets),
-            'symbols_in_bucket': current_bucket
-        }
+        # Get all position symbols
+        all_symbols = list(self.positions.keys())
+        logger.info(f"REFRESH_LTP: Starting | positions={len(all_symbols)} | broker={self.broker is not None}")
         
-        # BULK FETCH: Get LTP for all symbols in current bucket
-        ltps = self.broker.get_ltp_bulk(current_bucket, exchange="NFO")
+        # BULK FETCH: Get LTP for all positions at once
+        ltps = self.broker.get_ltp_bulk(all_symbols, exchange="NFO")
+        logger.info(f"REFRESH_LTP: Bulk fetch complete | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
         
-        # Process each symbol in the bucket
-        for symbol in current_bucket:
+        # Process each symbol (all positions)
+        for symbol in all_symbols:
             try:
                 if symbol not in self.positions:
                     continue

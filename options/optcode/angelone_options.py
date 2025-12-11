@@ -268,9 +268,21 @@ class AngelOneOptionsBroker:
         
         # Mock spot prices for paper trading
         self.spot_prices = {
+            # Index underlyings
             'BANKNIFTY': 47000,
             'NIFTY': 23500,
             'FINNIFTY': 22000,
+            # Stock underlyings with realistic spot prices
+            'SAMMAANCAP': 150,      # ~6x strike (145)
+            'PAYTM': 1300,          # ~1.02x strike (1280)
+            'ANGELONE': 2550,       # At strike level
+            'MUTHOOTFIN': 3800,     # At strike level
+            'LTF': 310,             # At strike level
+            'HEROMOTOCO': 6200,     # ~1.03x strike (6000)
+            'KFINTECH': 1075,       # ~1.01x strike (1060)
+            'SHRIRAMFIN': 875,      # ~1.03x strike (850)
+            'HINDZINC': 540,        # ~1.03x strike (525)
+            'ABB': 5300,            # ~0.95x strike (5250)
         }
         
         # Positions tracking
@@ -931,21 +943,21 @@ class AngelOneOptionsBroker:
     def get_market_data(self, symbol: str, exchange: str = "NFO") -> Optional[Dict[str, Any]]:
         """
         Get comprehensive market data including LTP, IV, OI, volume, bid/ask.
-        Fetches LIVE data in both PAPER and LIVE modes.
+        Fetches LIVE data from broker - never uses fallback/mock data.
         
         Args:
             symbol: Symbol name
             exchange: NFO for options, NSE for stocks
         
         Returns:
-            Dict with market data or None
+            Dict with market data or None if broker call fails
         """
-        # In PAPER mode, still fetch LIVE market data from broker
-        # Only order placement is simulated
+        # CRITICAL: Always fetch LIVE data from broker
+        # Paper trading = simulated order placement, NOT simulated prices
         
         if not self.authenticated:
             logger.warning(f"MARKET_DATA: Not authenticated | {symbol}")
-            return self._get_mock_market_data(symbol)  # Fallback to mock if not authenticated
+            return None  # Return None instead of mock data
         
         try:
             # Get rate limiter
@@ -1013,16 +1025,14 @@ class AngelOneOptionsBroker:
         if not symbols:
             return {}
         
-        if DevConfig.PAPER_TRADING_ENABLED:
-            # Return mock prices for paper trading
-            result = {}
-            for sym in symbols:
-                result[sym] = self._get_mock_ltp(sym)
-            return result
+        # CRITICAL: Always fetch LIVE data from broker, never use mock/fallback
+        # Paper trading means simulated order placement, NOT simulated prices
+        # Users need real market data to make real trading decisions
+        logger.info(f"BULK_MARKET_DATA: STARTING | symbols={len(symbols)} | authenticated={self.authenticated}")
         
         if not self.authenticated:
-            logger.warning(f"BULK_MARKET_DATA: Not authenticated, using mock data for {len(symbols)} symbols")
-            return {sym: self._get_mock_ltp(sym) for sym in symbols}
+            logger.warning(f"BULK_MARKET_DATA: Not authenticated, cannot fetch live data for {len(symbols)} symbols")
+            return {sym: None for sym in symbols}
         
         result = {sym: None for sym in symbols}
         
@@ -1046,12 +1056,13 @@ class AngelOneOptionsBroker:
                     # Get instrument token
                     token = self.get_instrument_token(symbol, exchange)
                     if not token:
-                        logger.debug(f"BULK_MARKET_DATA: No token found | {symbol}")
+                        logger.warning(f"BULK_MARKET_DATA: No token found | {symbol}")
                         failed_symbols.append(symbol)
                         continue
                     
                     # Fetch market data from AngelOne
                     rate_limiter.record_call("bulk_market_data", True)
+                    logger.debug(f"BULK_MARKET_DATA: Calling ltpData for {symbol} | token={token}")
                     ltp_data = self.smart_api.ltpData(exchange, symbol, token)
                     
                     if ltp_data and ltp_data.get('status'):

@@ -20,7 +20,7 @@ import json
 
 from .config import TradingConfig, CapitalConfig, BASE_DIR
 from .angelone import AngelOneBroker, Order, OrderStatus
-from .logging import log_event, log_trade
+from .bot_logging import log_event, log_trade, log_monitor, log_error
 from .priority_queue import PriorityAPIQueue, APIPriority
 from .adaptive_exit_engine import (
     get_adaptive_exit_engine, 
