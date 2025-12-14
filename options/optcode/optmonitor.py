@@ -226,6 +226,12 @@ class OptionPosition:
         self.exit_order_id = None
         self.exit_reason = None  # PROFIT, LOSS, TIME, MANUAL, EXPIRY
         
+        # Trailing SL tracking (for paper trading logging)
+        self.trailing_sl_activated = False  # Track when trailing SL first activated
+        self.trailing_sl_activation_time = None  # When trailing SL was activated
+        self.last_trailing_sl_price = None  # Last calculated trailing SL price
+        self.trailing_sl_update_count = 0  # Count of trailing SL adjustments
+        
         # P&L tracking
         self.unrealized_pnl = 0.0
         self.realized_pnl = None
@@ -688,6 +694,40 @@ class OptionPositionMonitor:
                 # Trailing SL = Current peak - 20% of peak
                 trailing_sl = position.highest_premium * (1 - sl_buffer / 100)
                 
+                # 🎯 Log when trailing SL is FIRST ACTIVATED (paper trading only)
+                if not position.trailing_sl_activated:
+                    position.trailing_sl_activated = True
+                    position.trailing_sl_activation_time = datetime.now().isoformat()
+                    position.last_trailing_sl_price = trailing_sl
+                    log_event("TRAILING_SL_ACTIVATED", 
+                             f"Trailing SL activated for {symbol} (PAPER MODE - simulated)",
+                             symbol=symbol,
+                             gain_percent=round(gain_percent, 2),
+                             entry_premium=position.entry_premium,
+                             peak_premium=position.highest_premium,
+                             initial_trailing_sl=round(trailing_sl, 2),
+                             current_premium=position.current_premium,
+                             buffer_percentage=sl_buffer,
+                             reason="Gain reached 10% threshold")
+                
+                # 🎯 Log TRAILING SL UPDATE if price changed significantly
+                if position.last_trailing_sl_price != trailing_sl:
+                    old_sl = position.last_trailing_sl_price
+                    position.last_trailing_sl_price = trailing_sl
+                    position.trailing_sl_update_count += 1
+                    
+                    if old_sl is None or trailing_sl > old_sl:
+                        log_event("TRAILING_SL_UPDATED",
+                                 f"Trailing SL adjusted for {symbol} (PAPER MODE - simulated)",
+                                 symbol=symbol,
+                                 update_count=position.trailing_sl_update_count,
+                                 old_sl=round(old_sl, 2) if old_sl else "None",
+                                 new_sl=round(trailing_sl, 2),
+                                 sl_increase=round(trailing_sl - old_sl, 2) if old_sl else None,
+                                 peak_premium=position.highest_premium,
+                                 current_premium=position.current_premium,
+                                 gain_percent=round(gain_percent, 2))
+                
                 # Check if current price hit trailing SL
                 if position.current_premium <= trailing_sl:
                     logger.info(f"TRAILING_SL_HIT: {symbol} | Peak: ₹{position.highest_premium:.2f} | "
@@ -703,9 +743,10 @@ class OptionPositionMonitor:
                         closed.append(pnl)
                         logger.info(f"PROFIT_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
                                    f"Exit: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f} | "
-                                   f"Profit: ₹{pnl['pnl']:.2f} ({gain_percent:.1f}%)")
+                                   f"Profit: ₹{pnl['pnl']:.2f} ({gain_percent:.1f}%) | "
+                                   f"TSL Updates: {position.trailing_sl_update_count}")
                 else:
-                    # Log trailing SL status
+                    # Log trailing SL status (debug level - not shown in normal run)
                     logger.debug(f"TRAILING_SL: {symbol} | Gain: {gain_percent:.1f}% | "
                                 f"Peak: ₹{position.highest_premium:.2f} | SL: ₹{trailing_sl:.2f} | "
                                 f"Current: ₹{position.current_premium:.2f}")
