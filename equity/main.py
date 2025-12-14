@@ -34,7 +34,6 @@ from eqcode.config import validate_config, get_config_summary, TradingConfig, We
 from eqcode.bot_logging import log_event, log_startup_info, log_system_state, log_error
 from eqcode.api import start_webhook_server
 from eqcode.hybrid_learning_engine import HybridLearningEngine
-from eqcode.eod_scheduler import start_eod_scheduler_daemon
 
 
 class EquityTradingBot:
