@@ -437,7 +437,7 @@ def validate_optconfig() -> Tuple[bool, str]:
     # Validate sentiment thresholds
     if SentimentConfig.ENTRY_PCR_MIN >= SentimentConfig.ENTRY_PCR_MAX:
         return False, "ENTRY_PCR_MIN must be < ENTRY_PCR_MAX"
-    if SentimentConfig.EXIT_PCR_BULLISH >= SentimentConfig.EXIT_PCR_BEARISH:
-        return False, "EXIT_PCR_BULLISH must be < EXIT_PCR_BEARISH"
+    # EXIT_PCR thresholds were refactored to use EXIT_PCR_FADE_THRESHOLD
+    # No need to validate old absolute thresholds
     
     return True, "Options bot configuration valid"
