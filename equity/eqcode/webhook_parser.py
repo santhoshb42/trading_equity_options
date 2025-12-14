@@ -25,6 +25,18 @@ except Exception:
     def validate_signal_quality(*args, **kwargs):
         return True, "Filter module unavailable"
 
+# ML Signal Filter integration
+try:
+    from .ml_signal_filter import MLSignalFilter
+    _ml_filter = MLSignalFilter()
+    ML_FILTER_AVAILABLE = True
+except Exception:
+    _ml_filter = None
+    ML_FILTER_AVAILABLE = False
+    
+    def validate_signal_with_ml(*args, **kwargs):
+        return True, 0.65, {'status': 'ml_filter_unavailable'}
+
 
 def process_symbol(raw_symbol: str) -> str:
     # Remove exchange prefixes (NSE:, BSE:, etc) and suffixes (.NSE)
@@ -221,6 +233,68 @@ def validate_alert(alert_data: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any
         except Exception as e:
             log_event("SIGNAL_FILTER_ERROR", f"Signal filter error: {str(e)}", symbol=symbol, error_type=type(e).__name__)
             # Continue on filter error (don't block trades)
+        
+        # Apply ML-based signal filtering (learns from trade outcomes)
+        if ML_FILTER_AVAILABLE and _ml_filter and action == "BUY":
+            try:
+                ml_valid, ml_confidence, ml_details = _ml_filter.validate_signal_with_ml(
+                    symbol=symbol,
+                    alert_data=processed['quality'],
+                    entry_price=price
+                )
+                
+                # Log detailed ML decision with feature extraction data
+                log_event(
+                    "ML_SIGNAL_VALIDATION",
+                    f"ML validation: {'ACCEPTED' if ml_valid else 'REJECTED'}",
+                    symbol=symbol,
+                    action=action,
+                    price=price,
+                    ml_confidence=ml_confidence,
+                    ml_status=ml_details.get('status', 'unknown'),
+                    model_trained=ml_details.get('model_trained', False),
+                    rf_score=ml_details.get('rf_score'),
+                    gb_score=ml_details.get('gb_score'),
+                    svm_score=ml_details.get('svm_score'),
+                    ensemble_score=ml_details.get('ensemble_score'),
+                    training_samples=ml_details.get('training_samples', 0)
+                )
+                
+                # Only reject if model is trained AND high confidence negative prediction
+                if not ml_valid and ml_details.get('model_trained', False):
+                    log_event(
+                        "ML_FILTER_REJECTED",
+                        f"Signal rejected by ML filter (confidence: {ml_confidence:.3f})",
+                        symbol=symbol,
+                        action=action,
+                        price=price,
+                        ml_reason=ml_details.get('reason', 'Unknown')
+                    )
+                    return False, f"ML signal filter: {ml_details.get('reason', 'Poor signal quality')}", {}
+                
+                # Log feature extraction data for analysis
+                if ml_details.get('features'):
+                    log_event(
+                        "ML_FEATURES_EXTRACTED",
+                        f"Features extracted for {symbol}",
+                        symbol=symbol,
+                        momentum_3=ml_details['features'].get('momentum_3'),
+                        momentum_5=ml_details['features'].get('momentum_5'),
+                        volatility=ml_details['features'].get('volatility'),
+                        rsi_extreme=ml_details['features'].get('rsi_extreme'),
+                        volume_trend=ml_details['features'].get('volume_trend'),
+                        trend_consistency=ml_details['features'].get('trend_consistency')
+                    )
+                
+            except Exception as e:
+                log_event(
+                    "ML_FILTER_ERROR",
+                    f"ML signal filter error: {str(e)}",
+                    symbol=symbol,
+                    error_type=type(e).__name__,
+                    action="continuing_without_ml"
+                )
+                # Continue on ML filter error (don't block trades)
         
         return True, "OK", processed
 

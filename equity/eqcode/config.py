@@ -237,22 +237,6 @@ class WebhookConfig:
     VALID_ACTIONS = ["BUY", "SELL", "EXIT"]
 
 # =============================================================================
-# Logging Configuration
-# =============================================================================
-
-class LoggingConfig:
-    """Logging configuration"""
-    
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-    
-    # Log file sizes
-    MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB per log file
-    BACKUP_COUNT = 5  # Keep 5 backup files
-    
-    # Log retention
-    LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # Keep logs for 30 days
-
-# =============================================================================
 # Development and Testing
 # =============================================================================
 

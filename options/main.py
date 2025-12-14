@@ -19,7 +19,9 @@ import time
 import os
 import atexit
 import threading
-from datetime import datetime
+import math
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add parent directory to path
@@ -170,8 +172,130 @@ class OptionsTradingBot:
         # Start instrument refresh thread
         self._start_instrument_refresh()
         
+        # Start EOD cleanup scheduler (to prevent stale positions)
+        self._start_eod_cleanup_scheduler()
+        
         # Start API server
         self._start_api_server()
+    
+    def _start_eod_cleanup_scheduler(self):
+        """Start EOD cleanup scheduler to prevent stale positions from accumulating"""
+        def eod_cleanup_loop():
+            """Background thread to clean up stale positions at EOD"""
+            import schedule
+            
+            print("📍 EOD Cleanup Scheduler: Starting")
+            print("   ⏱️ Scheduled cleanup time: 15:15 PM (after square-off at 15:12)")
+            logger.info("EOD_CLEANUP: SCHEDULER_START | scheduled_time=15:15")
+            
+            # Schedule cleanup for 3:15 PM daily (after square-off at 3:12 PM)
+            schedule.every().day.at("15:15").do(self._cleanup_stale_positions)
+            
+            while self.running:
+                try:
+                    schedule.run_pending()
+                    time.sleep(5)  # Check every 5 seconds if a scheduled task should run
+                except Exception as e:
+                    logger.error(f"EOD_CLEANUP: SCHEDULER_ERROR | {str(e)}")
+                    time.sleep(60)
+        
+        eod_cleanup_thread = threading.Thread(
+            target=eod_cleanup_loop,
+            daemon=True,
+            name="OptionsEODCleanup"
+        )
+        eod_cleanup_thread.start()
+        print("   ✅ EOD cleanup scheduler thread started")
+        logger.debug("EOD_CLEANUP: THREAD_STARTED")
+    
+    def _cleanup_stale_positions(self):
+        """Clean up stale paper trading positions to prevent daily accumulation"""
+        try:
+            logger.info("EOD_CLEANUP: START | time=" + datetime.now().isoformat())
+            print(f"\n🧹 EOD Cleanup: Running stale position cleanup at {datetime.now().strftime('%H:%M:%S')}")
+            
+            # Load positions from file
+            positions_file = Path(__file__).parent / "data" / "option_positions.json"
+            if not positions_file.exists():
+                logger.info("EOD_CLEANUP: NO_POSITIONS_FILE")
+                print("   ℹ️ No positions file found")
+                return
+            
+            with open(positions_file, 'r') as f:
+                data = json.load(f)
+            
+            positions = data.get('positions', [])
+            if not positions:
+                logger.info("EOD_CLEANUP: NO_OPEN_POSITIONS")
+                print("   ℹ️ No open positions to clean")
+                return
+            
+            # Identify stale positions (entry_premium = 0 or very old)
+            stale_positions = []
+            cutoff_time = datetime.now() - timedelta(hours=24)  # Positions older than 24 hours
+            
+            for pos in positions:
+                # Mark as stale if: entry_premium is 0 OR position is older than 24 hours
+                entry_premium = pos.get('entry_premium', 0)
+                entry_time_str = pos.get('entry_time', '')
+                
+                is_zero_premium = entry_premium == 0 or entry_premium == 0.0
+                
+                is_old = False
+                if entry_time_str:
+                    try:
+                        entry_time = datetime.fromisoformat(entry_time_str)
+                        is_old = entry_time < cutoff_time
+                    except Exception:
+                        pass
+                
+                if is_zero_premium or is_old:
+                    stale_positions.append(pos)
+                    reason = "ZERO_PREMIUM" if is_zero_premium else "OLDER_THAN_24H"
+                    symbol = pos.get('symbol', 'UNKNOWN')
+                    logger.warning(f"EOD_CLEANUP: STALE_DETECTED | symbol={symbol} | reason={reason}")
+            
+            if not stale_positions:
+                logger.info(f"EOD_CLEANUP: NO_STALE_POSITIONS | total_positions={len(positions)}")
+                print(f"   ✅ No stale positions found ({len(positions)} active positions)")
+                return
+            
+            # Archive stale positions
+            archive_file = Path(__file__).parent / "data" / "option_positions_archive.json"
+            existing_archive = []
+            if archive_file.exists():
+                with open(archive_file, 'r') as f:
+                    archive_data = json.load(f)
+                    existing_archive = archive_data.get('positions', [])
+            
+            # Add closed timestamps to stale positions
+            closed_positions = []
+            for pos in stale_positions:
+                pos['status'] = 'CLOSED'
+                pos['closed_at'] = datetime.now().isoformat()
+                pos['close_reason'] = 'EOD_STALE_CLEANUP'
+                pos['exit_price'] = pos.get('current_premium', pos.get('entry_premium', 0))
+                closed_positions.append(pos)
+            
+            # Save archive
+            with open(archive_file, 'w') as f:
+                json.dump({
+                    'positions': existing_archive + closed_positions,
+                    'last_cleanup': datetime.now().isoformat()
+                }, f, indent=2)
+            
+            # Remove stale positions from active file
+            active_positions = [p for p in positions if p not in stale_positions]
+            with open(positions_file, 'w') as f:
+                json.dump({'positions': active_positions}, f, indent=2)
+            
+            logger.info(f"EOD_CLEANUP: SUCCESS | cleaned={len(stale_positions)} | remaining={len(active_positions)}")
+            print(f"   ✅ Cleaned {len(stale_positions)} stale position(s)")
+            print(f"   📊 Remaining active positions: {len(active_positions)}")
+            
+        except Exception as e:
+            logger.error(f"EOD_CLEANUP: FAILED | {str(e)}")
+            print(f"   ❌ Cleanup failed: {str(e)}")
     
     def _start_position_monitor(self):
         """Start position monitoring thread with adaptive IV-aware intervals"""
@@ -193,10 +317,29 @@ class OptionsTradingBot:
                         continue
                     
                     # CRITICAL: Refresh LTP for all positions from broker
+                    ltps_refreshed = False
                     if len(self.monitor.positions) > 0:
-                        refresh_stats = self.monitor.refresh_position_ltps()
-                        if refresh_stats['ltps_updated'] > 0:
-                            logger.debug(f"POSITION_MONITOR: LTP_REFRESH | updated={refresh_stats['ltps_updated']}/{len(self.monitor.positions)}")
+                        try:
+                            refresh_stats = self.monitor.refresh_position_ltps()
+                            if refresh_stats['ltps_updated'] > 0:
+                                ltps_refreshed = True
+                                logger.debug(f"POSITION_MONITOR: LTP_REFRESH | updated={refresh_stats['ltps_updated']}/{len(self.monitor.positions)}")
+                            
+                            # Also refresh candle data for fake move detection
+                            candle_stats = self.monitor.refresh_underlying_candles()
+                            if candle_stats['candles_fetched'] > 0:
+                                logger.debug(f"POSITION_MONITOR: CANDLE_REFRESH | updated={candle_stats['candles_fetched']} | underlyings={candle_stats['underlyings']}")
+                        except Exception as ltp_err:
+                            logger.warning(f"POSITION_MONITOR: LTP_REFRESH_ERROR | {str(ltp_err)}")
+                            # If LTP refresh fails, likely market is closed - skip exit checks
+                            time.sleep(current_interval)
+                            continue
+                    
+                    # Only check exits if we successfully refreshed at least some LTPs
+                    if not ltps_refreshed:
+                        logger.debug(f"POSITION_MONITOR: No LTPs refreshed, skipping exit checks")
+                        time.sleep(current_interval)
+                        continue
                     
                     # Check and close expired positions
                     expired = self.monitor.check_expiry_close()
@@ -261,6 +404,43 @@ class OptionsTradingBot:
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: STOPLOSS_ALERT_FAILED | {str(e)}")
                     
+                    # NEW: Check sentiment exit (PCR + OI Buildup fade)
+                    # HIGH IV: Check sentiment every 5 seconds (not 60) - profit bookings change IV rapidly
+                    should_check_sentiment = False
+                    if self.monitor.last_sentiment_check_time is None:
+                        should_check_sentiment = True
+                    else:
+                        time_since_last_check = (datetime.now() - self.monitor.last_sentiment_check_time).total_seconds()
+                        if time_since_last_check >= MonitoringConfig.SENTIMENT_CHECK_INTERVAL_SECONDS:
+                            should_check_sentiment = True
+                    
+                    sentiment_exits = []
+                    if should_check_sentiment:
+                        sentiment_exits = self.monitor.check_sentiment_exit()
+                        self.monitor.last_sentiment_check_time = datetime.now()  # Update timestamp
+                        if sentiment_exits:
+                            logger.info(f"POSITION_MONITOR: SENTIMENT_CHECK | {len(self.positions)} positions checked | {len(sentiment_exits)} exits triggered")
+                    
+                    if sentiment_exits:
+                        for pos in sentiment_exits:
+                            print(f"   📊 Sentiment exit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
+                            logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'Sentiment deterioration'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT_ALERT_FAILED | {str(e)}")
+                    
                     # Get position summary
                     summary = self.monitor.get_position_summary()
                     
@@ -283,15 +463,25 @@ class OptionsTradingBot:
                                 current_interval = MonitoringConfig.MONITOR_INTERVAL_NORMAL
                     
                     if summary['open_positions'] > 0:
-                        print(f"\n📊 Portfolio Status:")
-                        print(f"   Open Positions: {summary['open_positions']}")
-                        print(f"   Total Unrealized P&L: ₹{summary['total_unrealized_pnl']:.2f}")
-                        print(f"   Portfolio Delta: {summary['portfolio_delta']:.2f}")
-                        print(f"   Portfolio Gamma: {summary['portfolio_gamma']:.4f}")
-                        print(f"   Portfolio Theta: {summary['portfolio_theta']:.4f}")
-                        print(f"   Next check in: {current_interval}s\n")
-                        
-                        logger.debug(f"POSITION_MONITOR: STATE | open={summary['open_positions']} | upnl=₹{summary['total_unrealized_pnl']:.2f} | delta={summary['portfolio_delta']:.2f} | gamma={summary['portfolio_gamma']:.4f} | interval={current_interval}s")
+                        # Safely format portfolio metrics to handle NaN/inf values
+                        try:
+                            upnl = summary['total_unrealized_pnl'] if not (isinstance(summary['total_unrealized_pnl'], float) and (float('nan') if isinstance(summary['total_unrealized_pnl'], float) else False)) else 0
+                            delta = summary['portfolio_delta'] if isinstance(summary['portfolio_delta'], (int, float)) and not math.isnan(summary['portfolio_delta']) else 0
+                            gamma = summary['portfolio_gamma'] if isinstance(summary['portfolio_gamma'], (int, float)) and not math.isnan(summary['portfolio_gamma']) else 0
+                            theta = summary['portfolio_theta'] if isinstance(summary['portfolio_theta'], (int, float)) and not math.isnan(summary['portfolio_theta']) else 0
+                            
+                            print(f"\n📊 Portfolio Status:")
+                            print(f"   Open Positions: {summary['open_positions']}")
+                            print(f"   Total Unrealized P&L: ₹{upnl:.2f}")
+                            print(f"   Portfolio Delta: {delta:.2f}")
+                            print(f"   Portfolio Gamma: {gamma:.4f}")
+                            print(f"   Portfolio Theta: {theta:.4f}")
+                            print(f"   Next check in: {current_interval}s\n")
+                            
+                            logger.debug(f"POSITION_MONITOR: STATE | open={summary['open_positions']} | upnl=₹{upnl:.2f} | delta={delta:.2f} | gamma={gamma:.4f} | interval={current_interval}s")
+                        except Exception as format_err:
+                            logger.warning(f"POSITION_MONITOR: Format error in portfolio display: {str(format_err)}")
+                            print(f"\n📊 Portfolio: {summary['open_positions']} positions (display error, check logs)")
                         
                         # Send portfolio monitoring alert every 30 seconds
                         if self.alert_manager and int(time.time()) % 30 == 0:
@@ -317,8 +507,11 @@ class OptionsTradingBot:
                     time.sleep(current_interval)  # Adaptive monitoring interval (default 10s, can go to 8s or 20s)
                 
                 except Exception as e:
+                    import traceback
                     print(f"❌ Position monitor error: {str(e)}")
-                    logger.error(f"POSITION_MONITOR: ERROR | {str(e)}", exc_info=True)
+                    tb = traceback.format_exc()
+                    logger.error(f"POSITION_MONITOR: ERROR | {str(e)} | traceback={tb}")
+                    print(tb)
                     time.sleep(5)
             
             logger.info("POSITION_MONITOR: STOPPED")

@@ -445,14 +445,26 @@ class MLSignalFilter:
         else:
             self.model_stats['rejected_signals'] += 1
         
-        return is_valid, ml_score, {
+        # Prepare comprehensive details with individual model scores
+        return_details = {
+            'status': 'ml_validation_complete',
             'ml_score': ml_score,
             'threshold': self.min_score_threshold,
             'is_valid': is_valid,
-            'model_details': details,
-            'features_used': features,
-            'model_trained': self.model.is_trained
+            'model_trained': self.model.is_trained,
+            'training_samples': len(self.model.training_data) if hasattr(self.model, 'training_data') else 0,
+            'features': features,
+            'rf_score': details.get('rf_score'),
+            'gb_score': details.get('gb_score'),
+            'svm_score': details.get('svm_score'),
+            'ensemble_score': details.get('ensemble_score'),
+            'model_agreement': details.get('model_agreement'),
+            'reason': 'New symbol - learning mode' if details.get('override_reason') == 'new_symbol_learning_mode' else (
+                'Signal quality below threshold' if not is_valid else 'Signal passed ML validation'
+            )
         }
+        
+        return is_valid, ml_score, return_details
     
     def record_trade_outcome(self, symbol: str, won: bool) -> None:
         """Record trade result for model retraining"""
@@ -502,6 +514,84 @@ class MLSignalFilter:
             'accuracy': 0.0
         }
         self.accuracy_by_symbol = {}
+    
+    def export_training_data(self, filepath: str = None) -> Dict[str, Any]:
+        """
+        Export training data to JSON for offline analysis
+        
+        Args:
+            filepath: Optional path to save JSON file. If None, data is returned only.
+            
+        Returns:
+            Dictionary containing training data and metadata
+        """
+        try:
+            if not self.model or not hasattr(self.model, 'training_data'):
+                return {'status': 'error', 'message': 'No training data available'}
+            
+            # Prepare training data for export
+            training_records = []
+            for i, (features, label) in enumerate(zip(
+                self.model.training_data, 
+                self.model.training_labels if hasattr(self.model, 'training_labels') else []
+            )):
+                record = {
+                    'sample_id': i + 1,
+                    'features': features if isinstance(features, dict) else {
+                        self.model.feature_names[j]: float(features[j]) 
+                        for j in range(len(features)) if j < len(self.model.feature_names)
+                    },
+                    'label': 'WIN' if label == 1 else 'LOSS',
+                    'label_numeric': int(label)
+                }
+                training_records.append(record)
+            
+            # Prepare export data
+            export_data = {
+                'export_timestamp': datetime.now().isoformat(),
+                'model_version': 'ensemble_v1',
+                'total_samples': len(training_records),
+                'model_trained': self.model.is_trained if self.model else False,
+                'model_stats': self.model_stats.copy(),
+                'symbol_accuracy': self.accuracy_by_symbol.copy(),
+                'training_records': training_records,
+                'metadata': {
+                    'min_score_threshold': self.min_score_threshold,
+                    'ensemble_weights': {
+                        'random_forest': 0.4,
+                        'gradient_boosting': 0.4,
+                        'svm': 0.2
+                    },
+                    'feature_names': self.model.feature_names if self.model else []
+                }
+            }
+            
+            # Save to file if filepath provided
+            if filepath:
+                try:
+                    with open(filepath, 'w') as f:
+                        json.dump(export_data, f, indent=2, default=str)
+                    
+                    log_event(
+                        "ML_DATA_EXPORTED",
+                        f"Training data exported to {filepath}",
+                        filepath=filepath,
+                        total_samples=len(training_records),
+                        file_size_bytes=Path(filepath).stat().st_size
+                    )
+                    
+                    export_data['export_status'] = 'success'
+                    export_data['filepath'] = filepath
+                except Exception as e:
+                    log_event("ML_EXPORT_ERROR", f"Failed to save training data: {e}")
+                    export_data['export_status'] = 'error'
+                    export_data['export_error'] = str(e)
+            
+            return export_data
+            
+        except Exception as e:
+            log_event("ML_EXPORT_EXCEPTION", f"Exception while exporting training data: {e}")
+            return {'status': 'error', 'message': str(e)}
 
 
 # Global instance
@@ -529,9 +619,47 @@ def validate_with_ml(symbol: str, alert_data: Dict[str, Any],
 
 
 def record_ml_trade_outcome(symbol: str, won: bool) -> None:
-    """Record outcome for model training"""
-    ml_filter = get_ml_filter()
-    ml_filter.record_trade_outcome(symbol, won)
+    """
+    Record trade outcome for model training and retraining
+    
+    This is called when a position closes, allowing the model to learn
+    from real trade results and improve predictions over time.
+    """
+    try:
+        ml_filter = get_ml_filter()
+        ml_filter.record_trade_outcome(symbol, won)
+        
+        # Log the training data accumulation
+        try:
+            log_event(
+                "ML_TRADE_OUTCOME_RECORDED",
+                f"Trade outcome recorded for {symbol}: {'WIN' if won else 'LOSS'}",
+                symbol=symbol,
+                outcome="WIN" if won else "LOSS",
+                training_samples=len(ml_filter.model.training_data) if hasattr(ml_filter.model, 'training_data') else 0,
+                model_trained=ml_filter.model.is_trained if ml_filter.model else False
+            )
+            
+            # Check if model should retrain (every 10 new samples)
+            if ml_filter.model and hasattr(ml_filter.model, 'training_data'):
+                num_samples = len(ml_filter.model.training_data)
+                if num_samples % 10 == 0 and num_samples > 0 and not ml_filter.model.is_trained:
+                    log_event(
+                        "ML_AUTO_RETRAIN_TRIGGER",
+                        f"Auto-retraining ML model with {num_samples} samples",
+                        symbol=symbol,
+                        total_samples=num_samples,
+                        action="Model retraining initiated"
+                    )
+                    
+        except Exception as e:
+            # Non-fatal logging error
+            pass
+            
+    except Exception as e:
+        log_event("ML_EXIT_ERROR", f"Failed to record exit for ML: {e}")
+
+
 
 
 def get_ml_statistics() -> Dict[str, Any]:
@@ -550,3 +678,15 @@ def reset_ml_stats() -> None:
     """Reset ML statistics"""
     ml_filter = get_ml_filter()
     ml_filter.reset_statistics()
+
+
+def export_ml_training_data(filepath: str = None) -> Dict[str, Any]:
+    """
+    Export ML training data to JSON file for offline analysis
+    
+    Usage:
+        data = export_ml_training_data('/root/santhosh/trading/equity/data/ml_training_data.json')
+    """
+    ml_filter = get_ml_filter()
+    return ml_filter.export_training_data(filepath)
+

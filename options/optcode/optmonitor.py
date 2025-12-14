@@ -14,7 +14,7 @@ from pathlib import Path
 from .optconfig import OptionsCapitalConfig, OptionsTradingConfig, BASE_DIR
 from .angelone_options import AngelOneOptionsBroker, get_options_broker
 from .optlogging import logger, log_position, log_pnl, log_event
-from .fake_move_detector import get_fake_move_detector
+from .fake_move_detector import get_fake_move_detector, get_decay_monitor
 from .trade_logger import get_trade_logger
 
 # =============================================================================
@@ -91,6 +91,80 @@ class LTPBucketManager:
         return status
 
 # =============================================================================
+# Active Symbol Pool Manager
+# =============================================================================
+
+class ActiveSymbolPool:
+    """
+    Manages the pool of active symbols for bulk LTP/candle fetching.
+    
+    Ensures we only fetch data for symbols that:
+    - Have an open position (entry made)
+    - Have not hit stop-loss or profit target
+    - Have not been manually closed
+    
+    Symbols are added to pool at order placement and removed at exit.
+    This prevents wasting API calls on closed/historical positions.
+    """
+    
+    def __init__(self):
+        """Initialize empty symbol pool"""
+        self.active_symbols: set = set()  # Set of symbols currently being monitored
+        self.pool_history: Dict[str, Dict[str, Any]] = {}  # Track entry/exit times
+        self.lock = None
+    
+    def add_symbol(self, symbol: str, order_id: str = "", entry_time: Optional[datetime] = None):
+        """
+        Add symbol to active pool when position is opened.
+        
+        Args:
+            symbol: Contract symbol (e.g., BANKNIFTY25DEC47000CE)
+            order_id: Order ID for tracking
+            entry_time: When position was entered
+        """
+        if symbol not in self.active_symbols:
+            self.active_symbols.add(symbol)
+            self.pool_history[symbol] = {
+                'added_at': entry_time or datetime.now(),
+                'order_id': order_id,
+                'removed_at': None,
+                'exit_reason': None
+            }
+            logger.info(f"SYMBOL_POOL: ADDED | {symbol} | active_count={len(self.active_symbols)}")
+    
+    def remove_symbol(self, symbol: str, exit_reason: str = ""):
+        """
+        Remove symbol from active pool when position is closed.
+        
+        Args:
+            symbol: Contract symbol
+            exit_reason: Why position was closed (SL_HIT, PROFIT_TARGET, MANUAL_EXIT, etc.)
+        """
+        if symbol in self.active_symbols:
+            self.active_symbols.remove(symbol)
+            if symbol in self.pool_history:
+                self.pool_history[symbol]['removed_at'] = datetime.now()
+                self.pool_history[symbol]['exit_reason'] = exit_reason
+            logger.info(f"SYMBOL_POOL: REMOVED | {symbol} | reason={exit_reason} | active_count={len(self.active_symbols)}")
+    
+    def get_active_symbols(self) -> List[str]:
+        """Get list of currently active symbols for bulk fetching"""
+        return list(self.active_symbols)
+    
+    def get_pool_status(self) -> Dict[str, Any]:
+        """Get detailed status of symbol pool"""
+        return {
+            'active_count': len(self.active_symbols),
+            'symbols': sorted(list(self.active_symbols)),
+            'history_count': len(self.pool_history),
+            'recent_additions': [
+                (sym, info['added_at'].isoformat())
+                for sym, info in sorted(self.pool_history.items(), 
+                                       key=lambda x: x[1]['added_at'], reverse=True)[:5]
+            ]
+        }
+
+# =============================================================================
 # Options Position Model
 # =============================================================================
 
@@ -134,6 +208,11 @@ class OptionPosition:
         self.current_iv = 20.0
         self.entry_iv = None  # IV at entry (for IV crush detection)
         self.last_updated = entry_time
+        
+        # NEW: Sentiment tracking (for fade detection)
+        self.entry_pcr = None  # PCR at entry
+        self.entry_oi_buildup = None  # OI buildup at entry
+        self.entry_sentiment_timestamp = None  # When sentiment was recorded
         
         # Market data tracking for liquidity
         self.bid_price = entry_premium
@@ -258,8 +337,19 @@ class OptionPositionMonitor:
         # Bucket manager for bulk LTP fetching (optimization)
         self.ltp_bucket_manager = LTPBucketManager(bucket_size=5)
         
+        # Active symbol pool - tracks only currently open positions for bulk fetch
+        self.symbol_pool = ActiveSymbolPool()
+        
+        # SENTIMENT CHECK TIMING: Track when we last checked sentiment
+        # IV changes fast (5-10s), so check frequently for fades
+        self.last_sentiment_check_time = None  # Will check immediately on first call
+        
         # Load existing positions
         self._load_positions()
+        
+        # Re-populate symbol pool with loaded positions
+        for symbol in self.positions.keys():
+            self.symbol_pool.add_symbol(symbol, entry_time=self.positions[symbol].entry_time)
     
     def add_position(self,
                     symbol: str,
@@ -274,6 +364,12 @@ class OptionPositionMonitor:
                     underlying_alert_price: Optional[float] = None) -> bool:
         """Add new option position"""
         try:
+            # SAFETY CHECK: Reject positions with zero entry premium (prevents stale positions)
+            if entry_premium <= 0:
+                logger.warning(f"POSITION_ADD: REJECTED_ZERO_PREMIUM | {symbol} | premium={entry_premium}")
+                print(f"⚠️ REJECTED: Position {symbol} has zero/invalid entry premium (premium={entry_premium})")
+                return False
+            
             logger.debug(f"POSITION_ADD: {symbol} | qty={quantity} | premium={entry_premium:.2f}")
             
             if symbol in self.positions:
@@ -297,6 +393,20 @@ class OptionPositionMonitor:
             
             self.positions[symbol] = position
             self._save_positions()
+            
+            # ADD TO ACTIVE SYMBOL POOL for bulk LTP fetching
+            self.symbol_pool.add_symbol(symbol, order_id=order_id, entry_time=position.entry_time)
+            
+            # Initialize decay-aware monitoring
+            decay_monitor = get_decay_monitor()
+            # Parse expiry date to calculate days remaining
+            try:
+                expiry_date = datetime.strptime(expiry, "%d-%b-%Y")
+                days_to_expiry = (expiry_date - datetime.now()).days
+                decay_monitor.initialize_position(symbol, entry_premium, max(0, days_to_expiry))
+                logger.debug(f"POSITION_ADD: DECAY_MONITOR_INIT | {symbol} | days_to_expiry={days_to_expiry}")
+            except Exception as e:
+                logger.warning(f"POSITION_ADD: DECAY_MONITOR_INIT_FAILED | {symbol} | {str(e)}")
             
             # Register for fake move monitoring
             fake_move_detector = get_fake_move_detector()
@@ -391,9 +501,42 @@ class OptionPositionMonitor:
             except Exception as e:
                 logger.warning(f"POSITION_CLOSE: TRADE_LOG_FAILED | {symbol} | {str(e)}")
             
+            # RECORD OUTCOME FOR ML LEARNING (NEW)
+            try:
+                from .opt_ml_integration import get_ml_integration
+                ml_integration = get_ml_integration()
+                
+                # Record trade outcome: WIN if PnL > 0, LOSS otherwise
+                trade_outcome = {
+                    'symbol': symbol,
+                    'underlying': position.underlying,
+                    'action': position.action,
+                    'pnl': pnl_info['pnl'],
+                    'pnl_percent': pnl_info['pnl_percent'],
+                    'exit_reason': exit_reason,
+                    'entry_time': pnl_info.get('entry_time'),
+                    'duration_seconds': pnl_info.get('duration', 0),
+                    'contract_type': position.contract_type,
+                    'strike': position.strike,
+                    'quantity': position.quantity,
+                    'won': pnl_info['pnl'] > 0  # WIN if profitable
+                }
+                
+                ml_integration.record_daily_trade(trade_outcome)
+                
+                logger.info(f"ML_OUTCOME_RECORDED: {symbol} | {'WIN' if trade_outcome['won'] else 'LOSS'} | "
+                           f"PnL=₹{pnl_info['pnl']:.2f} | {exit_reason}")
+                
+            except Exception as e:
+                logger.warning(f"ML_OUTCOME_RECORD_FAILED: {symbol} | {str(e)}")
+                # Don't block position close on ML recording error
+            
             # Move to history
             self.closed_positions.append(position)
             del self.positions[symbol]
+            
+            # REMOVE FROM ACTIVE SYMBOL POOL
+            self.symbol_pool.remove_symbol(symbol, exit_reason=exit_reason)
             
             # Clear fake move monitoring
             fake_move_detector = get_fake_move_detector()
@@ -433,36 +576,64 @@ class OptionPositionMonitor:
     def check_profit_targets(self) -> List[Dict[str, Any]]:
         """Close positions with intelligent trailing exit strategy
         
-        Strategy:
-        1. Lock in initial profit target (5%)
-        2. Trail by configured buffer (2%) from peak
-        3. Exit when price pulls back from peak
+        TRIAL MODE: NO profit targets - let winners run!
+        Only exit on trailing SL (20% below peak) or hard SL (20% loss).
         
-        This lets winners run while protecting against reversals.
+        Strategy:
+        - No fixed profit target
+        - Let winners run to maximum
+        - Only exit when position deteriorates
+        - Trail SL up every 10% gain to lock profits
         """
-        closed = []
+        # TRIAL MODE: Profit target disabled (set to 0)
         profit_target = OptionsTradingConfig.PROFIT_TARGET_PERCENTAGE
+        
+        # If profit target is 0 or disabled, skip profit target exits
+        if profit_target <= 0:
+            logger.debug("PROFIT_TARGETS: DISABLED (Trial mode - no target, let winners run)")
+            return []
+        
+        # Original profit target logic (disabled in trial mode)
+        closed = []
         enable_trailing = OptionsTradingConfig.ENABLE_TRAILING_EXIT
         trailing_buffer = OptionsTradingConfig.TRAILING_BUFFER_PERCENTAGE
+        decay_monitor = get_decay_monitor()
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
+            
+            # Guard against zero entry premium
+            if not position.entry_premium or position.entry_premium <= 0:
+                logger.warning(f"PROFIT_CHECK: Skipping {symbol} - entry_premium is {position.entry_premium}")
+                continue
             
             if position.unrealized_pnl > 0:
                 # Calculate current and peak profit percentages
                 current_profit_pct = (position.current_premium - position.entry_premium) / position.entry_premium * 100
                 peak_profit_pct = (position.highest_premium - position.entry_premium) / position.entry_premium * 100
                 
+                # Get decay-aware analysis
+                decay_signal = decay_monitor.get_smart_monitoring_signal(
+                    symbol, position.current_premium, position.entry_premium
+                )
+                
                 should_exit = False
                 exit_reason = "PROFIT"
                 
                 if enable_trailing and peak_profit_pct >= profit_target:
-                    # Trailing exit: exit when price pulls back from peak
-                    # Current price is more than trailing_buffer% below peak
+                    # Trailing exit with decay-aware validation
+                    # Only exit if price pulls back from peak AND it's not a temporary dip
                     if current_profit_pct <= (peak_profit_pct - trailing_buffer):
-                        should_exit = True
-                        exit_reason = f"TRAILING_EXIT (peak={peak_profit_pct:.1f}%, current={current_profit_pct:.1f}%, buffer={trailing_buffer:.1f}%)"
-                        logger.info(f"TRAILING_EXIT: {symbol} | Peak profit: {peak_profit_pct:.1f}% → Current: {current_profit_pct:.1f}% | Exiting at: ₹{position.current_premium:.2f}")
+                        # Check if it's just profit booking or real reversion
+                        is_booking, booking_reason = decay_signal.get('is_booking', (False, None)), decay_signal.get('booking_reason', '')
+                        
+                        if decay_signal['signal'] != 'HOLD':  # Not held back by profit booking pattern
+                            should_exit = True
+                            exit_reason = f"TRAILING_EXIT (peak={peak_profit_pct:.1f}%, current={current_profit_pct:.1f}%, buffer={trailing_buffer:.1f}%)"
+                            logger.info(f"TRAILING_EXIT: {symbol} | Peak profit: {peak_profit_pct:.1f}% → Current: {current_profit_pct:.1f}% | Exiting at: ₹{position.current_premium:.2f}")
+                        else:
+                            # Temporary dip - stay in position
+                            logger.debug(f"TRAILING_HELD: {symbol} | Dip detected as temporary | {decay_signal['reason']}")
                 else:
                     # Standard exit: exit at initial profit target (for non-trailing mode)
                     if current_profit_pct >= profit_target:
@@ -486,11 +657,77 @@ class OptionPositionMonitor:
         
         return closed
     
+    def check_trailing_stop_losses(self) -> List[Dict[str, Any]]:
+        """
+        Trail stop loss up as position gains (lock in profits every 10% gain).
+        
+        TRIAL MODE: 20% SL with 10% gain trailing
+        - Entry at ₹100, SL = ₹80
+        - Reaches ₹110 (+10%) → Move SL to ₹88 (20% below new peak)
+        - Reaches ₹121 (+21%, another 10%) → Move SL to ₹96.80
+        - Continue trailing up or exit when SL hit
+        
+        This protects profits while letting winners run.
+        """
+        closed = []
+        sl_buffer = OptionsTradingConfig.TRAILING_BUFFER_PERCENTAGE  # 20%
+        gain_threshold = OptionsTradingConfig.TRAILING_GAIN_THRESHOLD  # 10%
+        
+        for symbol in list(self.positions.keys()):
+            position = self.positions[symbol]
+            
+            # Only check if position is winning
+            if position.unrealized_pnl <= 0:
+                continue
+            
+            # Calculate gain from entry
+            gain_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
+            
+            # If gained at least 10%, calculate trailing SL
+            if gain_percent >= gain_threshold:
+                # Trailing SL = Current peak - 20% of peak
+                trailing_sl = position.highest_premium * (1 - sl_buffer / 100)
+                
+                # Check if current price hit trailing SL
+                if position.current_premium <= trailing_sl:
+                    logger.info(f"TRAILING_SL_HIT: {symbol} | Peak: ₹{position.highest_premium:.2f} | "
+                               f"SL: ₹{trailing_sl:.2f} | Current: ₹{position.current_premium:.2f}")
+                    
+                    # Exit with profit
+                    pnl = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        f"TRAILING_SL_EXIT (Locked {gain_percent:.1f}% profit, SL: ₹{trailing_sl:.2f})"
+                    )
+                    if pnl:
+                        closed.append(pnl)
+                        logger.info(f"PROFIT_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
+                                   f"Exit: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f} | "
+                                   f"Profit: ₹{pnl['pnl']:.2f} ({gain_percent:.1f}%)")
+                else:
+                    # Log trailing SL status
+                    logger.debug(f"TRAILING_SL: {symbol} | Gain: {gain_percent:.1f}% | "
+                                f"Peak: ₹{position.highest_premium:.2f} | SL: ₹{trailing_sl:.2f} | "
+                                f"Current: ₹{position.current_premium:.2f}")
+        
+        return closed
+    
     def check_stop_losses(self) -> List[Dict[str, Any]]:
-        """Close positions at stop loss levels"""
+        """
+        Close positions at stop loss levels with decay-aware validation.
+        
+        Decay-aware logic:
+        - Calculate expected decay (theta) since entry
+        - Only trigger SL if loss exceeds decay + threshold
+        - Ignore single candle dips (require 3+ sustained candles)
+        - Distinguish real selling pressure from profit booking reversals
+        
+        This prevents premature SL exits on natural decay or temporary dips.
+        """
         closed = []
         sl_percent = OptionsTradingConfig.STOP_LOSS_PERCENTAGE
         max_loss = OptionsTradingConfig.MAX_LOSS_PER_TRADE
+        decay_monitor = get_decay_monitor()
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
@@ -498,10 +735,172 @@ class OptionPositionMonitor:
             if position.unrealized_pnl < 0:
                 loss_percent = abs((position.unrealized_pnl / (position.entry_premium * position.quantity)) * 100)
                 
-                if loss_percent >= sl_percent or abs(position.unrealized_pnl) >= max_loss:
-                    pnl = self.close_position(symbol, position.current_premium, "LOSS")
+                # Get decay-aware analysis
+                decay_signal = decay_monitor.get_smart_monitoring_signal(
+                    symbol, position.current_premium, position.entry_premium
+                )
+                
+                # Decay-aware decision logic
+                should_close = False
+                close_reason = "LOSS"
+                
+                # Check hard SL (absolute loss threshold)
+                if abs(position.unrealized_pnl) >= max_loss:
+                    # Hard stop loss - absolute loss exceeded
+                    should_close = True
+                    close_reason = f"MAX_LOSS_EXCEEDED (₹{position.unrealized_pnl:.2f})"
+                    logger.warning(f"STOP_LOSS: {symbol} | MAX LOSS HIT: ₹{position.unrealized_pnl:.2f} >= ₹{max_loss:.2f}")
+                
+                elif loss_percent >= sl_percent:
+                    # Percentage SL - check if it's a real move
+                    # TRIAL MODE: 20% SL means we're OK with losses up to 20%
+                    # Only close if it's a confirmed real move (not just decay)
+                    if sl_percent >= 20.0:
+                        # Wide SL (20%+): Only close if decay analysis confirms real loss
+                        if decay_signal['signal'] in ['MONITOR_CLOSELY', 'SELL_PRESSURE']:
+                            should_close = True
+                            close_reason = f"LOSS ({loss_percent:.1f}%) - {decay_signal['reason']}"
+                            logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% - Real move detected | {decay_signal['reason']}")
+                        else:
+                            logger.debug(f"STOP_LOSS_HELD: {symbol} | Loss {loss_percent:.1f}% but no real move yet | {decay_signal['reason']}")
+                    else:
+                        # Tight SL (<20%): Close faster
+                        if decay_signal['signal'] in ['MONITOR_CLOSELY']:
+                            should_close = True
+                            close_reason = f"LOSS ({loss_percent:.1f}%) - {decay_signal['reason']}"
+                            logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% - Real move | {decay_signal['reason']}")
+                        else:
+                            logger.debug(f"STOP_LOSS_HELD: {symbol} | Loss {loss_percent:.1f}% | {decay_signal['reason']}")
+                
+                if should_close:
+                    pnl = self.close_position(symbol, position.current_premium, close_reason)
                     if pnl:
                         closed.append(pnl)
+                        logger.info(f"LOSS_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
+                                   f"Exit: ₹{position.current_premium:.2f} | Loss: ₹{pnl['pnl']:.2f}")
+        
+        return closed
+    
+    def check_sentiment_exit(self) -> List[Dict[str, Any]]:
+        """
+        Check market sentiment (PCR + OI Buildup) and exit positions if sentiment FADES.
+        
+        OPTIMIZED: Batch fetch all PCR + OI data ONCE, then check all positions
+        This avoids making duplicate API calls for same data.
+        
+        Strategy (IMPROVED):
+        - Track entry sentiment levels (PCR + OI)
+        - Exit when sentiment DETERIORATES by threshold
+        - Don't wait for absolute levels, exit on FADE
+        
+        Examples:
+        - Entry PCR: 0.9 → Exit if rises 20% (0.9 → 1.08)
+        - Entry OI: 5M → Exit if drops 40% (5M → 3M)
+        - Entry PCR + OI together: Any significant fade triggers
+        
+        This prevents holding in dead/weakening markets.
+        """
+        from .market_sentiment import get_market_sentiment
+        from .optconfig import SentimentConfig
+        
+        closed = []
+        
+        # Don't check if feature disabled
+        if not SentimentConfig.ENABLE_SENTIMENT_FILTER:
+            return closed
+        
+        try:
+            sentiment_engine = get_market_sentiment()
+            
+            # BATCH FETCH: Get all PCR and OI data ONCE for all positions
+            # This reduces API calls dramatically (1 call per data type instead of N)
+            logger.debug(f"SENTIMENT_BATCH_FETCH: Fetching data for {len(self.positions)} positions")
+            
+            current_pcr_map = sentiment_engine.fetch_pcr_ratio()  # Call ONCE
+            current_buildup_map = sentiment_engine.fetch_oi_buildup('Long Built Up')  # Call ONCE
+            
+            logger.info(f"SENTIMENT_BATCH_FETCH: Got PCR={len(current_pcr_map)} symbols, OI={len(current_buildup_map)} symbols")
+            
+            # Now check all positions with cached data
+            for symbol in list(self.positions.keys()):
+                position = self.positions[symbol]
+                
+                # Get underlying from symbol (first part before expiry)
+                underlying = symbol.split('25')[0] if '25' in symbol else symbol.split('24')[0] if '24' in symbol else symbol
+                
+                # Use pre-fetched data (no API calls here!)
+                current_pcr = current_pcr_map.get(underlying)
+                current_buildup = current_buildup_map.get(underlying)
+                
+                # Skip if first time checking (no baseline to compare)
+                if position.entry_pcr is None:
+                    if current_pcr is not None:
+                        position.entry_pcr = current_pcr
+                        position.entry_sentiment_timestamp = datetime.now()
+                    if current_buildup is not None:
+                        position.entry_oi_buildup = current_buildup.get('oi_change', 0)
+                    logger.debug(f"SENTIMENT_BASELINE: {symbol} | PCR={current_pcr:.2f} | OI={position.entry_oi_buildup:,.0f}")
+                    continue  # Skip exit check on first reading
+                
+                # Check PCR deterioration (fade detection)
+                pcr_fade_detected = False
+                pcr_fade_reason = None
+                
+                if current_pcr and position.entry_pcr:
+                    pcr_change_pct = ((current_pcr - position.entry_pcr) / position.entry_pcr) * 100
+                    
+                    # For CE (entered when bullish, PCR < 1.0):
+                    # PCR rising = bearish fade (bad for CE)
+                    if position.contract_type == 'CE' and position.entry_pcr < 1.0:
+                        if pcr_change_pct > SentimentConfig.EXIT_PCR_FADE_THRESHOLD:  # e.g., 20% rise
+                            pcr_fade_detected = True
+                            pcr_fade_reason = f"CE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} (+{pcr_change_pct:.1f}%)"
+                    
+                    # For PE (entered when bearish, PCR > 1.0):
+                    # PCR falling = bullish fade (bad for PE)
+                    elif position.contract_type == 'PE' and position.entry_pcr > 1.0:
+                        if pcr_change_pct < -SentimentConfig.EXIT_PCR_FADE_THRESHOLD:  # e.g., 20% drop
+                            pcr_fade_detected = True
+                            pcr_fade_reason = f"PE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} ({pcr_change_pct:.1f}%)"
+                
+                # Check OI buildup fading (conviction weakening)
+                oi_fade_detected = False
+                oi_fade_reason = None
+                
+                if current_buildup and position.entry_oi_buildup:
+                    current_oi_change = current_buildup.get('oi_change', 0)
+                    oi_change_pct = ((current_oi_change - position.entry_oi_buildup) / position.entry_oi_buildup) * 100 if position.entry_oi_buildup != 0 else 0
+                    
+                    # If OI buildup dropped significantly, conviction is weakening
+                    if oi_change_pct < -SentimentConfig.EXIT_OI_FADE_THRESHOLD:  # e.g., 40% drop
+                        oi_fade_detected = True
+                        oi_fade_reason = f"OI {position.entry_oi_buildup:,.0f} → {current_oi_change:,.0f} ({oi_change_pct:.1f}%)"
+                
+                # Exit if either PCR or OI faded
+                if pcr_fade_detected or oi_fade_detected:
+                    exit_reason = []
+                    if pcr_fade_detected:
+                        exit_reason.append(pcr_fade_reason)
+                    if oi_fade_detected:
+                        exit_reason.append(oi_fade_reason)
+                    
+                    combined_reason = " | ".join(exit_reason)
+                    logger.warning(f"SENTIMENT_FADE: {symbol} | {combined_reason}")
+                    
+                    # Close position at current premium
+                    pnl = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        f"SENTIMENT_FADE: {combined_reason}"
+                    )
+                    
+                    if pnl:
+                        closed.append(pnl)
+                        logger.info(f"SENTIMENT_EXIT_CLOSED: {symbol} | {combined_reason} | PnL: ₹{pnl['pnl']:.2f}")
+        
+        except Exception as e:
+            logger.error(f"SENTIMENT_EXIT_CHECK: ERROR | {str(e)}")
+            # Don't block monitoring on sentiment errors
         
         return closed
     
@@ -532,10 +931,13 @@ class OptionPositionMonitor:
     
     def refresh_position_ltps(self) -> Dict[str, Any]:
         """
-        Refresh LTP and Greeks for ALL open positions from broker.
+        Refresh LTP and Greeks for ALL open positions from broker using active symbol pool.
         
         For paper trading (small portfolio), refresh all positions every cycle.
         This ensures position data is always current and P&L reflects market reality.
+        
+        Uses ActiveSymbolPool to only fetch data for currently open positions,
+        preventing wasted API calls on closed/historical positions.
         
         Returns:
             Dictionary with refresh statistics
@@ -546,7 +948,8 @@ class OptionPositionMonitor:
             'greeks_updated': 0,
             'failed_fetches': 0,
             'errors': [],
-            'bucket_info': {}
+            'bucket_info': {},
+            'active_symbol_pool': {}
         }
         
         if not self.broker:
@@ -556,15 +959,21 @@ class OptionPositionMonitor:
         if not self.positions:
             return refresh_stats
         
-        # Get all position symbols
-        all_symbols = list(self.positions.keys())
-        logger.info(f"REFRESH_LTP: Starting | positions={len(all_symbols)} | broker={self.broker is not None}")
+        # Get active symbols from pool (only currently open positions)
+        all_symbols = self.symbol_pool.get_active_symbols()
         
-        # BULK FETCH: Get LTP for all positions at once
+        if not all_symbols:
+            logger.debug("REFRESH_LTP: No active positions in pool")
+            return refresh_stats
+        
+        logger.info(f"REFRESH_LTP: Starting | active_positions={len(all_symbols)} | broker={self.broker is not None}")
+        refresh_stats['active_symbol_pool'] = self.symbol_pool.get_pool_status()
+        
+        # BULK FETCH: Get LTP for all active positions at once
         ltps = self.broker.get_ltp_bulk(all_symbols, exchange="NFO")
         logger.info(f"REFRESH_LTP: Bulk fetch complete | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
         
-        # Process each symbol (all positions)
+        # Process each symbol (only active positions)
         for symbol in all_symbols:
             try:
                 if symbol not in self.positions:
@@ -706,6 +1115,80 @@ class OptionPositionMonitor:
         logger.info(f"REFRESH_LTP: Complete | updated={refresh_stats['ltps_updated']}/{refresh_stats['positions_checked']} | greeks={refresh_stats['greeks_updated']} | failed={refresh_stats['failed_fetches']}")
         return refresh_stats
     
+    def refresh_underlying_candles(self) -> Dict[str, Any]:
+        """
+        Refresh candle data for all underlying stocks/indices of active positions.
+        
+        Candles are used for:
+        - Fake move detection (sustained vs transient moves)
+        - Momentum confirmation (3+ consecutive candles)
+        - Volume validation
+        
+        Currently implemented as premium movement tracking for fake move detector.
+        Future: integrate with bulk candle fetcher for true 1-min candle data.
+        
+        Returns:
+            Dictionary with candle refresh statistics
+        """
+        candle_stats = {
+            'candles_fetched': 0,
+            'underlyings': [],
+            'errors': []
+        }
+        
+        if not self.positions:
+            logger.debug("REFRESH_CANDLES: No positions to monitor")
+            return candle_stats
+        
+        # Get unique underlyings from active positions
+        underlyings = set(pos.underlying for pos in self.positions.values())
+        candle_stats['underlyings'] = sorted(list(underlyings))
+        
+        logger.info(f"REFRESH_CANDLES: Starting | underlyings={len(underlyings)} | symbols={underlyings}")
+        
+        try:
+            fake_move_detector = get_fake_move_detector()
+            decay_monitor = get_decay_monitor()
+            
+            # Record premium movements as candles for fake move detection
+            # This gives the momentum filter data about sustained moves
+            for symbol, position in self.positions.items():
+                try:
+                    # Only process if we have valid entry premium
+                    if position.entry_premium <= 0:
+                        logger.debug(f"REFRESH_CANDLES: SKIPPED | {symbol} | no entry_premium")
+                        continue
+                    
+                    # Calculate price change percentage from entry
+                    price_change_pct = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
+                    
+                    # Record as candle direction (bullish if premium up, bearish if premium down)
+                    is_bullish = position.current_premium >= position.entry_premium
+                    
+                    # Record this candle in the fake move detector
+                    fake_move_detector.record_candle_for_symbol(
+                        symbol=symbol, 
+                        close_price=position.current_premium, 
+                        is_bullish=is_bullish
+                    )
+                    
+                    # Record price in decay monitor for analysis
+                    decay_monitor.record_price(symbol, position.current_premium)
+                    
+                    candle_stats['candles_fetched'] += 1
+                    logger.debug(f"REFRESH_CANDLES: Recorded | {symbol} | premium={position.current_premium:.2f} | change={price_change_pct:+.2f}% | direction={'UP' if is_bullish else 'DOWN'}")
+                    
+                except Exception as e:
+                    candle_stats['errors'].append(f"{symbol}: {str(e)}")
+                    logger.warning(f"REFRESH_CANDLES: ERROR | {symbol} | {str(e)}")
+        
+        except Exception as e:
+            logger.error(f"REFRESH_CANDLES: CRITICAL ERROR | {str(e)}")
+            candle_stats['errors'].append(str(e))
+        
+        logger.info(f"REFRESH_CANDLES: Complete | updated={candle_stats['candles_fetched']} | underlyings={len(underlyings)}")
+        return candle_stats
+    
     def perform_periodic_monitoring(self) -> Dict[str, Any]:
         """
         Perform all monitoring checks with rate limit handling.
@@ -736,6 +1219,10 @@ class OptionPositionMonitor:
                 refresh_stats = self.refresh_position_ltps()
                 monitoring_result['ltps_refreshed'] = refresh_stats['ltps_updated']
                 logger.info(f"MONITORING: Refreshed LTP for {refresh_stats['ltps_updated']}/{len(self.positions)} positions")
+                
+                # OPTIMIZATION: Refresh underlying candles for fake move detection
+                candle_stats = self.refresh_underlying_candles()
+                logger.debug(f"MONITORING: Candle data updated for {candle_stats['candles_fetched']} positions | underlyings={candle_stats['underlyings']}")
             
             # Check and close positions by expiry
             expired = self.check_expiry_close()
@@ -745,7 +1232,11 @@ class OptionPositionMonitor:
             profit_closes = self.check_profit_targets()
             monitoring_result['closed_by_profit'] = [p['symbol'] for p in profit_closes]
             
-            # Check and close positions by stop loss
+            # TRIAL MODE: Check and trail stop losses (20% SL, update every 10% gain)
+            trailing_closes = self.check_trailing_stop_losses()
+            monitoring_result['closed_by_trailing'] = [p['symbol'] for p in trailing_closes]
+            
+            # Check and close positions by stop loss (hard SL if loss exceeds 20%)
             sl_closes = self.check_stop_losses()
             monitoring_result['closed_by_stoploss'] = [p['symbol'] for p in sl_closes]
             
@@ -753,9 +1244,9 @@ class OptionPositionMonitor:
             if self.broker:
                 monitoring_result['rate_limiter_stats'] = self.broker.get_rate_limiter_stats()
             
-            total_closed = len(expired) + len(profit_closes) + len(sl_closes)
+            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(sl_closes)
             logger.info(f"MONITORING: Checked {len(self.positions)} positions | Closed {total_closed} "
-                       f"(expiry={len(expired)}, profit={len(profit_closes)}, sl={len(sl_closes)})")
+                       f"(expiry={len(expired)}, profit={len(profit_closes)}, trailing={len(trailing_closes)}, sl={len(sl_closes)})")
             
         except Exception as e:
             monitoring_result['error'] = str(e)

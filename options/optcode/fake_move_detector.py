@@ -43,6 +43,220 @@ except ImportError:
     logger.warning("FAKE_MOVE_DETECTOR: Trade logger not available")
 
 # =============================================================================
+# Decay-Aware Intelligent Monitor
+# =============================================================================
+
+class DecayAwareMonitor:
+    """
+    Monitors option positions accounting for time decay (theta).
+    
+    Distinguishes between:
+    - REAL MOVES: Sustained premium change despite decay
+    - DECAY EFFECTS: Expected loss due to time decay
+    - PROFIT BOOKING DIPS: Temporary reversions after spikes
+    
+    Key insight: In options, a "down move" might just be decay + profit booking.
+    A "real" down move requires sustained downward pressure despite theta decay.
+    """
+    
+    def __init__(self):
+        # Track price history for each position
+        self.price_history: Dict[str, deque] = {}  # symbol -> deque of (time, price, theta_decay)
+        self.decay_baseline: Dict[str, float] = {}  # Expected loss per minute due to decay
+        self.entry_time: Dict[str, datetime] = {}  # Entry time for each position
+        
+    def initialize_position(self, symbol: str, entry_premium: float, days_to_expiry: int):
+        """
+        Initialize monitoring for a position.
+        
+        Args:
+            symbol: Contract symbol
+            entry_premium: Premium paid at entry
+            days_to_expiry: Days remaining until expiry
+        """
+        # Estimate daily theta decay (approximately 0.5-2% per day depending on ATM/OTM)
+        # Assume ~1% daily decay for ATM options
+        # For near-expiry options (< 3 days), use higher decay rate
+        if days_to_expiry <= 1:
+            daily_decay_rate = 0.02  # 2% daily decay on last day
+        elif days_to_expiry <= 3:
+            daily_decay_rate = 0.015  # 1.5% daily decay in last 3 days
+        else:
+            daily_decay_rate = 0.01  # 1% daily decay for others
+        
+        # Calculate expected decay per minute
+        minutes_to_expiry = days_to_expiry * 24 * 60
+        if minutes_to_expiry > 0:
+            self.decay_baseline[symbol] = (entry_premium * daily_decay_rate) / (24 * 60)
+        else:
+            self.decay_baseline[symbol] = entry_premium * 0.01  # 1% per minute on expiry day
+        
+        self.entry_time[symbol] = datetime.now()
+        self.price_history[symbol] = deque(maxlen=100)  # Keep last 100 observations
+        
+        logger.info(f"DECAY_MONITOR: INIT | {symbol} | entry=₹{entry_premium:.2f} | days={days_to_expiry} | decay_baseline=₹{self.decay_baseline[symbol]:.4f}/min | rate={daily_decay_rate*100:.1f}%/day")
+    
+    def record_price(self, symbol: str, current_premium: float):
+        """Record current price with timestamp"""
+        if symbol not in self.price_history:
+            return
+        
+        self.price_history[symbol].append({
+            'time': datetime.now(),
+            'price': current_premium
+        })
+    
+    def get_decay_adjusted_change(self, symbol: str, current_premium: float, entry_premium: float) -> Dict[str, Any]:
+        """
+        Calculate real vs decay-adjusted price change.
+        
+        Returns:
+            {
+                'nominal_change': Raw price change,
+                'decay_expected': Expected loss from theta decay,
+                'decay_adjusted_change': Change after removing decay,
+                'is_real_move': True if change > 2x decay baseline,
+                'decay_efficiency': How much decay vs real move
+            }
+        """
+        if symbol not in self.entry_time or symbol not in self.decay_baseline:
+            return {'error': 'Position not initialized'}
+        
+        # Time since entry
+        time_elapsed = (datetime.now() - self.entry_time[symbol]).total_seconds() / 60.0  # minutes
+        
+        # Expected decay
+        expected_decay = self.decay_baseline[symbol] * time_elapsed
+        
+        # Nominal change
+        nominal_change = current_premium - entry_premium
+        
+        # Decay-adjusted change (actual change minus expected decay loss)
+        decay_adjusted = nominal_change + expected_decay  # Add back the expected decay
+        
+        # Is this a real move? (change > 2x expected decay, more conservative threshold)
+        # For negative moves: check if loss is significantly more than decay
+        # For positive moves: always considered real
+        if nominal_change >= 0:
+            # Up move is always real (decay doesn't cause price to go up)
+            is_real_move = True
+        else:
+            # Down move: check if it's more than 2x expected decay
+            # If loss < 2x decay, it's likely just decay + noise
+            is_real_move = abs(decay_adjusted) > (abs(expected_decay) * 2.0)
+        
+        return {
+            'nominal_change': nominal_change,
+            'expected_decay': expected_decay,
+            'decay_adjusted_change': decay_adjusted,
+            'is_real_move': is_real_move,
+            'time_elapsed_min': time_elapsed,
+            'decay_efficiency': (expected_decay / abs(nominal_change)) if nominal_change != 0 else 0
+        }
+    
+    def detect_profit_booking_dip(self, symbol: str) -> Tuple[bool, str]:
+        """
+        Detect if recent price movement is profit-booking dip (spike + reversion).
+        
+        Characteristics:
+        - Sharp up move → followed by sharp down move
+        - High volatility in short time window
+        - High volume at peak
+        - Reverts in next 5-10 minutes
+        """
+        if symbol not in self.price_history or len(self.price_history[symbol]) < 5:
+            return False, "Not enough price history"
+        
+        history = list(self.price_history[symbol])[-5:]  # Last 5 observations
+        
+        # Look for pattern: UP → DOWN
+        if len(history) >= 3:
+            mid_idx = len(history) // 2
+            first_half = [h['price'] for h in history[:mid_idx]]
+            second_half = [h['price'] for h in history[mid_idx:]]
+            
+            # Check if first part went up and second part went down
+            if first_half and second_half:
+                first_trend = second_half[0] > first_half[0]  # direction of first half
+                second_trend = second_half[-1] > second_half[0]  # direction of second half
+                
+                if first_trend and not second_trend:
+                    # Spike up then down = profit booking pattern
+                    peak = max([h['price'] for h in history])
+                    current = history[-1]['price']
+                    reversion_pct = ((peak - current) / peak * 100) if peak > 0 else 0
+                    
+                    if reversion_pct > 2:  # More than 2% reversion
+                        return True, f"Profit booking detected: {reversion_pct:.1f}% reversion from peak ₹{peak:.2f}"
+        
+        return False, "No profit booking pattern"
+    
+    def is_decay_induced_dip(self, symbol: str, current_premium: float, entry_premium: float) -> bool:
+        """Check if price dip is mainly due to decay, not real selling pressure"""
+        decay_analysis = self.get_decay_adjusted_change(symbol, current_premium, entry_premium)
+        
+        if 'error' in decay_analysis:
+            return False
+        
+        # If decay-adjusted change is near zero, it's just decay
+        if abs(decay_analysis['decay_adjusted_change']) < abs(decay_analysis['expected_decay']) * 0.5:
+            return True  # Mainly decay
+        
+        return False
+    
+    def get_smart_monitoring_signal(self, symbol: str, current_premium: float, entry_premium: float) -> Dict[str, Any]:
+        """
+        Get intelligent monitoring signal accounting for decay and fake moves.
+        
+        Used during monitoring loop to decide:
+        - Should we panic sell on dips?
+        - Is this a real down move or just decay + profit booking?
+        - When should we actually take the dip seriously?
+        """
+        decay_analysis = self.get_decay_adjusted_change(symbol, current_premium, entry_premium)
+        is_booking, booking_reason = self.detect_profit_booking_dip(symbol)
+        
+        if 'error' in decay_analysis:
+            return {'signal': 'HOLD', 'reason': 'Position monitoring not initialized'}
+        
+        nominal_change = decay_analysis['nominal_change']
+        decay_adjusted = decay_analysis['decay_adjusted_change']
+        
+        # Decision logic
+        if nominal_change > 0:
+            # Price UP - good position
+            return {
+                'signal': 'HOLD_STRONG',
+                'reason': f'Up {nominal_change:.2f} (real move)',
+                'decay_analysis': decay_analysis,
+                'confidence': 'HIGH'
+            }
+        elif is_booking:
+            # Price DOWN but profit booking pattern detected
+            return {
+                'signal': 'HOLD',
+                'reason': f'Temporary dip: {booking_reason}',
+                'decay_analysis': decay_analysis,
+                'confidence': 'HIGH'
+            }
+        elif decay_analysis['is_real_move'] and decay_adjusted < 0:
+            # Real down move (not just decay)
+            return {
+                'signal': 'MONITOR_CLOSELY',
+                'reason': f'Real down move: {decay_adjusted:.2f} after removing {decay_analysis["expected_decay"]:.2f} decay',
+                'decay_analysis': decay_analysis,
+                'confidence': 'MEDIUM'
+            }
+        else:
+            # Just decay + noise
+            return {
+                'signal': 'HOLD',
+                'reason': f'Decay effect (₹{decay_analysis["expected_decay"]:.4f}/min expected)',
+                'decay_analysis': decay_analysis,
+                'confidence': 'MEDIUM'
+            }
+
+# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -599,6 +813,23 @@ class FakeMoveDetector:
         """Start monitoring position for false reversions"""
         self.reversion_monitor.record_entry(symbol, entry_premium, entry_iv)
     
+    def record_candle_for_symbol(self, symbol: str, close_price: float, is_bullish: bool):
+        """
+        Record candle data for a position's premium movement.
+        
+        This feeds momentum detection logic with premium movement direction.
+        Used for sustained move validation (3+ consecutive candles in same direction).
+        
+        Args:
+            symbol: Option contract symbol
+            close_price: Current premium price
+            is_bullish: True if price moving up, False if moving down
+        """
+        # Record in momentum filter for sustained move detection
+        self.momentum_filter.record_candle(close_price, is_bullish)
+        
+        logger.debug(f"FAKE_MOVE_DETECTOR: CANDLE_RECORDED | {symbol} | price={close_price:.2f} | direction={'UP' if is_bullish else 'DOWN'}")
+    
     def check_false_move_exit(self, symbol: str, current_premium: float, current_iv: float) -> Tuple[bool, Optional[str]]:
         """Check if position should be closed due to false move detection"""
         is_false_move, reason = self.reversion_monitor.check_reversion(symbol, current_premium, current_iv)
@@ -626,10 +857,11 @@ class FakeMoveDetector:
 
 
 # =============================================================================
-# Global detector instance
+# Global detector instances
 # =============================================================================
 
 _fake_move_detector = None
+_decay_monitor = None
 
 def get_fake_move_detector() -> FakeMoveDetector:
     """Get or create fake move detector"""
@@ -637,3 +869,10 @@ def get_fake_move_detector() -> FakeMoveDetector:
     if _fake_move_detector is None:
         _fake_move_detector = FakeMoveDetector()
     return _fake_move_detector
+
+def get_decay_monitor() -> DecayAwareMonitor:
+    """Get or create decay-aware monitor"""
+    global _decay_monitor
+    if _decay_monitor is None:
+        _decay_monitor = DecayAwareMonitor()
+    return _decay_monitor

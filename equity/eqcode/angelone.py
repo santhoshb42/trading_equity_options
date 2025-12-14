@@ -199,15 +199,6 @@ class OrderStatus:
     FAILED = "FAILED"
 
 
-class PositionStatus:
-    """Position status constants for race condition prevention"""
-    PENDING_BUY = "PENDING_BUY"     # BUY order placed but not confirmed
-    CONFIRMED_BUY = "CONFIRMED_BUY" # BUY order confirmed but not filled
-    OPEN = "OPEN"                   # BUY order filled, position active
-    EXITING = "EXITING"             # SELL order placed
-    CLOSED = "CLOSED"               # SELL order filled, position closed
-
-
 class Order:
     """Order tracking class"""
     def __init__(self, order_id: str, symbol: str, action: str, quantity: int, price: float):

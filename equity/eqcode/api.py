@@ -1008,6 +1008,20 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             existing_qty = existing_pos.get("quantity", 0)
             existing_status = existing_pos.get("status", "UNKNOWN")
 
+            # 🔧 CRITICAL FIX: Reject BUY if position is CLOSED (square-off in progress)
+            if existing_status == "CLOSED":
+                log_event("BUY_REJECTED_SQUARE_OFF", f"BUY rejected for {symbol} - position is being squared off",
+                         symbol=symbol, status=existing_status, close_reason=existing_pos.get("close_reason"))
+                log_trade_execution("EXECUTION_BLOCKED", symbol, "BUY",
+                                  reason="Position being squared off - cannot re-enter",
+                                  existing_status=existing_status)
+                return {
+                    "status": "rejected",
+                    "reason": f"Cannot trade {symbol} - position being squared off at EOD",
+                    "symbol": symbol,
+                    "reason_detail": "Position already marked for closure"
+                }
+
             # If the existing position has invalid quantity, remove it and continue with BUY
             if existing_qty <= 0:
                 log_event("SUSPICIOUS_STATE", f"Existing position for {symbol} has invalid quantity",
@@ -2798,6 +2812,14 @@ def square_off_all_positions():
                 log_event("SQUARE_OFF_PROCESSING", f"Processing {symbol}",
                          quantity=quantity, action=action, entry_price=entry_price)
                 
+                # 🔧 CRITICAL FIX: Mark position as CLOSED immediately to prevent new entries
+                # This blocks new BUY alerts for this symbol during square-off
+                if symbol in trading_state.active_positions:
+                    trading_state.active_positions[symbol]['status'] = 'CLOSED'
+                    trading_state.active_positions[symbol]['closed_at'] = datetime.now().isoformat()
+                    trading_state.active_positions[symbol]['close_reason'] = 'SQUARE_OFF'
+                    log_event("SQUARE_OFF_BLOCKED_NEW_ENTRY", f"Position {symbol} marked CLOSED to block new entries")
+                
                 # Opposite action to close
                 close_action = 'SELL' if action == 'BUY' else 'BUY'
                 
@@ -2917,6 +2939,14 @@ def square_off_all_positions():
                 log_error("SQUARE_OFF_ERROR", error_msg, exception=e,
                          context={'symbol': position.get('symbol')})
                 errors.append(error_msg)
+        
+        # 🔧 CRITICAL FIX: Save closed positions to disk to prevent re-entry
+        try:
+            trading_state.save_positions()
+            log_event("SQUARE_OFF_POSITIONS_SAVED", f"Closed positions persisted to disk")
+        except Exception as save_error:
+            log_error("SQUARE_OFF_SAVE_ERROR", f"Failed to save positions after square-off: {str(save_error)}")
+            errors.append(f"Failed to persist closed positions to disk: {str(save_error)}")
         
         log_event("SQUARE_OFF_COMPLETE", 
                  f"Square-off complete: {closed_count} positions closed, {logged_count} trades logged, P&L: ₹{total_pnl:.2f}",

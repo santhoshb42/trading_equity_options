@@ -154,16 +154,9 @@ except Exception as e:
     def calculate_dynamic_stop_loss(*args, **kwargs):
         return 0
 
-# Import Week 3 P3.2: Performance Feedback
-try:
-    from .performance_feedback import PerformanceFeedback
-except Exception as e:
-    # 🔧 FIX GAP-005: Performance feedback is CRITICAL - log error clearly
-    print(f"CRITICAL ERROR: Could not import performance_feedback: {e}")
-    import sys
-    sys.stderr.write(f"CRITICAL: Week 3 P3.2 (Performance Feedback) module failed to load: {e}\n")
-    PerformanceFeedback = None
-    _performance_feedback_import_error = True
+# Import Week 3 P3.2: Performance Feedback (DELETED - no longer used)
+PerformanceFeedback = None
+_performance_feedback_import_error = False
 
 # ===== HYBRID LEARNING: Outcome recording =====
 try:
@@ -1245,40 +1238,46 @@ class PositionMonitor:
         over monitoring LTP checks due to bucketing strategy.
         """
         def _round_variants(price: float):
-            """Yield candidate prices using integer paise arithmetic (NO float errors)"""
+            """Generate candidate prices with 10 paise intervals (Angel One requirement)"""
             from decimal import Decimal
             
             try:
-                # Convert to paise (integer) - Angel One requires multiples of 5 paise
-                # Use Decimal for exact conversion to avoid float errors
+                # Convert to paise (integer) for exact arithmetic
                 price_decimal = Decimal(str(price))
                 paise = int(price_decimal * 100)
                 
-                # Nearest: round to nearest 5 paise
-                # remainder is an integer (0-4), so use integer comparison
-                remainder = paise % 5
-                if remainder <= 2:
+                # Strategy: Generate variants at 10 paise intervals
+                # 10 paise = 0.10 rupees (standard tick size for most stocks)
+                
+                # Nearest: round to nearest 10 paise
+                remainder = paise % 10
+                if remainder <= 5:
                     nearest_paise = paise - remainder  # Round down
                 else:
-                    nearest_paise = paise + (5 - remainder)  # Round up
+                    nearest_paise = paise + (10 - remainder)  # Round up
                 
-                # Ceil: round up to next 5 paise
-                if paise % 5 == 0:
-                    ceil_paise = paise
-                else:
-                    ceil_paise = paise + (5 - (paise % 5))
+                # Ceil: round up to next 10 paise
+                ceil_paise = paise if paise % 10 == 0 else paise + (10 - (paise % 10))
                 
-                # Floor: round down to previous 5 paise
-                floor_paise = paise - (paise % 5)
+                # Floor: round down to previous 10 paise
+                floor_paise = paise - (paise % 10)
+                
+                # Wider variants (20 & 30 paise) for max compatibility
+                wider_ceil = paise if paise % 20 == 0 else paise + (20 - (paise % 20))
+                wider_floor = paise - (paise % 20)
                 
                 # Convert back to rupees
                 def paise_to_rupees(p):
                     return f"{p / 100:.2f}"
                 
-                # Return unique variants (deduplicate)
-                variants = [paise_to_rupees(nearest_paise), 
-                           paise_to_rupees(ceil_paise), 
-                           paise_to_rupees(floor_paise)]
+                # Return variants: nearest → ceil → floor → wider ceil → wider floor
+                variants = [
+                    paise_to_rupees(nearest_paise), 
+                    paise_to_rupees(ceil_paise), 
+                    paise_to_rupees(floor_paise),
+                    paise_to_rupees(wider_ceil),
+                    paise_to_rupees(wider_floor)
+                ]
                 
                 # Remove duplicates while preserving order
                 seen = set()
@@ -1290,9 +1289,9 @@ class PositionMonitor:
                 
                 return unique if unique else [paise_to_rupees(nearest_paise)]
             except Exception as e:
-                # Fallback - try to round to nearest 5 paise
+                # Fallback - round to nearest 10 paise
                 paise = int(price * 100)
-                rounded_paise = round(paise / 5) * 5
+                rounded_paise = round(paise / 10) * 10
                 return [f"{rounded_paise / 100:.2f}"]
 
         # Validate quantity first

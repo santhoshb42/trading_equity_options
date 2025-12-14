@@ -279,6 +279,113 @@ def create_options_api_app():
             logger.error(f"INDICATORS_ENDPOINT: ERROR | {symbol} | {str(e)}")
             return jsonify({'error': str(e)}), 500
     
+    # ==========================================================================
+    # Market Sentiment Endpoints (PCR + OI Buildup)
+    # ==========================================================================
+    
+    @app.route('/market/sentiment', methods=['GET'])
+    def get_market_sentiment_endpoint():
+        """Get overall market sentiment (PCR aggregate, bullish/bearish breakdown)"""
+        try:
+            from .market_sentiment import get_market_sentiment
+            
+            sentiment_engine = get_market_sentiment(state['broker'])
+            sentiment_summary = sentiment_engine.get_market_sentiment_summary()
+            
+            logger.info(f"MARKET_SENTIMENT: overall={sentiment_summary.get('overall_sentiment')}")
+            
+            return jsonify(sentiment_summary), 200
+        except Exception as e:
+            logger.error(f"MARKET_SENTIMENT_ENDPOINT: ERROR | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/market/sentiment/<symbol>', methods=['GET'])
+    def get_symbol_sentiment_endpoint(symbol: str):
+        """Get detailed sentiment data for specific symbol (PCR, OI Buildup, entry/exit signals)"""
+        try:
+            from .market_sentiment import get_market_sentiment
+            
+            sentiment_engine = get_market_sentiment(state['broker'])
+            sentiment_data = sentiment_engine.get_symbol_sentiment(symbol)
+            
+            logger.info(f"SYMBOL_SENTIMENT: {symbol} | entry={sentiment_data['entry_signal']['ok']} | exit={sentiment_data['exit_signal']['triggered']}")
+            
+            return jsonify(sentiment_data), 200
+        except Exception as e:
+            logger.error(f"SYMBOL_SENTIMENT_ENDPOINT: ERROR | {symbol} | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/market/pcr', methods=['GET'])
+    def get_pcr_endpoint():
+        """Get Put-Call Ratio for all symbols"""
+        try:
+            from .market_sentiment import get_market_sentiment
+            
+            sentiment_engine = get_market_sentiment(state['broker'])
+            pcr_data = sentiment_engine.fetch_pcr_ratio()
+            
+            if not pcr_data:
+                return jsonify({'error': 'No PCR data available'}), 404
+            
+            # Calculate statistics
+            pcr_values = list(pcr_data.values())
+            avg_pcr = sum(pcr_values) / len(pcr_values) if pcr_values else 0
+            
+            bullish = sum(1 for pcr in pcr_values if pcr < 0.8)
+            neutral = sum(1 for pcr in pcr_values if 0.8 <= pcr < 1.2)
+            bearish = sum(1 for pcr in pcr_values if pcr >= 1.2)
+            
+            return jsonify({
+                'timestamp': datetime.now().isoformat(),
+                'total_symbols': len(pcr_data),
+                'average_pcr': avg_pcr,
+                'statistics': {
+                    'bullish': bullish,
+                    'neutral': neutral,
+                    'bearish': bearish
+                },
+                'top_bullish': sorted(pcr_data.items(), key=lambda x: x[1])[:5],
+                'top_bearish': sorted(pcr_data.items(), key=lambda x: x[1], reverse=True)[:5],
+                'all_data': pcr_data
+            }), 200
+        except Exception as e:
+            logger.error(f"PCR_ENDPOINT: ERROR | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/market/oi-buildup', methods=['GET'])
+    def get_oi_buildup_endpoint():
+        """Get OI Buildup data (Long/Short buildup, covering, unwinding)"""
+        try:
+            from .market_sentiment import get_market_sentiment
+            
+            buildup_type = request.args.get('type', 'Long Built Up')
+            expiry = request.args.get('expiry', 'NEAR')
+            
+            sentiment_engine = get_market_sentiment(state['broker'])
+            buildup_data = sentiment_engine.fetch_oi_buildup(buildup_type=buildup_type, expiry_type=expiry)
+            
+            if not buildup_data:
+                return jsonify({'error': f'No OI Buildup data for {buildup_type}'}), 404
+            
+            # Sort by OI change
+            sorted_data = sorted(
+                buildup_data.items(),
+                key=lambda x: x[1].get('oi_change', 0),
+                reverse=True
+            )
+            
+            return jsonify({
+                'timestamp': datetime.now().isoformat(),
+                'buildup_type': buildup_type,
+                'expiry_type': expiry,
+                'total_symbols': len(buildup_data),
+                'top_buildup': sorted_data[:10],
+                'all_data': buildup_data
+            }), 200
+        except Exception as e:
+            logger.error(f"OI_BUILDUP_ENDPOINT: ERROR | {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
     # Store state for access in routes
     app.options_state = state
     
@@ -312,12 +419,65 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: VALIDATED | symbol={symbol}")
         log_signal_validation(symbol, True)
         
+        # ML VALIDATION (NEW) - Validate with ML signal filter
+        try:
+            from .opt_ml_integration import get_ml_integration
+            ml_integration = get_ml_integration()
+            ml_valid, ml_reason, ml_details = ml_integration.validate_with_ml_filter(alert)
+            
+            if not ml_valid:
+                logger.warning(f"ML_VALIDATION_REJECTED: symbol={symbol} | reason={ml_reason}")
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f"ML filter: {ml_reason}",
+                    'ml_details': ml_details
+                }
+            
+            # Log successful ML validation with details
+            logger.info(f"ML_VALIDATION_PASSED: symbol={symbol} | pop={ml_details.get('final_pop', 0):.1f}% | "
+                       f"greeks_score={ml_details.get('greeks_score', 0):.2f} | "
+                       f"iv_percentile={ml_details.get('iv_percentile', 0):.1f}%")
+            
+        except Exception as e:
+            logger.warning(f"ML_VALIDATION_ERROR: symbol={symbol} | {str(e)} | continuing without ML")
+            # Don't block on ML errors - continue processing
+        
         # Authorized to process
         symbol = processed['symbol']
         underlying = processed['underlying']
         action = processed['action']
         
-        logger.debug(f"ALERT_PROCESS: Mapped | underlying={underlying} | action={action}")
+        logger.debug(f"ALERT_PROCESS: MAPPED | underlying={underlying} | action={action}")
+        
+        # NEW: Check market sentiment (PCR + OI Buildup) for entry decision
+        from .market_sentiment import get_market_sentiment
+        from .optconfig import SentimentConfig
+        
+        if SentimentConfig.ENABLE_SENTIMENT_FILTER:
+            try:
+                sentiment_engine = get_market_sentiment(state['broker'])
+                entry_ok, entry_reason = sentiment_engine.check_entry_signal(underlying)
+                
+                logger.info(f"SENTIMENT_CHECK: {underlying} | entry_ok={entry_ok} | {entry_reason}")
+                
+                if not entry_ok:
+                    logger.warning(f"ALERT_PROCESS: SENTIMENT_REJECTED | symbol={symbol} | {entry_reason}")
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': entry_reason
+                    }
+                
+                if SentimentConfig.LOG_SENTIMENT_CHECKS:
+                    sentiment_data = sentiment_engine.get_symbol_sentiment(underlying)
+                    logger.info(f"SENTIMENT_DATA: {underlying} | pcr={sentiment_data.get('pcr')} | buildup={sentiment_data.get('oi_long_buildup')}")
+            
+            except Exception as e:
+                logger.warning(f"SENTIMENT_CHECK: ERROR | {underlying} | {str(e)} | continuing anyway")
+                # Don't block on sentiment errors, continue with trade
         
         # Check capital availability
         available_capital = OptionsCapitalConfig.get_available_capital(0)

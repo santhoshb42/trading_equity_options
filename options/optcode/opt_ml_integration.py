@@ -42,10 +42,19 @@ except Exception:
     def log_event(*args, **kwargs):
         pass
 
+try:
+    from .optconfig import OptionsTradingConfig
+except ImportError:
+    class OptionsTradingConfig:
+        TRADING_MODE = "PAPER"
+
 
 class MLIntegration:
     """
     Bridges ML components with options bot API
+    
+    Tracks trading mode (PAPER/LIVE) for all learning and model updates.
+    Ensures seamless transition from paper to live trading.
     """
     
     def __init__(self):
@@ -55,6 +64,9 @@ class MLIntegration:
         self.iv_validator = VolatilityPercentileValidator()
         
         self.daily_trades = []
+        self.trading_mode = getattr(OptionsTradingConfig, 'TRADING_MODE', 'PAPER')
+        
+        logger.info(f"ML_INTEGRATION: INITIALIZED | mode={self.trading_mode}")
     
     def enrich_alert_with_ml(self, alert: Dict[str, Any],
                             greeks: Dict[str, float] = None,
@@ -247,8 +259,18 @@ class MLIntegration:
         
         Args:
             trade: dict with symbol, action, profit, greeks_entry, greeks_exit, etc.
+        
+        Automatically adds:
+        - trading_mode: Current trading mode (PAPER/LIVE)
+        - recorded_at: Timestamp when trade was recorded
         """
+        # Add mode and timestamp
+        trade['trading_mode'] = self.trading_mode
+        trade['recorded_at'] = datetime.now().isoformat()
+        
         self.daily_trades.append(trade)
+        
+        logger.debug(f"TRADE_RECORDED: {trade.get('symbol', 'UNKNOWN')} | mode={self.trading_mode} | pnl=₹{trade.get('profit', 0):.2f}")
     
     def run_eod_learning_update(self) -> Dict[str, Any]:
         """

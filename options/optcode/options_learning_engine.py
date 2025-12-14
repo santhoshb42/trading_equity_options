@@ -87,7 +87,7 @@ class SymbolPerformanceTracker:
         logger.debug("SYMBOL_TRACKER: INITIALIZED")
     
     def record_trade(self, symbol: str, won: bool, profit: float, 
-                     predicted_prob: float = 0.5) -> None:
+                     predicted_prob: float = 0.5, trading_mode: str = "PAPER") -> None:
         """
         Record trade result.
         
@@ -96,6 +96,7 @@ class SymbolPerformanceTracker:
             won: Did position win?
             profit: P&L in rupees
             predicted_prob: ML model's predicted win probability
+            trading_mode: 'PAPER' or 'LIVE' - mode in which trade was executed
         """
         if symbol not in self.symbol_stats:
             logger.warning(f"SYMBOL_TRACKER: UNKNOWN_SYMBOL | {symbol}")
@@ -115,7 +116,8 @@ class SymbolPerformanceTracker:
             'won': won,
             'profit': profit,
             'predicted_prob': predicted_prob,
-            'profit_range': self._categorize_profit(profit)
+            'profit_range': self._categorize_profit(profit),
+            'trading_mode': trading_mode  # PAPER or LIVE
         }
         stats['trade_history'].append(trade_record)
         stats['last_updated'] = datetime.now().isoformat()
@@ -126,7 +128,7 @@ class SymbolPerformanceTracker:
         # Save updated stats
         self._save_stats()
         
-        logger.info(f"SYMBOL_TRACKER: TRADE_RECORDED | {symbol} | won={won} | profit=₹{profit:.2f} | total={stats['total_trades']} | wr={stats['win_rate']:.1%}")
+        logger.info(f"SYMBOL_TRACKER: TRADE_RECORDED | {symbol} | mode={trading_mode} | won={won} | profit=₹{profit:.2f} | total={stats['total_trades']} | wr={stats['win_rate']:.1%}")
     
     def _update_metrics(self, symbol: str) -> None:
         """Recalculate all metrics for a symbol"""
@@ -291,7 +293,8 @@ class TradeResultRecorder:
     def record_entry(self, symbol: str, action: str, confidence: float, 
                     entry_premium: float, order_id: str, 
                     ml_prediction: Optional[Dict[str, float]] = None,
-                    features: Optional[Dict[str, float]] = None) -> None:
+                    features: Optional[Dict[str, float]] = None,
+                    trading_mode: str = "PAPER") -> None:
         """Record position entry"""
         trade_data = {
             'order_id': order_id,
@@ -302,10 +305,11 @@ class TradeResultRecorder:
             'entry_premium': entry_premium,
             'ml_prediction': ml_prediction or {},
             'entry_features': features or {},
+            'trading_mode': trading_mode,  # PAPER or LIVE
         }
         
         self.open_trades[symbol] = trade_data
-        logger.debug(f"TRADE_RECORDER: ENTRY_RECORDED | {symbol} | conf={confidence:.1f}% | premium=₹{entry_premium:.2f}")
+        logger.debug(f"TRADE_RECORDER: ENTRY_RECORDED | {symbol} | mode={trading_mode} | conf={confidence:.1f}% | premium=₹{entry_premium:.2f}")
     
     def record_exit(self, symbol: str, exit_premium: float, 
                    exit_reason: str) -> Optional[Dict[str, Any]]:
@@ -347,7 +351,7 @@ class TradeResultRecorder:
         # Remove from open trades
         del self.open_trades[symbol]
         
-        logger.info(f"TRADE_RECORDER: EXIT_RECORDED | {symbol} | profit=₹{profit:.2f} | reason={exit_reason}")
+        logger.info(f"TRADE_RECORDER: EXIT_RECORDED | {symbol} | mode={trade_data.get('trading_mode', 'PAPER')} | profit=₹{profit:.2f} | reason={exit_reason}")
         
         return trade_data
     

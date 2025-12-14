@@ -456,6 +456,20 @@ class AngelOneOptionsBroker:
         # Build OptionChain with real contracts
         chain = OptionChain(underlying, expiry)
         
+        # OPTIMIZATION: Use bulk LTP fetch instead of individual API calls
+        # This prevents rate limiting when fetching LTPs for many contracts
+        all_symbols = [cd['symbol'] for cd in contracts_data]
+        ltps = {}
+        
+        if self.authenticated and all_symbols:
+            logger.info(f"CHAIN_FETCH: Fetching LTPs in bulk for {len(all_symbols)} contracts | {underlying}")
+            try:
+                ltps = self.get_ltp_bulk(all_symbols, exchange="NFO")
+                fetched_count = len([v for v in ltps.values() if v and v > 0])
+                logger.info(f"CHAIN_FETCH: Bulk LTP fetch completed | {fetched_count}/{len(all_symbols)} symbols | {underlying}")
+            except Exception as e:
+                logger.warning(f"CHAIN_FETCH: Bulk LTP fetch failed | {underlying} | {str(e)}")
+        
         for contract_data in contracts_data:
             # Extract strike from symbol (e.g., TECHM30DEC251600CE -> 1600)
             symbol = contract_data['symbol']
@@ -482,16 +496,15 @@ class AngelOneOptionsBroker:
             # Get token from instrument file
             contract.token = contract_data.get('token', '')
             
-            # Fetch REAL LTP and Greeks from broker if authenticated
-            if self.authenticated:
-                try:
-                    ltp = self.get_ltp(symbol, exchange="NFO")
-                    if ltp:
-                        contract.ltp = ltp
-                        contract.bid = ltp * 0.98  # Approximate bid
-                        contract.ask = ltp * 1.02  # Approximate ask
-                except Exception as e:
-                    logger.debug(f"CHAIN_FETCH: Could not fetch LTP for {symbol}: {e}")
+            # Set LTP from bulk fetch result
+            if symbol in ltps and ltps[symbol]:
+                ltp = ltps[symbol]
+                contract.ltp = ltp
+                contract.bid = ltp * 0.98  # Approximate bid
+                contract.ask = ltp * 1.02  # Approximate ask
+                logger.debug(f"CHAIN_FETCH: Added contract with LTP | {symbol} | ltp=₹{ltp:.2f}")
+            else:
+                logger.debug(f"CHAIN_FETCH: Added contract without LTP | {symbol} (will be fetched in monitoring loop)")
             
             chain.add_contract(contract)
         

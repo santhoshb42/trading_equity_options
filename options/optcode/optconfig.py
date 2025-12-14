@@ -168,10 +168,10 @@ class OptionsTradingConfig:
     IV_PERCENTILE_MIN = int(os.getenv("OPTIONS_IV_PERCENTILE_MIN", "30"))  # Min IV percentile for entry
     IV_PERCENTILE_MAX = int(os.getenv("OPTIONS_IV_PERCENTILE_MAX", "90"))  # Max IV percentile for entry
     
-    # Risk management
+    # Risk management - TRIAL MODE: 20% SL with 10% gain trailing
     MAX_LOSS_PER_TRADE = float(os.getenv("OPTIONS_MAX_LOSS_PER_TRADE", "500"))  # Max loss per trade in ₹
-    STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "2.0"))  # 2% SL on premium
-    PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "5.0"))  # 5% initial profit target
+    STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "20.0"))  # 20% SL (fixed below entry)
+    PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "0"))  # NO PROFIT TARGET - let winners run!
     
     # Number of lots per trade (for scaling trade size)
     # Each option contract = 1 lot (qty = lot_size * NO_OF_LOTS)
@@ -179,9 +179,12 @@ class OptionsTradingConfig:
     # Example: NO_OF_LOTS=1 → qty=lot_size, NO_OF_LOTS=2 → qty=2*lot_size
     NO_OF_LOTS = int(os.getenv("NO_OF_LOTS", "1"))  # Default 1 lot per trade
     
-    # Trailing Exit Strategy (lock in profits while letting winners run)
-    ENABLE_TRAILING_EXIT = os.getenv("OPTIONS_ENABLE_TRAILING_EXIT", "true").lower() == "true"  # Enable trailing stops
-    TRAILING_BUFFER_PERCENTAGE = float(os.getenv("OPTIONS_TRAILING_BUFFER_PERCENTAGE", "2.0"))  # Trail by 2% from peak
+    # Trailing Exit Strategy - MOVE SL UP EVERY 10% GAIN
+    # Keep SL 20% below peak price as position gains
+    # Example: Entry ₹100 (SL=₹80) → Reaches ₹110 (SL=₹88) → Reaches ₹121 (SL=₹96.80)
+    ENABLE_TRAILING_EXIT = os.getenv("OPTIONS_ENABLE_TRAILING_EXIT", "true").lower() == "true"  # Enable trailing
+    TRAILING_BUFFER_PERCENTAGE = float(os.getenv("OPTIONS_TRAILING_BUFFER_PERCENTAGE", "20.0"))  # Keep 20% below peak
+    TRAILING_GAIN_THRESHOLD = float(os.getenv("TRAILING_GAIN_THRESHOLD", "10.0"))  # Update SL every 10% gain
     
     # Signal filtering
     MIN_CONFIDENCE = float(os.getenv("OPTIONS_MIN_CONFIDENCE", "90"))  # Min 90% confidence for options signals
@@ -206,6 +209,11 @@ class MonitoringConfig:
     RATE_LIMIT_HEALTHY_THRESHOLD = 0.50     # < 50% utilization = FAST
     RATE_LIMIT_NORMAL_THRESHOLD = 0.75      # < 75% utilization = NORMAL
     # >= 75% utilization = SLOW
+    
+    # SENTIMENT CHECK INTERVAL (separate from position monitoring)
+    # IV changes fast due to profit booking (every 5-10 seconds)
+    # Need frequent checks to catch sentiment fades early
+    SENTIMENT_CHECK_INTERVAL_SECONDS = int(os.getenv("SENTIMENT_CHECK_INTERVAL", "5"))  # Check every 5 seconds!
 
 # =============================================================================
 # Webhook Configuration (Same port different endpoint)
@@ -354,6 +362,66 @@ def get_optconfig_summary() -> Dict[str, Any]:
         "paper_trading": DevConfig.PAPER_TRADING_ENABLED
     }
 
+# =============================================================================
+# Market Sentiment Configuration (PCR + OI Buildup)
+# =============================================================================
+
+class SentimentConfig:
+    """PCR and OI Buildup thresholds for entry and exit decisions"""
+    
+    # =========================================================================
+    # ENTRY Thresholds (LOOSE - prioritize not missing moves)
+    # =========================================================================
+    
+    # PCR range for entry: wider range to catch moves early
+    ENTRY_PCR_MIN = 0.5        # Don't buy PE if PCR too low (already very bullish)
+    ENTRY_PCR_MAX = 1.3        # Can buy CE even if slightly bearish (loose upper limit)
+    
+    # OI Buildup confirmation for entry (optional)
+    CHECK_OI_BUILDUP_ON_ENTRY = True
+    ENTRY_OI_BUILDUP_MIN = 500_000  # Loose threshold - any meaningful buildup adds confidence
+    
+    # =========================================================================
+    # EXIT Thresholds (STRICT - exit when sentiment FADES from entry)
+    # =========================================================================
+    # IMPORTANT: Exits are based on PERCENTAGE CHANGE from entry levels,
+    # not absolute thresholds. This ensures we exit when conviction weakens,
+    # regardless of entry conditions.
+    
+    # PCR Fade thresholds: % change from entry level
+    # Example for CE: Entry PCR 0.9, exit if rises 20% (0.9 * 1.20 = 1.08)
+    # Example for PE: Entry PCR 1.1, exit if drops 20% (1.1 * 0.80 = 0.88)
+    EXIT_PCR_FADE_THRESHOLD = 20      # Exit if PCR changes 20% from entry (5-30% range tunable)
+    
+    # OI Buildup Fade threshold: % drop from entry level indicates conviction weakening
+    # Example: Entry OI 5M, exit if drops 40% (5M * 0.60 = 3M)
+    EXIT_OI_FADE_THRESHOLD = 40       # Exit if OI drops 40% from entry (20-60% range tunable)
+    
+    # Note: Removed old absolute thresholds (EXIT_PCR_BEARISH=1.5, EXIT_PCR_BULLISH=0.4, 
+    # EXIT_OI_THRESHOLD=100k) as they don't adapt to entry conditions and miss fades.
+    
+    # Short Covering monitoring (indicates weakness)
+    CHECK_SHORT_COVERING_ON_EXIT = True
+    EXIT_SHORT_COVERING_THRESHOLD = 1_000_000  # If shorts are covering heavily, exit
+    
+    # =========================================================================
+    # Feature Flags
+    # =========================================================================
+    
+    ENABLE_SENTIMENT_FILTER = True           # Global toggle for sentiment checks
+    ENABLE_SENTIMENT_EXIT = True             # Enable fade-based exit detection
+    LOG_SENTIMENT_CHECKS = True              # Log all sentiment decisions
+    ALERT_ON_SENTIMENT_CHANGE = True         # Send alerts when sentiment changes
+    
+    # =========================================================================
+    # API Call Frequency & Performance
+    # =========================================================================
+    
+    CACHE_DURATION_SECONDS = 300             # Cache PCR/OI for 5 minutes
+    REFRESH_ON_POSITION_ENTRY = True         # Refresh sentiment data on every entry
+    REFRESH_ON_POSITION_EXIT = True          # Refresh sentiment data on exit checks
+    SENTIMENT_CHECK_INTERVAL_SECONDS = 60    # Check sentiment every 60 seconds during holding
+
 def validate_optconfig() -> Tuple[bool, str]:
     """Validate options bot configuration"""
     # In PAPER mode, API credentials are optional for testing
@@ -365,5 +433,11 @@ def validate_optconfig() -> Tuple[bool, str]:
         return False, "OPTIONS_MAX_CAPITAL must be > 0"
     if OptionsTradingConfig.MAX_DELTA >= 1.0:
         return False, "OPTIONS_MAX_DELTA must be < 1.0"
+    
+    # Validate sentiment thresholds
+    if SentimentConfig.ENTRY_PCR_MIN >= SentimentConfig.ENTRY_PCR_MAX:
+        return False, "ENTRY_PCR_MIN must be < ENTRY_PCR_MAX"
+    if SentimentConfig.EXIT_PCR_BULLISH >= SentimentConfig.EXIT_PCR_BEARISH:
+        return False, "EXIT_PCR_BULLISH must be < EXIT_PCR_BEARISH"
     
     return True, "Options bot configuration valid"
