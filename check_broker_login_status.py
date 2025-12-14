@@ -120,30 +120,46 @@ class BotHealthChecker:
                 with open(optbot_log, 'r') as f:
                     lines = f.readlines()
                     
-                    # Check for repeated BOT_INIT: START (indicates loop)
-                    init_starts = sum(1 for l in lines if 'BOT_INIT: START' in l)
-                    if init_starts > 15:  # More than 15 restarts in short time
-                        status['initialization_issue'] = f"Stuck in init loop ({init_starts} attempts)"
-                        status['errors'].append("Bot initialization loop detected")
+                    # Find the LATEST BOT_INIT: START position
+                    latest_init_idx = -1
+                    for i in range(len(lines)-1, -1, -1):
+                        if 'BOT_INIT: START' in lines[i]:
+                            latest_init_idx = i
+                            break
                     
-                    # Check for successful initialization completion
-                    if 'BOT_INIT: COMPLETE' in ''.join(lines) or 'READY' in ''.join(lines):
-                        status['broker_logged_in'] = True
-                        status['api_connected'] = True
+                    # Only check from latest initialization onwards
+                    if latest_init_idx >= 0:
+                        latest_lines = lines[latest_init_idx:]
+                        
+                        # Check if latest init completed successfully
+                        init_complete = any('BOT_INIT: COMPLETE' in l for l in latest_lines)
+                        
+                        if init_complete:
+                            # Initialization succeeded
+                            status['broker_logged_in'] = True
+                            status['api_connected'] = True
+                            status['initialization_issue'] = None
+                        else:
+                            # Check if stuck looping (another START before COMPLETE)
+                            start_count = sum(1 for l in latest_lines if 'BOT_INIT: START' in l)
+                            if start_count > 1:
+                                status['initialization_issue'] = f"Init loop detected (restarting)"
+                                status['errors'].append("Bot initialization loop detected")
                     
                     # Get last activity
                     for line in reversed(lines[-50:]):
-                        if '|' in line and 'INFO' in line:
+                        if '|' in line and ('INFO' in line or 'DEBUG' in line):
                             timestamp = line.split('|')[0].strip()
                             status['last_activity'] = timestamp
                             break
                     
-                    # Check for auth errors
-                    if 'Invalid Token' in ''.join(lines):
+                    # Check for auth errors in entire log
+                    all_content = ''.join(lines)
+                    if 'Invalid Token' in all_content and 'BOT_INIT: COMPLETE' not in all_content:
                         status['errors'].append("Invalid broker token detected")
-                    if 'AG8001' in ''.join(lines):
+                    if 'AG8001' in all_content and 'BOT_INIT: COMPLETE' not in all_content:
                         status['errors'].append("AngelOne AG8001 error (token expired)")
-                    if 'ConnectTimeoutError' in ''.join(lines):
+                    if 'ConnectTimeoutError' in all_content and 'BOT_INIT: COMPLETE' not in all_content:
                         status['errors'].append("Broker connection timeout")
                     
         except Exception as e:

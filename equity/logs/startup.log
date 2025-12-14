@@ -1,87 +1,88 @@
 DEBUG: Loading .env from: /root/santhosh/trading/equity/.env
 DEBUG: TRADING_MODE before load_dotenv: None
 DEBUG: TRADING_MODE after load_dotenv: LIVE
-2025-12-14 11:01:49 | INFO | STARTUP | Logging initialized | log_dir=/root/santhosh/trading/equity/logs/2025-12-14
+2025-12-14 11:13:27 | INFO | STARTUP | Logging initialized | log_dir=/root/santhosh/trading/equity/logs/2025-12-14
 ✅ Auto-save heartbeat started
-2025-12-14 11:01:51 | INFO | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
-2025-12-14 11:01:51 | INFO | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
-2025-12-14 11:01:51 | INFO | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
-2025-12-14 11:01:51 | INFO | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
-2025-12-14 11:01:51 | INFO | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
-✅ Started equity bot (PID 50678)
+2025-12-14 11:13:31 | INFO | REGIME_INIT | RegimeDetector initialized (SMA: 20/50, ATR: 14)
+2025-12-14 11:13:31 | INFO | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-12-14 11:13:31 | INFO | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+2025-12-14 11:13:31 | INFO | CORRELATION_INIT | CorrelationAnalyzer initialized (threshold: 0.7)
+2025-12-14 11:13:31 | INFO | POSITIONER_INIT | AdvancedPositionSizer initialized | base_size=100 | risk_per_trade=1.0%
+⚠️  Removing stale PID file (process 53807 not found)
+✅ Started equity bot (PID 54181)
 ==================================================
     EQUITY TRADING BOT
     Powered by AngelOne SmartAPI
 ==================================================
 
-2025-12-14 11:01:51 | INFO | STARTUP | Equity Trading Bot starting up | timestamp=2025-12-14T11:01:51.865460 | trading_mode=LIVE
-2025-12-14 11:01:51 | INFO | BOT_STARTING | BOT is STARTING
-2025-12-14 11:01:51 | INFO | STARTUP | Starting Equity Trading Bot...
-2025-12-14 11:01:51 | INFO | SIGNAL_HANDLERS_REGISTERED | SIGNAL_HANDLERS is REGISTERED
-2025-12-14 11:01:51 | INFO | CONFIG_VALIDATING | CONFIG is VALIDATING
-2025-12-14 11:01:51 | INFO | STARTUP | Validating configuration...
-2025-12-14 11:01:51 | INFO | CONFIG_VALID | CONFIG is VALID
-2025-12-14 11:01:51 | INFO | CONFIG | Configuration validation passed
-2025-12-14 11:01:51 | INFO | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=8080 | margin_percentage=0.2 | paper_trading=False
-2025-12-14 11:01:51 | INFO | TRADING_CONFIG_LOADED | TRADING_CONFIG is LOADED | trading_mode=LIVE | capital_per_trade=2000.0 | max_positions=5 | default_sl_percentage=0.5 | monitor_interval=20
-2025-12-14 11:01:51 | INFO | LEARNING_ENGINE_INITIALIZED | LEARNING_ENGINE is INITIALIZED
-2025-12-14 11:01:51 | INFO | STARTUP | Hybrid learning engine initialized
-2025-12-14 11:01:51 | INFO | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
-2025-12-14 11:01:51 | INFO | STARTUP |   Status: ML system ready for real-time learning
-2025-12-14 11:01:51 | INFO | STARTUP | EOD scheduler disabled (use cron at 3:15 PM instead)
-2025-12-14 11:01:51 | INFO | BOT_RUNNING | BOT is RUNNING
-2025-12-14 11:01:51 | INFO | STARTUP_COMPLETE | STARTUP is COMPLETE | startup_time=1765690311.867661 | trading_mode=LIVE | python_version=3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0] | working_directory=/root/santhosh/trading/equity | environment_loaded=True
-2025-12-14 11:01:51 | INFO | STARTUP | All components initialized successfully
-2025-12-14 11:01:51 | INFO | STARTUP | Trading Mode: LIVE
-2025-12-14 11:01:51 | INFO | STARTUP | Bot is ready to receive webhook alerts
-2025-12-14 11:01:51 | INFO | SYSTEM_READY | SYSTEM is READY | webhook_server=starting | broker=will_initialize | monitor=will_initialize | rate_limiter=will_initialize
-2025-12-14 11:01:51 | INFO | WEBHOOK_SERVER_STARTING | WEBHOOK_SERVER is STARTING
-2025-12-14 11:01:51 | INFO | STARTUP | Starting webhook server...
+2025-12-14 11:13:31 | INFO | STARTUP | Equity Trading Bot starting up | timestamp=2025-12-14T11:13:31.714196 | trading_mode=LIVE
+2025-12-14 11:13:31 | INFO | BOT_STARTING | BOT is STARTING
+2025-12-14 11:13:31 | INFO | STARTUP | Starting Equity Trading Bot...
+2025-12-14 11:13:31 | INFO | SIGNAL_HANDLERS_REGISTERED | SIGNAL_HANDLERS is REGISTERED
+2025-12-14 11:13:31 | INFO | CONFIG_VALIDATING | CONFIG is VALIDATING
+2025-12-14 11:13:31 | INFO | STARTUP | Validating configuration...
+2025-12-14 11:13:31 | INFO | CONFIG_VALID | CONFIG is VALID
+2025-12-14 11:13:31 | INFO | CONFIG | Configuration validation passed
+2025-12-14 11:13:31 | INFO | CONFIG | Current configuration | trading_mode=LIVE | max_capital=20000.0 | cap_per_trade=2000.0 | max_slots=10 | default_sl_percentage=0.5 | trail_sl_enabled=True | monitor_interval=20 | webhook_port=8080 | margin_percentage=0.2 | paper_trading=False
+2025-12-14 11:13:31 | INFO | TRADING_CONFIG_LOADED | TRADING_CONFIG is LOADED | trading_mode=LIVE | capital_per_trade=2000.0 | max_positions=5 | default_sl_percentage=0.5 | monitor_interval=20
+2025-12-14 11:13:31 | INFO | LEARNING_ENGINE_INITIALIZED | LEARNING_ENGINE is INITIALIZED
+2025-12-14 11:13:31 | INFO | STARTUP | Hybrid learning engine initialized
+2025-12-14 11:13:31 | INFO | STARTUP |   Storage: /root/santhosh/trading/equity/data/learning
+2025-12-14 11:13:31 | INFO | STARTUP |   Status: ML system ready for real-time learning
+2025-12-14 11:13:31 | INFO | STARTUP | EOD scheduler disabled (use cron at 3:15 PM instead)
+2025-12-14 11:13:31 | INFO | BOT_RUNNING | BOT is RUNNING
+2025-12-14 11:13:31 | INFO | STARTUP_COMPLETE | STARTUP is COMPLETE | startup_time=1765691011.7228055 | trading_mode=LIVE | python_version=3.12.3 (main, Nov  6 2025, 13:44:16) [GCC 13.3.0] | working_directory=/root/santhosh/trading/equity | environment_loaded=True
+2025-12-14 11:13:31 | INFO | STARTUP | All components initialized successfully
+2025-12-14 11:13:31 | INFO | STARTUP | Trading Mode: LIVE
+2025-12-14 11:13:31 | INFO | STARTUP | Bot is ready to receive webhook alerts
+2025-12-14 11:13:31 | INFO | SYSTEM_READY | SYSTEM is READY | webhook_server=starting | broker=will_initialize | monitor=will_initialize | rate_limiter=will_initialize
+2025-12-14 11:13:31 | INFO | WEBHOOK_SERVER_STARTING | WEBHOOK_SERVER is STARTING
+2025-12-14 11:13:31 | INFO | STARTUP | Starting webhook server...
 🛡️ INITIALIZING INDESTRUCTIBLE TRADING BOT...
-2025-12-14 11:01:51 | INFO | BOT_STARTUP | Trading bot starting up | startup_time=2025-12-14T11:01:51.869819 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
+2025-12-14 11:13:31 | INFO | BOT_STARTUP | Trading bot starting up | startup_time=2025-12-14T11:13:31.728520 | capital_per_trade=2000.0 | max_slots=10 | paper_trading=False
 🛡️ INITIALIZING INDESTRUCTIBLE BOT...
 ✅ Normal startup - no crash recovery needed
-2025-12-14 11:01:51 | INFO | PRIORITY_RATE_LIMITER | Priority bucket 'per_second' initialized | total_capacity=8 | critical_reserve=4 | general_capacity=4 | refill_rate=8
-2025-12-14 11:01:51 | INFO | PRIORITY_RATE_LIMITER | Priority bucket 'per_minute' initialized | total_capacity=180 | critical_reserve=90 | general_capacity=90 | refill_rate=3.0
-2025-12-14 11:01:51 | INFO | PRIORITY_RATE_LIMITER | Priority rate limiter initialized | rps_limit=8 | rpm_limit=180 | critical_reserve_pct=50
-2025-12-14 11:01:51 | INFO | BROKER_INIT | ✅ Priority rate limiter initialized - orders have reserved capacity
-2025-12-14 11:01:51 | INFO | INSTRUMENTS | Loaded 2399 instruments
-2025-12-14 11:01:51 | INFO | BULK_LTP_FETCHER | BulkLTPFetcher initialized | cache_ttl=5 | min_interval=1.0
-2025-12-14 11:01:51 | INFO | BROKER_INIT | ✅ Bulk LTP fetcher initialized - will fetch up to 50 symbols per request
-2025-12-14 11:01:51 | INFO | BULK_ORDER_FETCHER | BulkOrderFetcher initialized | fetch_interval=5
-2025-12-14 11:01:51 | INFO | BULK_ORDER_FETCHER | Background orderBook fetcher started
-2025-12-14 11:01:51 | INFO | BROKER_INIT | ✅ Bulk order fetcher initialized - will reduce orderBook API calls
-2025-12-14 11:01:51 | INFO | BROKER_LOGIN | Login attempt 1/5
-2025-12-14 11:01:51 | INFO | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=8 | refill_rate=8
-2025-12-14 11:01:51 | INFO | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=180 | refill_rate=3.0
-2025-12-14 11:01:51 | INFO | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=8 | rpm_limit=180
-2025-12-14 11:01:51 | INFO | RATE_LIMIT | TOKEN_CONSUMED | tokens_available=7 | bucket_status={'bucket_name': 'per_second', 'tokens_consumed': 1, 'tokens_before': 8, 'tokens_after': 7, 'capacity': 8, 'utilization_percent': 12.5}
-2025-12-14 11:01:51 | INFO | RATE_LIMIT | TOKEN_CONSUMED | tokens_available=179 | bucket_status={'bucket_name': 'per_minute', 'tokens_consumed': 1, 'tokens_before': 180, 'tokens_after': 179, 'capacity': 180, 'utilization_percent': 0.6}
-2025-12-14 11:01:51 | INFO | SESSION | Performing fresh login
-[I 251214 11:01:51 smartConnect:124] in pool
-2025-12-14 11:01:52 | INFO | SESSION_DEBUG | SmartConnect instance ID: 137671537181280 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
-2025-12-14 11:01:52 | INFO | SESSION | Session saved to file
-2025-12-14 11:01:52 | INFO | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
-2025-12-14 11:01:52 | INFO | SESSION_REFRESH | Proactive session refresh thread started
-2025-12-14 11:01:52 | INFO | SESSION_REFRESH | Proactive session refresh thread started successfully
-2025-12-14 11:01:52 | INFO | RATE_LIMITER | API call recorded: login
-2025-12-14 11:01:52 | INFO | BROKER_LOGIN | ✅ Login successful
-2025-12-14 11:01:52 | INFO | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
-2025-12-14 11:01:52 | INFO | MONITOR | Backed up stale positions.json to positions.json.startup_1765690312
-2025-12-14 11:01:52 | INFO | MONITOR | ✓ Cleared stale positions.json - will rebuild from broker holdings
-2025-12-14 11:01:52 | INFO | MONITOR | Skipping file load - broker will be source of truth
-2025-12-14 11:01:52 | INFO | HOLDINGS_SYNC | Fetching positions and holdings from broker...
-2025-12-14 11:01:52 | INFO | HOLDINGS_SYNC | No positions or holdings found at broker
-2025-12-14 11:01:52 | INFO | MONITOR | PositionMonitor instance created successfully
-2025-12-14 11:01:52 | INFO | MONITOR | Position monitoring started with bucketed LTP checking
-2025-12-14 11:01:52 | INFO | MONITOR | Event loop thread started
-2025-12-14 11:01:52 | INFO | MONITOR | Position monitor started in background
-2025-12-14 11:01:52 | INFO | MONITOR | Event loop started successfully for priority queue
-2025-12-14 11:01:52 | INFO | MONITOR | Monitor initialized with 0 existing positions
-2025-12-14 11:01:52 | INFO | SYSTEM | Trading system initialized successfully
-2025-12-14 11:01:52 | INFO | ALERT_QUEUE | Alert queue worker started successfully
-2025-12-14 11:01:52 | INFO | ALERT_QUEUE | Alert queue worker thread started
-2025-12-14 11:01:52 | INFO | SERVER | Starting webhook server on 0.0.0.0:8080
+2025-12-14 11:13:31 | INFO | PRIORITY_RATE_LIMITER | Priority bucket 'per_second' initialized | total_capacity=8 | critical_reserve=4 | general_capacity=4 | refill_rate=8
+2025-12-14 11:13:31 | INFO | PRIORITY_RATE_LIMITER | Priority bucket 'per_minute' initialized | total_capacity=180 | critical_reserve=90 | general_capacity=90 | refill_rate=3.0
+2025-12-14 11:13:31 | INFO | PRIORITY_RATE_LIMITER | Priority rate limiter initialized | rps_limit=8 | rpm_limit=180 | critical_reserve_pct=50
+2025-12-14 11:13:31 | INFO | BROKER_INIT | ✅ Priority rate limiter initialized - orders have reserved capacity
+2025-12-14 11:13:31 | INFO | INSTRUMENTS | Loaded 2399 instruments
+2025-12-14 11:13:31 | INFO | BULK_LTP_FETCHER | BulkLTPFetcher initialized | cache_ttl=5 | min_interval=1.0
+2025-12-14 11:13:31 | INFO | BROKER_INIT | ✅ Bulk LTP fetcher initialized - will fetch up to 50 symbols per request
+2025-12-14 11:13:31 | INFO | BULK_ORDER_FETCHER | BulkOrderFetcher initialized | fetch_interval=5
+2025-12-14 11:13:31 | INFO | BULK_ORDER_FETCHER | Background orderBook fetcher started
+2025-12-14 11:13:31 | INFO | BROKER_INIT | ✅ Bulk order fetcher initialized - will reduce orderBook API calls
+2025-12-14 11:13:31 | INFO | BROKER_LOGIN | Login attempt 1/5
+2025-12-14 11:13:31 | INFO | RATE_LIMITER | Token bucket 'per_second' initialized | capacity=8 | refill_rate=8
+2025-12-14 11:13:31 | INFO | RATE_LIMITER | Token bucket 'per_minute' initialized | capacity=180 | refill_rate=3.0
+2025-12-14 11:13:31 | INFO | RATE_LIMITER | AngelOne rate limiter initialized | rps_limit=8 | rpm_limit=180
+2025-12-14 11:13:31 | INFO | RATE_LIMIT | TOKEN_CONSUMED | tokens_available=7 | bucket_status={'bucket_name': 'per_second', 'tokens_consumed': 1, 'tokens_before': 8, 'tokens_after': 7, 'capacity': 8, 'utilization_percent': 12.5}
+2025-12-14 11:13:31 | INFO | RATE_LIMIT | TOKEN_CONSUMED | tokens_available=179 | bucket_status={'bucket_name': 'per_minute', 'tokens_consumed': 1, 'tokens_before': 180, 'tokens_after': 179, 'capacity': 180, 'utilization_percent': 0.6}
+2025-12-14 11:13:31 | INFO | SESSION | Performing fresh login
+[I 251214 11:13:31 smartConnect:124] in pool
+2025-12-14 11:13:32 | INFO | SESSION_DEBUG | SmartConnect instance ID: 128437800477728 | has_access_token=True | has_refresh_token=True | access_token_set=True | api_key=PSYIiZ0c
+2025-12-14 11:13:32 | INFO | SESSION | Session saved to file
+2025-12-14 11:13:32 | INFO | SESSION | Login successful | client_code=S635655 | session_id=Bearer eyJ...
+2025-12-14 11:13:32 | INFO | SESSION_REFRESH | Proactive session refresh thread started
+2025-12-14 11:13:32 | INFO | SESSION_REFRESH | Proactive session refresh thread started successfully
+2025-12-14 11:13:32 | INFO | RATE_LIMITER | API call recorded: login
+2025-12-14 11:13:32 | INFO | BROKER_LOGIN | ✅ Login successful
+2025-12-14 11:13:32 | INFO | ALERT_QUEUE | Alert queue initialized - burst-safe processing enabled
+2025-12-14 11:13:32 | INFO | MONITOR | Backed up stale positions.json to positions.json.startup_1765691012
+2025-12-14 11:13:32 | INFO | MONITOR | ✓ Cleared stale positions.json - will rebuild from broker holdings
+2025-12-14 11:13:32 | INFO | MONITOR | Skipping file load - broker will be source of truth
+2025-12-14 11:13:32 | INFO | HOLDINGS_SYNC | Fetching positions and holdings from broker...
+2025-12-14 11:13:33 | INFO | HOLDINGS_SYNC | No positions or holdings found at broker
+2025-12-14 11:13:33 | INFO | MONITOR | PositionMonitor instance created successfully
+2025-12-14 11:13:33 | INFO | MONITOR | Position monitoring started with bucketed LTP checking
+2025-12-14 11:13:33 | INFO | MONITOR | Event loop thread started
+2025-12-14 11:13:33 | INFO | MONITOR | Position monitor started in background
+2025-12-14 11:13:33 | INFO | MONITOR | Monitor initialized with 0 existing positions
+2025-12-14 11:13:33 | INFO | MONITOR | Event loop started successfully for priority queue
+2025-12-14 11:13:33 | INFO | SYSTEM | Trading system initialized successfully
+2025-12-14 11:13:33 | INFO | ALERT_QUEUE | Alert queue worker started successfully
+2025-12-14 11:13:33 | INFO | ALERT_QUEUE | Alert queue worker thread started
+2025-12-14 11:13:33 | INFO | SERVER | Starting webhook server on 0.0.0.0:8080
  * Serving Flask app 'eqcode.api'
  * Debug mode: off
 WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
@@ -89,26 +90,16 @@ WARNING: This is a development server. Do not use it in a production deployment.
  * Running on http://127.0.0.1:8080
  * Running on http://143.244.141.127:8080
 Press CTRL+C to quit
-2025-12-14 11:01:52 | INFO | MONITOR | Priority API queue enabled and started
-2025-12-14 11:01:53 | INFO | SL_RETRY | SL retry thread started - waiting 30s before initial placement (conserve startup API quota)
-2025-12-14 11:01:53 | INFO | SL_RETRY | SL retry thread started successfully
-2025-12-14 11:01:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:02:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:02:23 | INFO | SL_RETRY | SL retry thread active - conservative mode (1 SL per 20s, max 10 retries)
-2025-12-14 11:02:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:02:53 | INFO | MONITOR | Paper trades checked (next in 60s)
-2025-12-14 11:02:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:03:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:03:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:03:53 | INFO | MONITOR | Paper trades checked (next in 60s)
-2025-12-14 11:03:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:04:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:04:33 | INFO | CLEANUP_ORDER | No active positions - checking for orphaned pending orders | active_positions=0
-2025-12-14 11:04:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:04:53 | INFO | MONITOR | Paper trades checked (next in 60s)
-2025-12-14 11:04:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:05:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:05:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:05:53 | INFO | MONITOR | Paper trades checked (next in 60s)
-2025-12-14 11:05:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
-2025-12-14 11:06:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:13:33 | INFO | MONITOR | Priority API queue enabled and started
+2025-12-14 11:13:33 | INFO | SL_RETRY | SL retry thread started - waiting 30s before initial placement (conserve startup API quota)
+2025-12-14 11:13:33 | INFO | SL_RETRY | SL retry thread started successfully
+2025-12-14 11:13:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:13:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:14:03 | INFO | SL_RETRY | SL retry thread active - conservative mode (1 SL per 20s, max 10 retries)
+2025-12-14 11:14:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:14:33 | INFO | MONITOR | Paper trades checked (next in 60s)
+2025-12-14 11:14:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:14:53 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:15:13 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
+2025-12-14 11:15:33 | INFO | MONITOR | Paper trades checked (next in 60s)
+2025-12-14 11:15:33 | INFO | MONITOR_SLEEP | Sleeping for 20s (base=20s, consecutive_errors=0, monitoring_suspended=False)
