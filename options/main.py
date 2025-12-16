@@ -662,6 +662,14 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    """Run the bot when script is executed directly"""
+    
+    # Ensure we're in the right directory
+    script_dir = Path(__file__).parent
+    if script_dir.name != "options":
+        print("Error: This script must be run from the options directory")
+        sys.exit(1)
+    
     # Prevent multiple instances using PID file with atomic locking
     pid_file = script_dir / "options_bot.pid"
     lock_file = script_dir / ".options_bot.lock"
