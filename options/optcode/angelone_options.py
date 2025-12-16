@@ -1145,10 +1145,12 @@ class AngelOneOptionsBroker:
     
     def get_ltp_bulk(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[float]]:
         """
-        Get LTP for multiple option symbols in fewer API calls.
+        Get LTP for multiple option symbols with intelligent batching and caching.
         
-        OPTIMIZATION: Instead of calling get_market_data() N times (N API calls),
-        this fetches multiple symbols efficiently, reducing API usage and rate limiting.
+        OPTIMIZATION: 
+        1. Check LTP cache first (10-second TTL to reduce API calls during monitoring cycles)
+        2. Batch uncached symbols with rate limiting (1 call per symbol, but smarter queueing)
+        3. Cache all results for future quick access
         
         Args:
             symbols: List of option symbols (e.g., ["BANKNIFTY25JAN19800CE", "NIFTY25JAN18000CE"])
@@ -1160,6 +1162,11 @@ class AngelOneOptionsBroker:
         Example:
             ltps = broker.get_ltp_bulk(["BANKNIFTY25JAN19800CE", "NIFTY25JAN18000CE"])
             # Returns: {"BANKNIFTY25JAN19800CE": 250.5, "NIFTY25JAN18000CE": 180.3}
+        
+        Rate Limit Strategy:
+        - Cached hits: 0 API calls
+        - Uncached symbols: 1 API call per symbol (SmartAPI limitation, no true bulk endpoint)
+        - But with 10s cache TTL, monitoring cycles mostly hit cache = minimal API usage
         """
         if not symbols:
             return {}
@@ -1179,21 +1186,38 @@ class AngelOneOptionsBroker:
             # Get rate limiter
             rate_limiter = get_options_rate_limiter()
             
-            # Fetch each symbol - SmartAPI doesn't support true bulk endpoint for options
-            # but we batch the rate limit waits to be more efficient
+            # OPTIMIZATION: Batch into two groups: cached vs uncached
+            # This way we do zero API calls if all are cached
+            cached_symbols = []
+            uncached_symbols = []
+            
+            # PHASE 1: Check LTP cache first (10-second TTL for monitoring cycles)
+            # During normal monitoring (every 30s), most symbols should be in cache
+            for symbol in symbols:
+                # Increased cache TTL from 2s to 10s: monitoring cycles are 30s apart
+                # so cache hits will be frequent during active monitoring
+                cached_ltp = self.ltp_cache.get(symbol, max_age_seconds=10.0)
+                if cached_ltp is not None:
+                    result[symbol] = cached_ltp
+                    cached_symbols.append(symbol)
+                    logger.debug(f"BULK_MARKET_DATA: CACHED (10s TTL) | {symbol} | ltp=₹{cached_ltp:.2f}")
+                else:
+                    uncached_symbols.append(symbol)
+            
+            if cached_symbols:
+                logger.info(f"BULK_MARKET_DATA: Cache hit | {len(cached_symbols)}/{len(symbols)} symbols (0 API calls)")
+            
+            # PHASE 2: Fetch uncached symbols with rate limiting
+            # Since SmartAPI doesn't support true bulk LTP, we fetch individually
+            # but we optimize by:
+            # - Respecting rate limiter (queue if needed)
+            # - Caching all results for future use
             fetched_count = 0
             failed_symbols = []
             
-            for symbol in symbols:
-                # Check LTP cache first (avoids rate limit hits for recent data)
-                cached_ltp = self.ltp_cache.get(symbol, max_age_seconds=2.0)
-                if cached_ltp is not None:
-                    result[symbol] = cached_ltp
-                    logger.debug(f"BULK_MARKET_DATA: CACHED | {symbol} | ltp=₹{cached_ltp:.2f}")
-                    continue
-                
-                # Wait for rate limit permission with longer timeout now that we have async queueing
-                # Burst alerts are queued and processed sequentially, so we can wait longer
+            for symbol in uncached_symbols:
+                # Wait for rate limit permission
+                # IMPORTANT: This respects AngelOne limits (8 RPS, 180 RPM)
                 if not rate_limiter.wait_for_call_permission(timeout=5.0):
                     logger.warning(f"BULK_MARKET_DATA: RATE_LIMITED | {symbol} | exceeded timeout")
                     failed_symbols.append(symbol)
@@ -1233,11 +1257,19 @@ class AngelOneOptionsBroker:
                     rate_limiter.record_call("bulk_market_data", False)
                     failed_symbols.append(symbol)
             
+            # Log final statistics
+            api_calls = len(uncached_symbols)  # Only count uncached symbols that were fetched
+            logger.info(f"BULK_MARKET_DATA: Complete | cached={len(cached_symbols)} (0 API calls) | "
+                       f"fetched={fetched_count}/{api_calls} API calls | failed={len(failed_symbols)}")
+            
             log_event("BULK_MARKET_DATA", 
-                     f"Fetched LTP for {fetched_count}/{len(symbols)} symbols",
-                     total=len(symbols),
+                     f"Fetched LTP with smart caching",
+                     total_symbols=len(symbols),
+                     cache_hits=len(cached_symbols),
+                     api_calls_made=api_calls,
                      success=fetched_count,
-                     failed=len(failed_symbols))
+                     failed=len(failed_symbols),
+                     api_efficiency=f"{(len(cached_symbols)/len(symbols)*100):.1f}% cache hit")
             
             if failed_symbols:
                 logger.warning(f"BULK_MARKET_DATA: Failed for symbols: {failed_symbols}")
