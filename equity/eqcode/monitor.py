@@ -2280,7 +2280,7 @@ class PositionMonitor:
             # Check if we can place exit order
             can_exit, check_reason = self.broker.can_place_order(symbol, "SELL")
             if not can_exit:
-                log_monitor("EXIT_BLOCKED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
+                log_monitor("EXIT_BLOCKED", f"{symbol} | BLOCKED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision="BLOCKED", details={"block_reason": check_reason})
                 log_event("EXIT_BLOCKED", f"Cannot exit {symbol}: {check_reason}")
                 return False
@@ -2303,7 +2303,7 @@ class PositionMonitor:
                 )
                 
                 # Comprehensive exit logging
-                log_monitor("EXIT_ORDER_PLACED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
+                log_monitor("EXIT_ORDER_PLACED", f"{symbol} | {reason}", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision=reason, details={
                                "exit_order_id": exit_order.order_id,
                                "expected_pnl": pnl,
@@ -2319,7 +2319,7 @@ class PositionMonitor:
                 
                 return True
             else:
-                log_monitor("EXIT_FAILED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
+                log_monitor("EXIT_FAILED", f"{symbol} | Order failed", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision="ORDER_FAILED", details={"reason": "Failed to place SELL order"})
                 log_event("ERROR", f"Failed to place exit order for {symbol}")
                 return False
