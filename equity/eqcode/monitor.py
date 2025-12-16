@@ -2200,7 +2200,7 @@ class PositionMonitor:
             
             # Log exit decision
             if exit_reason:
-                log_monitor("EXIT_DECISION", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
+                log_monitor("EXIT_DECISION", f"{symbol} | {exit_reason}", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision=exit_reason, details=decision_details)
                 
                 # Place exit order if needed
@@ -2208,7 +2208,7 @@ class PositionMonitor:
             else:
                 # Log holding decision for key positions
                 if abs(pnl_percent) > 0.5:  # Log if position has moved >0.5%
-                    log_monitor("HOLDING", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
+                    log_monitor("HOLDING", f"{symbol} | Holding", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
                                decision="CONTINUE_HOLDING", 
                                details={
                                    "sl_distance": abs(ltp - position.sl_price),
@@ -2241,7 +2241,7 @@ class PositionMonitor:
             pnl_percent = ((current_ltp - position.entry_price) / position.entry_price) * 100
             
             # Log exit initiation
-            log_monitor("EXIT_INITIATED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
+            log_monitor("EXIT_INITIATED", f"{symbol} | {reason}", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                        decision=reason, details={
                            "entry_price": position.entry_price,
                            "quantity": position.quantity,
