@@ -325,12 +325,24 @@ class TradingState:
                 """Async wrapper for alert processing"""
                 return await handle_buy_alert_async(alert_data)
             
+            # Alert processing rate: 1 alert per second
+            # 
+            # Why 1 second is safe:
+            # - Bulk LTP fetcher: Fetches 50 symbols in 1 API call (every 20s monitoring cycle)
+            # - Each alert processing: 1-2 API calls (placeOrder + optional SL placement)
+            # - With 1s/alert: Max ~1 req/sec from alerts
+            # - Baseline monitoring: ~0.05 req/sec (1 bulk call per 20s)
+            # - Total: ~1.05 req/sec, well under 8 req/sec broker limit
+            # - Data from logs: 369 API calls over 4 hours = 0.025 req/sec baseline, we're fine
+            #
+            # The 3 "Rate limit timeout" errors were from initial burst of 4 alerts in 7 seconds
+            # With 1s/alert spacing, bursts like that are handled safely by broker's 8 req/sec capacity
             self.alert_queue = AlertQueue(
                 process_alert_func=async_process_alert,
-                processing_rate=1.5,  # 1 alert per 1.5 seconds = safe rate
+                processing_rate=1.0,  # 1 alert per second
                 max_queue_size=500
             )
-            log_event("ALERT_QUEUE", "Alert queue initialized - burst-safe processing enabled")
+            log_event("ALERT_QUEUE", "Alert queue initialized - burst-safe processing enabled (1s/alert)")
             
         except Exception as e:
             log_event("ALERT_QUEUE_ERROR", f"Failed to initialize alert queue: {e}")

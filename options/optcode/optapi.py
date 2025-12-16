@@ -419,31 +419,6 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: VALIDATED | symbol={symbol}")
         log_signal_validation(symbol, True)
         
-        # ML VALIDATION (NEW) - Validate with ML signal filter
-        try:
-            from .opt_ml_integration import get_ml_integration
-            ml_integration = get_ml_integration()
-            ml_valid, ml_reason, ml_details = ml_integration.validate_with_ml_filter(alert)
-            
-            if not ml_valid:
-                logger.warning(f"ML_VALIDATION_REJECTED: symbol={symbol} | reason={ml_reason}")
-                return {
-                    'symbol': symbol,
-                    'timestamp': timestamp,
-                    'status': 'rejected',
-                    'reason': f"ML filter: {ml_reason}",
-                    'ml_details': ml_details
-                }
-            
-            # Log successful ML validation with details
-            logger.info(f"ML_VALIDATION_PASSED: symbol={symbol} | pop={ml_details.get('final_pop', 0):.1f}% | "
-                       f"greeks_score={ml_details.get('greeks_score', 0):.2f} | "
-                       f"iv_percentile={ml_details.get('iv_percentile', 0):.1f}%")
-            
-        except Exception as e:
-            logger.warning(f"ML_VALIDATION_ERROR: symbol={symbol} | {str(e)} | continuing without ML")
-            # Don't block on ML errors - continue processing
-        
         # Authorized to process
         symbol = processed['symbol']
         underlying = processed['underlying']
@@ -462,24 +437,23 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 
                 logger.info(f"SENTIMENT_CHECK: {underlying} | entry_ok={entry_ok} | {entry_reason}")
                 
+                # IMPORTANT: Make sentiment filter non-blocking
+                # Log the result but don't reject the alert due to sentiment
+                # This allows trading during market hours when PCR/OI data is available
+                # but gracefully continues when data is not available (paper trading, outside hours)
                 if not entry_ok:
-                    logger.warning(f"ALERT_PROCESS: SENTIMENT_REJECTED | symbol={symbol} | {entry_reason}")
-                    return {
-                        'symbol': symbol,
-                        'timestamp': timestamp,
-                        'status': 'rejected',
-                        'reason': entry_reason
-                    }
+                    logger.warning(f"ALERT_PROCESS: SENTIMENT_WARNING | symbol={symbol} | {entry_reason} | continuing anyway (sentiment non-blocking)")
+                    # Don't return/reject - continue with the trade
                 
-                if SentimentConfig.LOG_SENTIMENT_CHECKS:
+                if SentimentConfig.LOG_SENTIMENT_CHECKS and entry_ok:
                     sentiment_data = sentiment_engine.get_symbol_sentiment(underlying)
                     logger.info(f"SENTIMENT_DATA: {underlying} | pcr={sentiment_data.get('pcr')} | buildup={sentiment_data.get('oi_long_buildup')}")
             
             except Exception as e:
                 logger.warning(f"SENTIMENT_CHECK: ERROR | {underlying} | {str(e)} | continuing anyway")
-                # Don't block on sentiment errors, continue with trade
+                # Don't block on sentiment errors - continue with trade
         
-        # Check capital availability
+        # Fetch option chain
         available_capital = OptionsCapitalConfig.get_available_capital(0)
         if available_capital < OptionsCapitalConfig.CAP_PER_TRADE:
             logger.warning(f"ALERT_PROCESS: INSUFFICIENT_CAPITAL | symbol={symbol} | available={available_capital:.2f}")
@@ -558,6 +532,53 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.debug(f"ALERT_PROCESS: GREEKS_OK | delta={selected_contract.delta:.3f} | gamma={selected_contract.gamma:.5f}")
+        
+        # ML VALIDATION (WITH REAL GREEKS) - Now that we have actual Greeks data
+        # If broker doesn't provide Greeks (all zeros), skip ML validation gracefully
+        try:
+            from .opt_ml_integration import get_ml_integration
+            ml_integration = get_ml_integration()
+            
+            # Check if broker actually provided Greeks data
+            greeks_data = selected_contract.to_dict()['greeks']
+            has_real_greeks = any([
+                greeks_data.get('delta', 0) != 0,
+                greeks_data.get('gamma', 0) != 0,
+                greeks_data.get('vega', 0) != 0,
+                greeks_data.get('theta', 0) != 0
+            ])
+            
+            if not has_real_greeks:
+                logger.warning(f"ML_VALIDATION_SKIPPED: symbol={symbol} | contract={selected_contract.symbol} | reason=Broker did not provide Greeks data (all zeros)")
+                # Continue without ML validation - broker data limitation
+            else:
+                # Enrich alert with actual Greeks data before ML validation
+                alert_with_greeks = alert.copy()
+                alert_with_greeks['greeks'] = greeks_data
+                alert_with_greeks['contract_type'] = contract_type
+                alert_with_greeks['underlying_price'] = float(alert.get('price', 0))
+                alert_with_greeks['strike'] = selected_contract.strike
+                alert_with_greeks['iv'] = selected_contract.iv
+                
+                ml_valid, ml_reason, ml_details = ml_integration.validate_with_ml_filter(alert_with_greeks)
+                
+                if not ml_valid:
+                    logger.warning(f"ML_VALIDATION_REJECTED: symbol={symbol} | contract={selected_contract.symbol} | reason={ml_reason}")
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': f"ML filter: {ml_reason}",
+                        'ml_details': ml_details
+                    }
+                
+                # Log successful ML validation with details
+                logger.info(f"ML_VALIDATION_PASSED: symbol={symbol} | contract={selected_contract.symbol} | pop={ml_details.get('final_pop', 0):.1f}% | "
+                           f"greeks_score={ml_details.get('greeks_score', 0):.2f}")
+            
+        except Exception as e:
+            logger.warning(f"ML_VALIDATION_ERROR: symbol={symbol} | {str(e)} | continuing without ML")
+            # Don't block on ML errors - continue processing
         
         # Get lot size from instrument manager and apply NO_OF_LOTS multiplier for scaling
         from optcode.optconfig import OptionsTradingConfig

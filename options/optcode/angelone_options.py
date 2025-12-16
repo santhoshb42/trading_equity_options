@@ -416,7 +416,7 @@ class AngelOneOptionsBroker:
             
             # Always fetch real market data from AngelOne (even in PAPER mode)
             # PAPER mode only affects order placement, not market data
-            chain = self._fetch_from_angel(underlying, expiry)
+            chain = self._fetch_from_angel(underlying, expiry, current_price=current_price)
             logger.debug(f"CHAIN_FETCH: Fetched from Angel One | contracts={len(chain.contracts) if chain else 0} | mode={OptionsTradingConfig.TRADING_MODE}")
             
             if chain:
@@ -439,7 +439,7 @@ class AngelOneOptionsBroker:
             rate_limiter.record_call("fetch_chain", False)
             return None
     
-    def _fetch_from_angel(self, underlying: str, expiry: str) -> Optional[OptionChain]:
+    def _fetch_from_angel(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
         """Fetch from AngelOne API OR instrument.json for real contracts"""
         # CRITICAL: Use instrument.json to build real option chain with actual contracts
         # This provides real strikes, symbols, tokens - essential for trading
@@ -508,7 +508,17 @@ class AngelOneOptionsBroker:
             
             chain.add_contract(contract)
         
-        logger.info(f"CHAIN_FETCH: Built real chain | {underlying} | contracts={len(chain.contracts)} | expiry={expiry}")
+        # Set ATM strike for chain - use current_price if provided, else extract from contracts
+        if current_price:
+            chain.atm_strike = current_price
+        elif chain.contracts:
+            # Extract strikes and pick the one nearest to middle (safe default)
+            strikes = sorted(set(c.strike for c in chain.contracts.values() if c.strike and c.strike > 0))
+            if strikes:
+                chain.atm_strike = strikes[len(strikes)//2]
+        
+        logger.info(f"CHAIN_FETCH: Built real chain | {underlying} | contracts={len(chain.contracts)
+} | atm_strike={chain.atm_strike} | expiry={expiry}")
         return chain
     
     def _create_mock_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> OptionChain:

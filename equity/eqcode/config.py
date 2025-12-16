@@ -168,7 +168,7 @@ class TradingConfig:
     """Trading strategy and risk management parameters"""
     
     # Trading mode
-    TRADING_MODE = os.getenv("TRADING_MODE", "LIVE")  # PAPER or LIVE
+    TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")  # PAPER or LIVE - Default to PAPER for safety
     
     # Capital per trade
     CAPITAL_PER_TRADE = float(os.getenv("CAPITAL_PER_TRADE", "2000"))  # ₹2,000 per trade (test default)

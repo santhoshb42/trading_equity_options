@@ -168,8 +168,8 @@ class OptionsTradingConfig:
     IV_PERCENTILE_MIN = int(os.getenv("OPTIONS_IV_PERCENTILE_MIN", "30"))  # Min IV percentile for entry
     IV_PERCENTILE_MAX = int(os.getenv("OPTIONS_IV_PERCENTILE_MAX", "90"))  # Max IV percentile for entry
     
-    # Risk management - TRIAL MODE: 20% SL with 10% gain trailing
-    MAX_LOSS_PER_TRADE = float(os.getenv("OPTIONS_MAX_LOSS_PER_TRADE", "500"))  # Max loss per trade in ₹
+    # Risk management - SENTIMENT-DRIVEN: 20% SL with sentiment fade as primary exit signal
+    MAX_LOSS_PER_TRADE = float(os.getenv("OPTIONS_MAX_LOSS_PER_TRADE", "5000"))  # Safety limit (emergency exit) - high enough not to interfere with 20% SL
     STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "20.0"))  # 20% SL (fixed below entry)
     PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "0"))  # NO PROFIT TARGET - let winners run!
     
@@ -408,7 +408,7 @@ class SentimentConfig:
     # Feature Flags
     # =========================================================================
     
-    ENABLE_SENTIMENT_FILTER = True           # Global toggle for sentiment checks
+    ENABLE_SENTIMENT_FILTER = True            # Global toggle for sentiment checks (errors non-blocking)
     ENABLE_SENTIMENT_EXIT = True             # Enable fade-based exit detection
     LOG_SENTIMENT_CHECKS = True              # Log all sentiment decisions
     ALERT_ON_SENTIMENT_CHANGE = True         # Send alerts when sentiment changes

@@ -7,6 +7,7 @@ Routes incoming alerts from TradingView (port 80) to both equity and options bot
 import os
 import json
 import logging
+import time
 from flask import Flask, request, jsonify
 from typing import Dict, Any
 import requests
@@ -67,29 +68,44 @@ def validate_webhook_secret(received_secret: str = None) -> bool:
     return True
 
 
-def forward_alert(url: str, payload: Dict[str, Any], bot_name: str) -> bool:
-    """Forward alert to bot endpoint"""
-    try:
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=10,
-            headers={"Content-Type": "application/json"}
-        )
-        
-        if response.status_code in [200, 201]:
-            logger.info(f"✓ Alert forwarded to {bot_name}: {response.status_code}")
-            return True
-        else:
-            logger.error(f"✗ {bot_name} returned status {response.status_code}: {response.text}")
-            return False
+def forward_alert(url: str, payload: Dict[str, Any], bot_name: str, retries: int = 1) -> bool:
+    """Forward alert to bot endpoint with retry logic"""
+    for attempt in range(retries):
+        try:
+            # Increased timeout to 30s for slow webhook processing
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=30,
+                headers={"Content-Type": "application/json"}
+            )
             
-    except requests.exceptions.ConnectTimeout:
-        logger.error(f"✗ {bot_name} connection timeout - bot may be down")
-        return False
-    except requests.exceptions.RequestException as e:
-        logger.error(f"✗ Error forwarding to {bot_name}: {str(e)}")
-        return False
+            if response.status_code in [200, 201]:
+                logger.info(f"✓ Alert forwarded to {bot_name}: {response.status_code}")
+                return True
+            else:
+                logger.error(f"✗ {bot_name} returned status {response.status_code}: {response.text}")
+                return False
+                
+        except requests.exceptions.ConnectTimeout:
+            if attempt < retries - 1:
+                logger.warning(f"⏳ {bot_name} timeout (attempt {attempt + 1}/{retries}), retrying...")
+                time.sleep(2)
+            else:
+                logger.error(f"✗ {bot_name} connection timeout after {retries} attempts - bot may be down")
+                return False
+        except requests.exceptions.Timeout:
+            if attempt < retries - 1:
+                logger.warning(f"⏳ {bot_name} read timeout (attempt {attempt + 1}/{retries}), retrying...")
+                time.sleep(2)
+            else:
+                logger.error(f"✗ {bot_name} read timeout after {retries} attempts")
+                return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"✗ Error forwarding to {bot_name}: {str(e)}")
+            return False
+    
+    return False
 
 
 @app.route('/webhook', methods=['POST'])

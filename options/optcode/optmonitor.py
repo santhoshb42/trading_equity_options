@@ -764,10 +764,14 @@ class OptionPositionMonitor:
         - Distinguish real selling pressure from profit booking reversals
         
         This prevents premature SL exits on natural decay or temporary dips.
+        
+        SL Priority (in order):
+        1. Percentage-based SL (20% on premium entry) - PRIMARY
+        2. MAX_LOSS_PER_TRADE (safety net for catastrophic losses)
         """
         closed = []
         sl_percent = OptionsTradingConfig.STOP_LOSS_PERCENTAGE
-        max_loss = OptionsTradingConfig.MAX_LOSS_PER_TRADE
+        max_loss = OptionsTradingConfig.MAX_LOSS_PER_TRADE  # Safety net only
         decay_monitor = get_decay_monitor()
         
         for symbol in list(self.positions.keys()):
@@ -785,15 +789,10 @@ class OptionPositionMonitor:
                 should_close = False
                 close_reason = "LOSS"
                 
-                # Check hard SL (absolute loss threshold)
-                if abs(position.unrealized_pnl) >= max_loss:
-                    # Hard stop loss - absolute loss exceeded
-                    should_close = True
-                    close_reason = f"MAX_LOSS_EXCEEDED (₹{position.unrealized_pnl:.2f})"
-                    logger.warning(f"STOP_LOSS: {symbol} | MAX LOSS HIT: ₹{position.unrealized_pnl:.2f} >= ₹{max_loss:.2f}")
-                
-                elif loss_percent >= sl_percent:
+                # Check percentage-based SL FIRST (PRIMARY exit logic)
+                if loss_percent >= sl_percent:
                     # Percentage SL - check if it's a real move
+                    # Percentage-based SL: check if it's a real move
                     # TRIAL MODE: 20% SL means we're OK with losses up to 20%
                     # Only close if it's a confirmed real move (not just decay)
                     if sl_percent >= 20.0:
@@ -812,6 +811,12 @@ class OptionPositionMonitor:
                             logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% - Real move | {decay_signal['reason']}")
                         else:
                             logger.debug(f"STOP_LOSS_HELD: {symbol} | Loss {loss_percent:.1f}% | {decay_signal['reason']}")
+                
+                # Check MAX_LOSS as SAFETY NET ONLY (catastrophic loss prevention)
+                if not should_close and abs(position.unrealized_pnl) >= max_loss:
+                    should_close = True
+                    close_reason = f"MAX_LOSS_SAFETY_NET (₹{position.unrealized_pnl:.2f})"
+                    logger.warning(f"STOP_LOSS: {symbol} | SAFETY NET TRIGGERED: ₹{position.unrealized_pnl:.2f} >= ₹{max_loss:.2f}")
                 
                 if should_close:
                     pnl = self.close_position(symbol, position.current_premium, close_reason)
@@ -920,12 +925,12 @@ class OptionPositionMonitor:
                 # Exit if either PCR or OI faded
                 if pcr_fade_detected or oi_fade_detected:
                     exit_reason = []
-                    if pcr_fade_detected:
+                    if pcr_fade_detected and pcr_fade_reason:
                         exit_reason.append(pcr_fade_reason)
-                    if oi_fade_detected:
+                    if oi_fade_detected and oi_fade_reason:
                         exit_reason.append(oi_fade_reason)
                     
-                    combined_reason = " | ".join(exit_reason)
+                    combined_reason = " | ".join(exit_reason) if exit_reason else "SENTIMENT_FADE"
                     logger.warning(f"SENTIMENT_FADE: {symbol} | {combined_reason}")
                     
                     # Close position at current premium

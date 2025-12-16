@@ -2036,7 +2036,7 @@ class PositionMonitor:
             
             if ltp is None or ltp_age_seconds > 60:
                 # LTP is stale or unavailable, skip this check
-                log_monitor("LTP_STALE", symbol, details={
+                log_monitor("LTP_STALE", symbol=symbol, details={
                     "reason": "LTP not yet updated by bucket check or too old",
                     "ltp_age_seconds": ltp_age_seconds,
                     "using_entry_price": position.entry_price
@@ -2051,7 +2051,7 @@ class PositionMonitor:
             # Note: position.update_ltp(ltp) already called by bucket check, no need to call again
             
             # Log detailed position monitoring
-            log_monitor("PRICE_CHECK", symbol, ltp, pnl, pnl_percent,
+            log_monitor("PRICE_CHECK", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
                        target_price=position.entry_price * 1.01,  # 1% target
                        stop_loss=position.sl_price,
                        details={
@@ -2200,7 +2200,7 @@ class PositionMonitor:
             
             # Log exit decision
             if exit_reason:
-                log_monitor("EXIT_DECISION", symbol, ltp, pnl, pnl_percent,
+                log_monitor("EXIT_DECISION", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision=exit_reason, details=decision_details)
                 
                 # Place exit order if needed
@@ -2208,7 +2208,7 @@ class PositionMonitor:
             else:
                 # Log holding decision for key positions
                 if abs(pnl_percent) > 0.5:  # Log if position has moved >0.5%
-                    log_monitor("HOLDING", symbol, ltp, pnl, pnl_percent,
+                    log_monitor("HOLDING", symbol=symbol, ltp=ltp, pnl=pnl, pnl_percent=pnl_percent,
                                decision="CONTINUE_HOLDING", 
                                details={
                                    "sl_distance": abs(ltp - position.sl_price),
@@ -2241,7 +2241,7 @@ class PositionMonitor:
             pnl_percent = ((current_ltp - position.entry_price) / position.entry_price) * 100
             
             # Log exit initiation
-            log_monitor("EXIT_INITIATED", symbol, current_ltp, pnl, pnl_percent,
+            log_monitor("EXIT_INITIATED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                        decision=reason, details={
                            "entry_price": position.entry_price,
                            "quantity": position.quantity,
@@ -2280,7 +2280,7 @@ class PositionMonitor:
             # Check if we can place exit order
             can_exit, check_reason = self.broker.can_place_order(symbol, "SELL")
             if not can_exit:
-                log_monitor("EXIT_BLOCKED", symbol, current_ltp, pnl, pnl_percent,
+                log_monitor("EXIT_BLOCKED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision="BLOCKED", details={"block_reason": check_reason})
                 log_event("EXIT_BLOCKED", f"Cannot exit {symbol}: {check_reason}")
                 return False
@@ -2303,7 +2303,7 @@ class PositionMonitor:
                 )
                 
                 # Comprehensive exit logging
-                log_monitor("EXIT_ORDER_PLACED", symbol, current_ltp, pnl, pnl_percent,
+                log_monitor("EXIT_ORDER_PLACED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision=reason, details={
                                "exit_order_id": exit_order.order_id,
                                "expected_pnl": pnl,
@@ -2319,7 +2319,7 @@ class PositionMonitor:
                 
                 return True
             else:
-                log_monitor("EXIT_FAILED", symbol, current_ltp, pnl, pnl_percent,
+                log_monitor("EXIT_FAILED", symbol=symbol, current_ltp=current_ltp, pnl=pnl, pnl_percent=pnl_percent,
                            decision="ORDER_FAILED", details={"reason": "Failed to place SELL order"})
                 log_event("ERROR", f"Failed to place exit order for {symbol}")
                 return False
