@@ -8,6 +8,7 @@ import os
 import json
 import logging
 import time
+import threading
 from flask import Flask, request, jsonify
 from typing import Dict, Any
 import requests
@@ -156,11 +157,31 @@ def handle_webhook():
         logger.info(f"Payload: {json.dumps(payload, indent=2)}")
         logger.info(f"{'='*70}\n")
         
-        # Forward to both bots
-        logger.info(f"🔄 Forwarding alert to both bots...")
+        # Forward to both bots IN PARALLEL (not sequentially) for burst handling
+        logger.info(f"🔄 Forwarding alert to both bots in PARALLEL...")
         
-        equity_success = forward_alert(EQUITY_BOT_URL, payload, "EQUITY BOT")
-        options_success = forward_alert(OPTIONS_BOT_URL, payload, "OPTIONS BOT")
+        # Launch forwarding to both bots in separate threads
+        equity_result = {'success': False}
+        options_result = {'success': False}
+        
+        def forward_equity():
+            equity_result['success'] = forward_alert(EQUITY_BOT_URL, payload, "EQUITY BOT")
+        
+        def forward_options():
+            options_result['success'] = forward_alert(OPTIONS_BOT_URL, payload, "OPTIONS BOT")
+        
+        equity_thread = threading.Thread(target=forward_equity, daemon=True, name="EquityForward")
+        options_thread = threading.Thread(target=forward_options, daemon=True, name="OptionsForward")
+        
+        equity_thread.start()
+        options_thread.start()
+        
+        # Wait for both with timeout (5 seconds max per bot, so 5 seconds total for both in parallel)
+        equity_thread.join(timeout=5)
+        options_thread.join(timeout=5)
+        
+        equity_success = equity_result['success']
+        options_success = options_result['success']
         
         if equity_success:
             STATS["equity_forwarded"] += 1
@@ -176,10 +197,10 @@ def handle_webhook():
             }), 503
         
         if equity_success and options_success:
-            logger.info("✓ Alert successfully forwarded to BOTH bots")
+            logger.info("✓ Alert successfully forwarded to BOTH bots IN PARALLEL")
             return jsonify({
                 "status": "success",
-                "message": "Alert forwarded to both equity and options bots",
+                "message": "Alert forwarded to both equity and options bots (parallel)",
                 "equity_status": "success",
                 "options_status": "success"
             }), 200

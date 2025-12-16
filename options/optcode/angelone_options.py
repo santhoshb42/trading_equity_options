@@ -236,6 +236,65 @@ class OptionChain:
         }
 
 # =============================================================================
+# LTP Cache with Pre-fetching
+# =============================================================================
+
+class LTPCache:
+    """
+    High-speed LTP cache that pre-fetches data for active symbols.
+    Maintained by background thread to always have hot data ready.
+    """
+    
+    def __init__(self):
+        self.cache = {}  # {symbol: {'ltp': float, 'timestamp': datetime}}
+        self.lock = __import__('threading').Lock()
+        self.last_fetch_time = {}
+    
+    def get(self, symbol: str, max_age_seconds: float = 2.0) -> Optional[float]:
+        """Get LTP from cache if fresh (< max_age_seconds old)"""
+        with self.lock:
+            if symbol not in self.cache:
+                return None
+            
+            cached = self.cache[symbol]
+            age = (datetime.now() - cached['timestamp']).total_seconds()
+            
+            # Return cached value only if fresh
+            if age < max_age_seconds:
+                return cached['ltp']
+            
+            return None
+    
+    def set(self, symbol: str, ltp: float):
+        """Update cache with new LTP"""
+        with self.lock:
+            self.cache[symbol] = {
+                'ltp': ltp,
+                'timestamp': datetime.now()
+            }
+            self.last_fetch_time[symbol] = datetime.now()
+    
+    def get_all_symbols(self) -> List[str]:
+        """Get list of all cached symbols"""
+        with self.lock:
+            return list(self.cache.keys())
+    
+    def clear_stale(self, max_age_seconds: float = 60):
+        """Remove symbols not updated in last max_age_seconds"""
+        with self.lock:
+            now = datetime.now()
+            stale = []
+            for symbol, data in self.cache.items():
+                age = (now - data['timestamp']).total_seconds()
+                if age > max_age_seconds:
+                    stale.append(symbol)
+            
+            for symbol in stale:
+                del self.cache[symbol]
+                if symbol in self.last_fetch_time:
+                    del self.last_fetch_time[symbol]
+
+# =============================================================================
 # Options Broker Wrapper
 # =============================================================================
 
@@ -262,6 +321,9 @@ class AngelOneOptionsBroker:
         self.option_chains: Dict[Tuple[str, str], OptionChain] = {}  # {(underlying, expiry): chain}
         self.chain_cache_file = BASE_DIR / "data" / "option_chain_cache.json"
         self.chain_last_updated = {}
+        
+        # LTP cache for burst alert handling
+        self.ltp_cache = LTPCache()
         
         # CE/PE extractor for symbol generation
         self.ce_extractor = get_ce_extractor()
@@ -361,6 +423,10 @@ class AngelOneOptionsBroker:
             print("🔄 Refreshing broker session...")
             return self.authenticate()
         return True
+    
+    def get_ltp_cache(self) -> LTPCache:
+        """Get the LTP cache for pre-fetching/management"""
+        return self.ltp_cache
     
     def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
         """
@@ -1119,9 +1185,17 @@ class AngelOneOptionsBroker:
             failed_symbols = []
             
             for symbol in symbols:
-                # Wait for rate limit permission with shorter timeout
-                if not rate_limiter.wait_for_call_permission(timeout=2.0):
-                    logger.warning(f"BULK_MARKET_DATA: RATE_LIMITED | {symbol}")
+                # Check LTP cache first (avoids rate limit hits for recent data)
+                cached_ltp = self.ltp_cache.get(symbol, max_age_seconds=2.0)
+                if cached_ltp is not None:
+                    result[symbol] = cached_ltp
+                    logger.debug(f"BULK_MARKET_DATA: CACHED | {symbol} | ltp=₹{cached_ltp:.2f}")
+                    continue
+                
+                # Wait for rate limit permission with longer timeout now that we have async queueing
+                # Burst alerts are queued and processed sequentially, so we can wait longer
+                if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                    logger.warning(f"BULK_MARKET_DATA: RATE_LIMITED | {symbol} | exceeded timeout")
                     failed_symbols.append(symbol)
                     continue
                 
@@ -1143,6 +1217,7 @@ class AngelOneOptionsBroker:
                         ltp = float(data.get('ltp', 0))
                         if ltp > 0:
                             result[symbol] = ltp
+                            self.ltp_cache.set(symbol, ltp)  # Cache for future use
                             fetched_count += 1
                             logger.debug(f"BULK_MARKET_DATA: SUCCESS | {symbol} | ltp=₹{ltp:.2f}")
                         else:

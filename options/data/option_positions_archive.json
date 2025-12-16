@@ -242,7 +242,38 @@
       "days_to_expiry": 17,
       "last_updated": "2025-12-13T18:52:27.859438",
       "underlying_alert_price": 4230.0
+    },
+    {
+      "symbol": "ABB30DEC255300CE",
+      "underlying": "ABB",
+      "strike": 5300.0,
+      "expiry": "2025-12-30",
+      "contract_type": "CE",
+      "action": "BUY",
+      "quantity": 125,
+      "entry_premium": 83.65,
+      "entry_premium_total": 10456.25,
+      "entry_time": "2025-12-15T14:53:41.132627",
+      "order_id": "OPT_1765790621_ABB30DEC255300CE_BUY",
+      "current_premium": 63.4,
+      "current_premium_total": 7925.0,
+      "current_greeks": {
+        "delta": 0.5,
+        "gamma": 0.05,
+        "theta": -0.02,
+        "vega": 0.1
+      },
+      "current_iv": 20.0,
+      "unrealized_pnl": -2531.250000000001,
+      "highest_premium": 91.95,
+      "days_to_expiry": 14,
+      "last_updated": "2025-12-16T15:14:55.470446",
+      "underlying_alert_price": 5300.0,
+      "status": "CLOSED",
+      "closed_at": "2025-12-16T15:15:02.125556",
+      "close_reason": "EOD_STALE_CLEANUP",
+      "exit_price": 63.4
     }
   ],
-  "archived_at": "2025-12-13T18:53:00"
+  "last_cleanup": "2025-12-16T15:15:02.126421"
 }

@@ -278,8 +278,11 @@ class OptionsSignalQualityFilter:
         self.processed_signals = []
         logger.debug(f"SIGNAL_FILTER: INITIALIZED | filter ready")
     
-    def validate(self, alert: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        """Validate alert and track statistics"""
+    def validate(self, alert: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Validate alert and track statistics
+        
+        Returns: (is_valid, processed_signal_or_none, reason_on_rejection)
+        """
         self.total_signals += 1
         
         logger.debug(f"SIGNAL_FILTER: VALIDATE | total={self.total_signals} | symbol={alert.get('symbol', 'UNKNOWN')}")
@@ -290,12 +293,12 @@ class OptionsSignalQualityFilter:
             self.passed += 1
             self.processed_signals.append(processed_signal)
             logger.debug(f"SIGNAL_FILTER: PASSED | passed={self.passed}/{self.total_signals} | pass_rate={(self.passed/self.total_signals*100):.1f}%")
-            return True, processed_signal
+            return True, processed_signal, None
         else:
             reason = message.split(':')[0] if ':' in message else message
             self.failed_by_reason[reason] = self.failed_by_reason.get(reason, 0) + 1
-            logger.debug(f"SIGNAL_FILTER: REJECTED | failed={self.total_signals - self.passed} | reason={reason}")
-            return False, None
+            logger.debug(f"SIGNAL_FILTER: REJECTED | failed={self.total_signals - self.passed} | reason={reason} | message={message}")
+            return False, None, message
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get validation statistics"""

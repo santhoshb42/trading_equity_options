@@ -404,16 +404,16 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: START | symbol={symbol} | action={alert.get('action')}")
         
         # Validate signal
-        is_valid, processed = state['signal_filter'].validate(alert)
+        is_valid, processed, reason = state['signal_filter'].validate(alert)
         
         if not is_valid:
-            logger.warning(f"ALERT_PROCESS: REJECTED | symbol={symbol} | reason={processed}")
-            log_signal_validation(symbol, False, processed)
+            logger.warning(f"ALERT_PROCESS: REJECTED | symbol={symbol} | reason={reason}")
+            log_signal_validation(symbol, False, reason)
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': processed
+                'reason': reason
             }
         
         logger.debug(f"ALERT_PROCESS: VALIDATED | symbol={symbol}")
