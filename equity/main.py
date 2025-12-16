@@ -14,6 +14,7 @@ import signal
 import threading
 import time
 import atexit
+import fcntl
 from pathlib import Path
 
 # Load environment variables from .env file
@@ -262,40 +263,73 @@ if __name__ == "__main__":
         print("Error: This script must be run from the equity directory")
         sys.exit(1)
     
-    # Prevent multiple instances using PID file
+    # Prevent multiple instances using PID file with atomic locking
     pid_file = script_dir / "equity_bot.pid"
+    lock_file = script_dir / ".equity_bot.lock"
     
-    if pid_file.exists():
+    # Use exclusive file lock for atomic PID check+write
+    try:
+        # Open lock file for writing (create if doesn't exist)
+        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY, 0o644)
+        
         try:
-            with open(pid_file, 'r') as f:
-                old_pid = int(f.read().strip())
-            
-            # Check if process is actually running
-            try:
-                os.kill(old_pid, 0)  # Signal 0 just checks if process exists
-                print(f"❌ ERROR: Equity bot already running (PID {old_pid})")
-                print(f"   If bot is not running, delete: {pid_file}")
-                sys.exit(1)
-            except OSError:
-                # Process doesn't exist, stale PID file
-                print(f"⚠️  Removing stale PID file (process {old_pid} not found)")
-                pid_file.unlink()
-        except Exception as e:
-            print(f"⚠️  Error checking PID file: {e}")
-            pid_file.unlink()
-    
-    # Write our PID
-    with open(pid_file, 'w') as f:
-        f.write(str(os.getpid()))
-    
-    # Cleanup PID file on exit
-    def cleanup_pid():
+            # Try to get exclusive lock (non-blocking)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"❌ ERROR: Equity bot already running (another process holds lock)")
+            print(f"   If bot is not running, delete: {lock_file}")
+            os.close(lock_fd)
+            sys.exit(1)
+        
+        # Lock acquired - check if PID file exists with running process
         if pid_file.exists():
-            pid_file.unlink()
+            try:
+                with open(pid_file, 'r') as f:
+                    old_pid = int(f.read().strip())
+                
+                # Check if process is actually running
+                try:
+                    os.kill(old_pid, 0)  # Signal 0 just checks if process exists
+                    print(f"❌ ERROR: Equity bot already running (PID {old_pid})")
+                    print(f"   If bot is not running, delete: {pid_file}")
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+                    sys.exit(1)
+                except OSError:
+                    # Process doesn't exist, remove stale PID file
+                    print(f"⚠️  Removing stale PID file (process {old_pid} not found)")
+                    pid_file.unlink()
+            except Exception as e:
+                print(f"⚠️  Error checking PID file: {e}")
+                if pid_file.exists():
+                    pid_file.unlink()
+        
+        # Write our PID atomically
+        with open(pid_file, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        # Cleanup PID and lock files on exit
+        def cleanup_pid():
+            try:
+                if pid_file.exists():
+                    pid_file.unlink()
+            except:
+                pass
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
+        
+        atexit.register(cleanup_pid)
+        
+        print(f"✅ Started equity bot (PID {os.getpid()})")
     
-    atexit.register(cleanup_pid)
-    
-    print(f"✅ Started equity bot (PID {os.getpid()})")
+    except Exception as e:
+        print(f"❌ ERROR: Failed to acquire PID lock: {e}")
+        sys.exit(1)
     
     # Run the bot
     exit_code = main()
