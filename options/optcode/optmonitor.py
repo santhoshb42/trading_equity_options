@@ -957,7 +957,8 @@ class OptionPositionMonitor:
                         logger.info(f"SENTIMENT_EXIT_CLOSED: {symbol} | {combined_reason} | PnL: ₹{pnl['pnl']:.2f}")
         
         except Exception as e:
-            logger.error(f"SENTIMENT_EXIT_CHECK: ERROR | {str(e)}")
+            import traceback
+            logger.error(f"SENTIMENT_EXIT_CHECK: ERROR | {str(e)} | {traceback.format_exc()}")
             # Don't block monitoring on sentiment errors
         
         return closed
