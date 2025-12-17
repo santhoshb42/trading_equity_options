@@ -900,14 +900,20 @@ class OptionPositionMonitor:
                     if position.contract_type == 'CE' and position.entry_pcr < 1.0:
                         if pcr_change_pct > SentimentConfig.EXIT_PCR_FADE_THRESHOLD:  # e.g., 20% rise
                             pcr_fade_detected = True
-                            pcr_fade_reason = f"CE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} (+{pcr_change_pct:.1f}%)"
+                            if current_pcr is not None and position.entry_pcr is not None:
+                                pcr_fade_reason = f"CE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} (+{pcr_change_pct:.1f}%)"
+                            else:
+                                pcr_fade_reason = "CE_PCR_FADE"
                     
                     # For PE (entered when bearish, PCR > 1.0):
                     # PCR falling = bullish fade (bad for PE)
                     elif position.contract_type == 'PE' and position.entry_pcr > 1.0:
                         if pcr_change_pct < -SentimentConfig.EXIT_PCR_FADE_THRESHOLD:  # e.g., 20% drop
                             pcr_fade_detected = True
-                            pcr_fade_reason = f"PE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} ({pcr_change_pct:.1f}%)"
+                            if current_pcr is not None and position.entry_pcr is not None:
+                                pcr_fade_reason = f"PE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} ({pcr_change_pct:.1f}%)"
+                            else:
+                                pcr_fade_reason = "PE_PCR_FADE"
                 
                 # Check OI buildup fading (conviction weakening)
                 oi_fade_detected = False
@@ -915,12 +921,18 @@ class OptionPositionMonitor:
                 
                 if current_buildup and position.entry_oi_buildup:
                     current_oi_change = current_buildup.get('oi_change', 0)
-                    oi_change_pct = ((current_oi_change - position.entry_oi_buildup) / position.entry_oi_buildup) * 100 if position.entry_oi_buildup != 0 else 0
+                    if position.entry_oi_buildup != 0:
+                        oi_change_pct = ((current_oi_change - position.entry_oi_buildup) / position.entry_oi_buildup) * 100
+                    else:
+                        oi_change_pct = 0
                     
                     # If OI buildup dropped significantly, conviction is weakening
                     if oi_change_pct < -SentimentConfig.EXIT_OI_FADE_THRESHOLD:  # e.g., 40% drop
                         oi_fade_detected = True
-                        oi_fade_reason = f"OI {position.entry_oi_buildup:,.0f} → {current_oi_change:,.0f} ({oi_change_pct:.1f}%)"
+                        if current_oi_change is not None and position.entry_oi_buildup is not None:
+                            oi_fade_reason = f"OI {position.entry_oi_buildup:,.0f} → {current_oi_change:,.0f} ({oi_change_pct:.1f}%)"
+                        else:
+                            oi_fade_reason = "OI_BUILDUP_FADE"
                 
                 # Exit if either PCR or OI faded
                 if pcr_fade_detected or oi_fade_detected:
