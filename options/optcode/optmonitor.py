@@ -925,10 +925,10 @@ class OptionPositionMonitor:
                 # Exit if either PCR or OI faded
                 if pcr_fade_detected or oi_fade_detected:
                     exit_reason = []
-                    if pcr_fade_detected and pcr_fade_reason:
-                        exit_reason.append(pcr_fade_reason)
-                    if oi_fade_detected and oi_fade_reason:
-                        exit_reason.append(oi_fade_reason)
+                    if pcr_fade_detected:
+                        exit_reason.append(pcr_fade_reason if pcr_fade_reason else "PCR_FADE")
+                    if oi_fade_detected:
+                        exit_reason.append(oi_fade_reason if oi_fade_reason else "OI_FADE")
                     
                     combined_reason = " | ".join(exit_reason) if exit_reason else "SENTIMENT_FADE"
                     logger.warning(f"SENTIMENT_FADE: {symbol} | {combined_reason}")
@@ -1250,6 +1250,8 @@ class OptionPositionMonitor:
             'closed_by_expiry': [],
             'closed_by_profit': [],
             'closed_by_stoploss': [],
+            'closed_by_trailing': [],
+            'closed_by_sentiment': [],
             'ltps_refreshed': 0,
             'rate_limiter_stats': {},
             'error': None
@@ -1286,13 +1288,26 @@ class OptionPositionMonitor:
             sl_closes = self.check_stop_losses()
             monitoring_result['closed_by_stoploss'] = [p['symbol'] for p in sl_closes]
             
+            # Check and close positions by sentiment fade
+            sentiment_closes = self.check_sentiment_exit()
+            monitoring_result['closed_by_sentiment'] = [p['symbol'] for p in sentiment_closes]
+            
             # Get rate limiter statistics
             if self.broker:
                 monitoring_result['rate_limiter_stats'] = self.broker.get_rate_limiter_stats()
             
-            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(sl_closes)
+            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(sl_closes) + len(sentiment_closes)
             logger.info(f"MONITORING: Checked {len(self.positions)} positions | Closed {total_closed} "
-                       f"(expiry={len(expired)}, profit={len(profit_closes)}, trailing={len(trailing_closes)}, sl={len(sl_closes)})")
+                       f"(expiry={len(expired)}, profit={len(profit_closes)}, trailing={len(trailing_closes)}, "
+                       f"stoploss={len(sl_closes)}, sentiment={len(sentiment_closes)})")
+            
+            # Log current position state summary
+            if len(self.positions) > 0:
+                total_pnl = sum(p.unrealized_pnl for p in self.positions.values())
+                portfolio_delta = sum(p.current_greeks.get('delta', 0) * p.quantity for p in self.positions.values())
+                portfolio_gamma = sum(p.current_greeks.get('gamma', 0) * p.quantity for p in self.positions.values())
+                logger.debug(f"POSITION_STATE: open={len(self.positions)} | upnl=₹{total_pnl:.2f} | "
+                            f"delta={portfolio_delta:.2f} | gamma={portfolio_gamma:.4f} | interval=10s")
             
         except Exception as e:
             monitoring_result['error'] = str(e)
