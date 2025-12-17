@@ -667,16 +667,17 @@ class OptionPositionMonitor:
         """
         Trail stop loss up as position gains (lock in profits every 10% gain).
         
-        TRIAL MODE: 20% SL with 10% gain trailing
-        - Entry at ₹100, SL = ₹80
-        - Reaches ₹110 (+10%) → Move SL to ₹88 (20% below new peak)
-        - Reaches ₹121 (+21%, another 10%) → Move SL to ₹96.80
-        - Continue trailing up or exit when SL hit
+        TRIAL MODE: Aggressive profit locking with 5% SL
+        - Entry at ₹100, SL = ₹80 (20% hard stop)
+        - Reaches ₹110 (+10%) → Move SL to ₹104.5 (5% below new peak) - AGGRESSIVE LOCKING
+        - Reaches ₹121 (+21%) → Move SL to ₹114.95 (5% below new peak)
+        - Continue trailing up with 5% buffer or exit when SL hit
         
-        This protects profits while letting winners run.
+        This provides aggressive profit protection while letting winners run.
         """
         closed = []
-        sl_buffer = OptionsTradingConfig.TRAILING_BUFFER_PERCENTAGE  # 20%
+        # TRIAL MODE: Use 5% buffer for aggressive profit locking after 10% gain
+        trailing_buffer = 5.0  # AGGRESSIVE: 5% buffer (instead of 20%)
         gain_threshold = OptionsTradingConfig.TRAILING_GAIN_THRESHOLD  # 10%
         
         for symbol in list(self.positions.keys()):
@@ -691,8 +692,8 @@ class OptionPositionMonitor:
             
             # If gained at least 10%, calculate trailing SL
             if gain_percent >= gain_threshold:
-                # Trailing SL = Current peak - 20% of peak
-                trailing_sl = position.highest_premium * (1 - sl_buffer / 100)
+                # Trailing SL = Current peak - 5% of peak (AGGRESSIVE for trial mode)
+                trailing_sl = position.highest_premium * (1 - trailing_buffer / 100)
                 
                 # 🎯 Log when trailing SL is FIRST ACTIVATED (paper trading only)
                 if not position.trailing_sl_activated:
@@ -700,15 +701,15 @@ class OptionPositionMonitor:
                     position.trailing_sl_activation_time = datetime.now().isoformat()
                     position.last_trailing_sl_price = trailing_sl
                     log_event("TRAILING_SL_ACTIVATED", 
-                             f"Trailing SL activated for {symbol} (PAPER MODE - simulated)",
+                             f"Trailing SL activated for {symbol} (PAPER MODE - aggressive 5% locking)",
                              symbol=symbol,
                              gain_percent=round(gain_percent, 2),
                              entry_premium=position.entry_premium,
                              peak_premium=position.highest_premium,
                              initial_trailing_sl=round(trailing_sl, 2),
                              current_premium=position.current_premium,
-                             buffer_percentage=sl_buffer,
-                             reason="Gain reached 10% threshold")
+                             buffer_percentage=trailing_buffer,
+                             reason="Gain reached 10% threshold - AGGRESSIVE LOCKING ACTIVATED")
                 
                 # 🎯 Log TRAILING SL UPDATE if price changed significantly
                 if position.last_trailing_sl_price != trailing_sl:
@@ -791,26 +792,12 @@ class OptionPositionMonitor:
                 
                 # Check percentage-based SL FIRST (PRIMARY exit logic)
                 if loss_percent >= sl_percent:
-                    # Percentage SL - check if it's a real move
-                    # Percentage-based SL: check if it's a real move
-                    # TRIAL MODE: 20% SL means we're OK with losses up to 20%
-                    # Only close if it's a confirmed real move (not just decay)
-                    if sl_percent >= 20.0:
-                        # Wide SL (20%+): Only close if decay analysis confirms real loss
-                        if decay_signal['signal'] in ['MONITOR_CLOSELY', 'SELL_PRESSURE']:
-                            should_close = True
-                            close_reason = f"LOSS ({loss_percent:.1f}%) - {decay_signal['reason']}"
-                            logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% - Real move detected | {decay_signal['reason']}")
-                        else:
-                            logger.debug(f"STOP_LOSS_HELD: {symbol} | Loss {loss_percent:.1f}% but no real move yet | {decay_signal['reason']}")
-                    else:
-                        # Tight SL (<20%): Close faster
-                        if decay_signal['signal'] in ['MONITOR_CLOSELY']:
-                            should_close = True
-                            close_reason = f"LOSS ({loss_percent:.1f}%) - {decay_signal['reason']}"
-                            logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% - Real move | {decay_signal['reason']}")
-                        else:
-                            logger.debug(f"STOP_LOSS_HELD: {symbol} | Loss {loss_percent:.1f}% | {decay_signal['reason']}")
+                    # CRITICAL: Loss >= SL threshold MUST exit immediately
+                    # Don't wait for decay confirmation - losses this big need to be closed
+                    should_close = True
+                    close_reason = f"LOSS ({loss_percent:.1f}%) - HARD SL TRIGGERED"
+                    decay_reason = decay_signal.get('reason', 'N/A') if decay_signal else 'N/A'
+                    logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% >= {sl_percent}% threshold | FORCED EXIT | {decay_reason}")
                 
                 # Check MAX_LOSS as SAFETY NET ONLY (catastrophic loss prevention)
                 if not should_close and abs(position.unrealized_pnl) >= max_loss:
@@ -884,8 +871,16 @@ class OptionPositionMonitor:
                         position.entry_pcr = current_pcr
                         position.entry_sentiment_timestamp = datetime.now()
                     if current_buildup is not None:
-                        position.entry_oi_buildup = current_buildup.get('oi_change', 0)
-                    logger.debug(f"SENTIMENT_BASELINE: {symbol} | PCR={current_pcr:.2f} | OI={position.entry_oi_buildup:,.0f}")
+                        try:
+                            oi_val = current_buildup.get('oi_change', 0) if isinstance(current_buildup, dict) else 0
+                            position.entry_oi_buildup = oi_val if isinstance(oi_val, (int, float)) else 0
+                        except Exception:
+                            position.entry_oi_buildup = 0
+                    
+                    pcr_str = f"PCR={current_pcr:.2f}" if current_pcr is not None else "PCR=None"
+                    oi_val = getattr(position, 'entry_oi_buildup', 0) or 0
+                    oi_str = f"OI={oi_val:,.0f}" if oi_val else "OI=0"
+                    logger.debug(f"SENTIMENT_BASELINE: {symbol} | {pcr_str} | {oi_str}")
                     continue  # Skip exit check on first reading
                 
                 # Check PCR deterioration (fade detection)
@@ -958,7 +953,9 @@ class OptionPositionMonitor:
         
         except Exception as e:
             import traceback
-            logger.error(f"SENTIMENT_EXIT_CHECK: ERROR | {str(e)} | {traceback.format_exc()}")
+            tb_str = traceback.format_exc()
+            logger.error(f"SENTIMENT_EXIT_CHECK: ERROR | {str(e)}")
+            print(f"\n❌ SENTIMENT_EXIT_CHECK FULL ERROR:\n{tb_str}\n", file=__import__('sys').stderr)
             # Don't block monitoring on sentiment errors
         
         return closed
