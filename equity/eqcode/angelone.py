@@ -506,6 +506,13 @@ class AngelOneBroker:
             
             # For placeOrder, log None but don't auto-recover (caller handles it)
             if result is None and endpoint_name == 'placeOrder':
+                # CRITICAL FIX: Refund token consumed for failed order placement
+                if has_priority:
+                    try:
+                        self.rate_limiter.refund_tokens(endpoint_name, tokens=1)
+                    except Exception as refund_err:
+                        log_event("REFUND_ERROR", f"Failed to refund token for failed order: {refund_err}")
+                
                 log_event("ORDER_API_NONE", "placeOrder returned None - likely token invalid")
                 log_broker_error(
                     error_type="TOKEN_INVALID",
@@ -637,6 +644,14 @@ class AngelOneBroker:
             
             return result
         except Exception as e:
+                # CRITICAL FIX: Refund tokens when API call fails after rate limiter consumed them
+                # This prevents token starvation when APIs throw exceptions
+                if has_priority:
+                    try:
+                        self.rate_limiter.refund_tokens(endpoint_name, tokens=1)
+                    except Exception as refund_err:
+                        log_event("REFUND_ERROR", f"Failed to refund tokens: {refund_err}")
+                
                 error_msg = str(e)
                 exception_type = type(e).__name__
                 
@@ -1569,7 +1584,7 @@ class AngelOneBroker:
                 
                 return order
             else:
-                # Error - response can be None (token invalid, rate limit timeout, OR broker error), dict (broker error), or other
+                # Error - response can be None (token invalid, rate limit timeout, broker error, or API error), dict (broker error), or other
                 if response is None:
                     # 🔑 PRIORITY 1: Check if token is invalid or session expired
                     if not self.smart_api or not hasattr(self.smart_api, 'access_token') or not self.smart_api.access_token:
@@ -1582,8 +1597,15 @@ class AngelOneBroker:
                         error_code = self.last_api_error_code
                         error_msg = self.last_api_error_message
                         log_event("BROKER_ERROR_EXTRACTED", f"Using extracted broker error: {error_code}")
+                    # 🔍 PRIORITY 3: Check if exception was a TypeError (malformed broker response)
+                    elif hasattr(self, 'last_api_error_message') and self.last_api_error_message and 'NoneType' in self.last_api_error_message:
+                        # Broker API returned malformed response (None from _postRequest)
+                        # This indicates broker-side issue, not rate limit - likely network/timeout
+                        error_msg = f"Broker returned malformed response: {self.last_api_error_message[:100]}"
+                        error_code = "BROKER_API_ERROR"
+                        log_event("BROKER_MALFORMED_RESPONSE", f"Broker API error (not rate limit): {error_msg}")
                     else:
-                        # 🕒 PRIORITY 3: No extracted error and token is valid - genuine rate limit timeout
+                        # 🕒 PRIORITY 4: No extracted error and token is valid - genuine rate limit timeout
                         # This happens when rate limiter times out after 30 seconds
                         # Indicates too many requests queued up - order placement failed due to rate limiting
                         error_msg = "Rate limit timeout - order placement blocked by rate limiter"
@@ -2890,6 +2912,10 @@ class AngelOneBroker:
         # Check error codes first - these are definitive
         if error_code:
             error_code_upper = error_code.upper()
+            
+            # BROKER_API_ERROR: Broker returned malformed response (None from API)
+            if error_code_upper == 'BROKER_API_ERROR':
+                return "API_ERROR"
             
             # AB4036: Token categorised under cautionary listings by exchange
             if error_code_upper == 'AB4036':

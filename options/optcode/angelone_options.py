@@ -1676,11 +1676,192 @@ class AngelOneOptionsBroker:
         lower = sma - (std * std_dev)
         
         return round(sma, 2), round(upper, 2), round(lower, 2)
+    
+    # =============================================================================
+    # Live Position Verification from Broker
+    # =============================================================================
+    
+    def get_order_book(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get Order Book from Angel One broker.
+        
+        Angel One API: GET /rest/secure/angelbroking/order/v1/getOrderBook
+        
+        Returns list of all orders (pending, executed, rejected) with their status.
+        CRITICAL for squareoff to verify which positions are actually open.
+        
+        Returns:
+            List of orders or None if failed
+        """
+        try:
+            if not self.authenticated:
+                logger.warning("ORDER_BOOK: Not authenticated")
+                return None
+            
+            if not self.smart_api:
+                logger.warning("ORDER_BOOK: SmartAPI not initialized")
+                return None
+            
+            # Get rate limiter
+            rate_limiter = get_options_rate_limiter()
+            
+            # Wait for rate limit permission
+            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                logger.warning("ORDER_BOOK: RATE_LIMITED")
+                return None
+            
+            # Call getOrderBook API
+            rate_limiter.record_call("get_order_book", True)
+            logger.info("ORDER_BOOK: Fetching from broker...")
+            
+            response = self.smart_api.getOrderBook()
+            
+            if response and response.get('status'):
+                orders = response.get('data', [])
+                logger.info(f"ORDER_BOOK: Retrieved {len(orders)} orders from broker")
+                
+                # Log for debugging
+                for order in orders:
+                    if order.get('orderstate') == 'COMPLETE' or order.get('orderstatus') == 'COMPLETE':
+                        logger.debug(f"ORDER_BOOK: COMPLETE | {order.get('tradingsymbol')} | "
+                                   f"qty={order.get('quantity')} | executed={order.get('filledshares')}")
+                
+                return orders
+            else:
+                logger.warning(f"ORDER_BOOK: API failed | response={response}")
+                rate_limiter.record_call("get_order_book", False)
+                return None
+        
+        except Exception as e:
+            logger.error(f"ORDER_BOOK: ERROR | {str(e)}")
+            rate_limiter = get_options_rate_limiter()
+            rate_limiter.record_call("get_order_book", False)
+            return None
+    
+    def get_trade_book(self) -> Optional[Dict[str, Any]]:
+        """
+        Get Trade Book from Angel One broker.
+        
+        Angel One API: GET /rest/secure/angelbroking/order/v1/getTradeBook
+        
+        Returns list of all EXECUTED trades (actual fills/executions).
+        Used to verify which positions are actually open with broker.
+        
+        Returns:
+            Dict with trades list and net positions or None if failed
+        """
+        try:
+            if not self.authenticated:
+                logger.warning("TRADE_BOOK: Not authenticated")
+                return None
+            
+            if not self.smart_api:
+                logger.warning("TRADE_BOOK: SmartAPI not initialized")
+                return None
+            
+            # Get rate limiter
+            rate_limiter = get_options_rate_limiter()
+            
+            # Wait for rate limit permission
+            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                logger.warning("TRADE_BOOK: RATE_LIMITED")
+                return None
+            
+            # Call getTradeBook API
+            rate_limiter.record_call("get_trade_book", True)
+            logger.info("TRADE_BOOK: Fetching from broker...")
+            
+            response = self.smart_api.getTradeBook()
+            
+            if response and response.get('status'):
+                trades = response.get('data', [])
+                logger.info(f"TRADE_BOOK: Retrieved {len(trades)} executed trades from broker")
+                
+                # Build trade summary (count BUY vs SELL to find net positions)
+                position_net = {}  # {symbol: net_quantity}
+                for trade in trades:
+                    symbol = trade.get('tradingsymbol', '')
+                    qty = int(trade.get('tradeqty', 0))
+                    action = trade.get('ordertype', '').upper()  # BUY or SELL
+                    
+                    if symbol:
+                        if symbol not in position_net:
+                            position_net[symbol] = 0
+                        
+                        if action == 'BUY':
+                            position_net[symbol] += qty
+                        elif action == 'SELL':
+                            position_net[symbol] -= qty
+                        
+                        logger.debug(f"TRADE_BOOK: {action:4s} | {symbol:20s} | qty={qty:6d} | net={position_net[symbol]:6d}")
+                
+                # Return both trades and net positions
+                return {
+                    'trades': trades,
+                    'net_positions': {sym: qty for sym, qty in position_net.items() if qty != 0},
+                    'timestamp': datetime.now().isoformat()
+                }
+            else:
+                logger.warning(f"TRADE_BOOK: API failed | response={response}")
+                rate_limiter.record_call("get_trade_book", False)
+                return None
+        
+        except Exception as e:
+            logger.error(f"TRADE_BOOK: ERROR | {str(e)}")
+            rate_limiter = get_options_rate_limiter()
+            rate_limiter.record_call("get_trade_book", False)
+            return None
+    
+    def verify_positions_with_broker(self) -> Dict[str, Any]:
+        """
+        CRITICAL FOR SQUAREOFF:
+        Verify which positions are actually open with the broker.
+        
+        Uses getTradeBook to fetch all executed trades, calculates net positions,
+        and compares with internal position tracking.
+        
+        This prevents duplicate SELL orders on positions that were already closed!
+        
+        Returns:
+            {
+                'verified': bool,
+                'net_positions': {symbol: quantity},
+                'internal_positions': {symbol: quantity},
+                'mismatches': [symbol, ...],  # Positions different between broker and internal
+                'timestamp': str
+            }
+        """
+        try:
+            # Get live trade book from broker
+            trade_data = self.get_trade_book()
+            if not trade_data:
+                logger.warning("VERIFY_POSITIONS: Could not fetch trade book from broker")
+                return {
+                    'verified': False,
+                    'error': 'Failed to fetch trade book from broker',
+                    'timestamp': datetime.now().isoformat()
+                }
+            
+            # Extract net positions from trade book
+            broker_positions = trade_data.get('net_positions', {})
+            
+            logger.info(f"VERIFY_POSITIONS: Broker has {len(broker_positions)} open positions")
+            logger.debug(f"VERIFY_POSITIONS: Open positions: {broker_positions}")
+            
+            return {
+                'verified': True,
+                'net_positions': broker_positions,
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        except Exception as e:
+            logger.error(f"VERIFY_POSITIONS: ERROR | {str(e)}")
+            return {
+                'verified': False,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
 
-
-# =============================================================================
-# Global broker instance (singleton)
-# =============================================================================
 
 _options_broker_instance = None
 

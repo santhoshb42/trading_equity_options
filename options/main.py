@@ -41,6 +41,14 @@ from optcode.optapi import get_options_api_server
 from optcode.optlogging import logger, log_event, log_state, print_session_summary
 from optcode.instrument_manager import get_instrument_manager
 
+# ML Learning engine
+try:
+    from optcode.options_learning_engine import SymbolPerformanceTracker
+    HAS_LEARNING_ENGINE = True
+except ImportError:
+    HAS_LEARNING_ENGINE = False
+    SymbolPerformanceTracker = None
+
 # Alert system integration
 try:
     from alert_system import AlertManager, AlertLevel, AlertCategory
@@ -65,6 +73,7 @@ class OptionsTradingBot:
         self.position_monitor_thread = None
         self.instrument_manager = None
         self.alert_manager = None
+        self.learning_engine = None  # ML learning for trade outcomes
         self.trading_stats = {
             'orders_placed': 0,
             'orders_filled': 0,
@@ -128,6 +137,21 @@ class OptionsTradingBot:
         # Get API server
         self.api_server = get_options_api_server()
         logger.debug(f"BOT_INIT: API_SERVER_READY | port={WebhookConfig.PORT}")
+        
+        # Initialize ML Learning engine
+        print(f"\n🤖 Initializing ML Learning Engine...")
+        if HAS_LEARNING_ENGINE:
+            try:
+                options_learning_file = Path(__file__).parent / "data" / "learning" / "symbol_stats.json"
+                self.learning_engine = SymbolPerformanceTracker(symbol_stats_file=options_learning_file)
+                print(f"✅ Learning engine ready - will track trade outcomes")
+                logger.info(f"BOT_INIT: LEARNING_ENGINE_READY | data_file={options_learning_file}")
+            except Exception as e:
+                print(f"⚠️  Learning engine failed to initialize: {str(e)}")
+                logger.warning(f"BOT_INIT: LEARNING_ENGINE_INIT_FAILED | {str(e)}")
+        else:
+            print(f"⚠️  Learning engine not available")
+            logger.warning(f"BOT_INIT: LEARNING_ENGINE_UNAVAILABLE")
         
         # Initialize alert system
         if ALERT_SYSTEM_AVAILABLE:
@@ -298,6 +322,32 @@ class OptionsTradingBot:
             logger.error(f"EOD_CLEANUP: FAILED | {str(e)}")
             print(f"   ❌ Cleanup failed: {str(e)}")
     
+    def _record_closed_positions_to_learning(self, closed_positions_list, exit_reason):
+        """Record closed positions to learning engine for ML training"""
+        if not self.learning_engine or not closed_positions_list:
+            return
+        
+        try:
+            for pos in closed_positions_list:
+                symbol = pos.get('symbol', 'UNKNOWN')
+                pnl = pos.get('pnl', 0)
+                is_win = pnl > 0
+                
+                # Extract base symbol (remove -EQ if present)
+                base_symbol = symbol.split('-')[0] if '-' in symbol else symbol
+                
+                # Record to learning engine
+                self.learning_engine.record_trade(
+                    symbol=base_symbol,
+                    won=is_win,
+                    profit=pnl,
+                    predicted_prob=0.5,
+                    trading_mode=OptionsTradingConfig.TRADING_MODE
+                )
+                logger.debug(f"LEARNING: TRADE_RECORDED | {base_symbol} | exit={exit_reason} | won={is_win} | pnl=₹{pnl:.2f}")
+        except Exception as e:
+            logger.warning(f"LEARNING: RECORD_ERROR | {str(e)}")
+    
     def _start_position_monitor(self):
         """Start position monitoring thread with adaptive IV-aware intervals"""
         def monitor_positions():
@@ -345,6 +395,9 @@ class OptionsTradingBot:
                     # Check and close expired positions
                     expired = self.monitor.check_expiry_close()
                     if expired:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(expired, "EXPIRY")
+                        
                         for pos in expired:
                             print(f"   ✅ Expired position closed: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.info(f"POSITION_MONITOR: EXPIRY_CLOSED | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
@@ -366,6 +419,9 @@ class OptionsTradingBot:
                     # Check profit targets
                     profitable = self.monitor.check_profit_targets()
                     if profitable:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(profitable, "PROFIT_TARGET")
+                        
                         for pos in profitable:
                             print(f"   🎯 Profit target hit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.info(f"POSITION_MONITOR: PROFIT_TARGET | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
@@ -387,6 +443,9 @@ class OptionsTradingBot:
                     # Check stop losses
                     stopped = self.monitor.check_stop_losses()
                     if stopped:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(stopped, "STOPLOSS")
+                        
                         for pos in stopped:
                             print(f"   🛑 Stop loss hit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.warning(f"POSITION_MONITOR: STOPLOSS | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
@@ -404,6 +463,31 @@ class OptionsTradingBot:
                                     )
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: STOPLOSS_ALERT_FAILED | {str(e)}")
+                    
+                    # Check trailing stop losses (TRIAL_SL) - profit locking mechanism
+                    trailing_exited = self.monitor.check_trailing_stop_losses()
+                    if trailing_exited:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(trailing_exited, "TRAILING_SL")
+                        
+                        for pos in trailing_exited:
+                            print(f"   📈 Trailing SL exit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
+                            logger.info(f"POSITION_MONITOR: TRIAL_SL_EXIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'Trailing stop loss'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: TRIAL_SL_ALERT_FAILED | {str(e)}")
                     
                     # NEW: Check sentiment exit (PCR + OI Buildup fade)
                     # HIGH IV: Check sentiment every 5 seconds (not 60) - profit bookings change IV rapidly
@@ -423,6 +507,9 @@ class OptionsTradingBot:
                             logger.info(f"POSITION_MONITOR: SENTIMENT_CHECK | {len(self.positions)} positions checked | {len(sentiment_exits)} exits triggered")
                     
                     if sentiment_exits:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(sentiment_exits, "SENTIMENT")
+                        
                         for pos in sentiment_exits:
                             print(f"   📊 Sentiment exit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
                             logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
@@ -676,6 +763,25 @@ if __name__ == "__main__":
     
     # Use exclusive file lock for atomic PID check+write
     try:
+        # ENHANCED: Check for stale lock file BEFORE trying to acquire
+        if lock_file.exists() and pid_file.exists():
+            try:
+                with open(pid_file, 'r') as f:
+                    lock_pid = int(f.read().strip())
+                # Check if that PID is actually running
+                try:
+                    os.kill(lock_pid, 0)
+                except OSError:
+                    # PID is stale - force clean the lock file
+                    print(f"🧹 Cleaning stale lock file (PID {lock_pid} not running)")
+                    try:
+                        lock_file.unlink()
+                        pid_file.unlink()
+                    except:
+                        pass
+            except:
+                pass
+        
         # Open lock file for writing (create if doesn't exist)
         lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY, 0o644)
         

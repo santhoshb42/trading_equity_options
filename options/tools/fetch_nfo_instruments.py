@@ -24,10 +24,11 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    from optcode.optconfig import AngelOneConfig
+    from optcode.optconfig import AngelOneConfig, OptionsTradingConfig
 except ImportError:
-    print("Warning: Could not import AngelOneConfig")
+    print("Warning: Could not import AngelOneConfig or OptionsTradingConfig")
     AngelOneConfig = None
+    OptionsTradingConfig = None
 
 OUTPUT_FILE = Path(__file__).parent / "instrument.json"
 
@@ -81,39 +82,46 @@ def fetch_from_angelone():
         # We need to use searchScrip for individual symbols or get from broker's instrument master
         print("📥 Fetching NFO instruments from broker...")
         
-        # Complete NSE F&O Universe - ALL approved underlyings
-        underlyings = [
-            # Indices (3)
-            'BANKNIFTY', 'NIFTY', 'FINNIFTY',
-            # Banks & Financials (15)
-            'AUBANK', 'AXISBANK', 'BANKBARODA', 'CITI', 'HDFCBANK', 'ICICIBANK', 'INDUSINDBK', 'IDFCBANK', 'KOTAK', 'RBLBANK', 'SBICARD', 'SBILIFE', 'SBIN', 'YESBANK', 'FEDERALBNK',
-            # IT (8)
-            'INFY', 'TCS', 'TECHM', 'WIPRO', 'HCL', 'LTIM', 'KPITTECH', 'MFSL',
-            # Energy & Utilities (8)
-            'RELIANCE', 'TATASTEEL', 'TATAPOWER', 'NTPC', 'GAIL', 'BPCL', 'COALINDIA', 'POWERGRID',
-            # Consumption (10)
-            'ASIANPAINT', 'BRITANNIA', 'COLPAL', 'DABUR', 'HINDUSTAN', 'INDIGO', 'ITC', 'MARUTI', 'NESTLEIND', 'UNILEVER',
-            # Pharma (8)
-            'APOLLOHOSP', 'AUROPHARMA', 'BIOCON', 'CIPLA', 'DRREDDY', 'GLDRX', 'LUPIN', 'SUNPHARMA',
-            # Infra & Realty (10)
-            'ADANIGREEN', 'ADANIPORTS', 'ADANITRANS', 'ADANIPOWER', 'BHARTIARTL', 'GMRINFRA', 'JSWSTEEL', 'LTTS', 'OBEROIRLTY', 'SUNTV',
-            # Chemicals & Materials (6)
-            'AMBUJACEM', 'BOSCHLTD', 'HCLTECH', 'HINDALCO', 'HINDCOPPER', 'NMDC',
-            # Auto (6)
-            'BAJAJ', 'BAJAJFINSV', 'BAJAJHLDNG', 'EICHERMOT', 'HEROMOTOCO', 'TVS',
-            # Industrial (8)
-            'ABB', 'CUMMINSIND', 'KPILTECH', 'LAXMIMACH', 'NATIONALUM', 'PAGEIND', 'PIIND', 'SIEMENS',
-            # Services (4)
-            'IRFC', 'IRCTC', 'MOENERGY', 'NAUKRI',
-            # Diversified (8)
-            'BRENT', 'COTTON', 'CRUDEOIL', 'GOLDGULD', 'SILVER', 'JSWENERGY', 'MRF', 'SYNGENE',
-            # Additional Core (8)
-            'AMBER', 'BSOFT', 'CAMS', 'GRANULES', 'INDIGO', 'KALYANKJIL', 'MPHASIS', 'OFSS',
-            # Additional Approved F&O (12)
-            'CENTRALBK', 'CRISIL', 'DEEPAKINDS', 'EXIDEIND', 'FSL', 'GLENMARK', 'GRASIM', 'INOXWIND', 'KPILTECH', 'LICHSGFIN', 'MCLRENSP', 'MOTILALOSWL',
-            # Options Market Makers (5)
-            'NATCOPHARM', 'NUVOCO', 'PETRONET', 'RBLBANK', 'SYNGENE'
-        ]
+        # Complete NSE F&O Universe - Use config's FO_UNIVERSE if available
+        # Fallback to hardcoded list if config import fails
+        if OptionsTradingConfig and hasattr(OptionsTradingConfig, 'FO_UNIVERSE'):
+            underlyings = OptionsTradingConfig.FO_UNIVERSE
+            print(f"✅ Using FO_UNIVERSE from config: {len(underlyings)} symbols")
+        else:
+            # Fallback hardcoded list
+            underlyings = [
+                # Indices (3)
+                'BANKNIFTY', 'NIFTY', 'FINNIFTY',
+                # Banks & Financials (15)
+                'AUBANK', 'AXISBANK', 'BANKBARODA', 'CITI', 'HDFCBANK', 'ICICIBANK', 'INDUSINDBK', 'IDFCBANK', 'KOTAK', 'RBLBANK', 'SBICARD', 'SBILIFE', 'SBIN', 'YESBANK', 'FEDERALBNK',
+                # IT (8)
+                'INFY', 'TCS', 'TECHM', 'WIPRO', 'HCL', 'LTIM', 'KPITTECH', 'MFSL',
+                # Energy & Utilities (8)
+                'RELIANCE', 'TATASTEEL', 'TATAPOWER', 'NTPC', 'GAIL', 'BPCL', 'COALINDIA', 'POWERGRID',
+                # Consumption (10)
+                'ASIANPAINT', 'BRITANNIA', 'COLPAL', 'DABUR', 'HINDUSTAN', 'INDIGO', 'ITC', 'MARUTI', 'NESTLEIND', 'UNILEVER',
+                # Pharma (8)
+                'APOLLOHOSP', 'AUROPHARMA', 'BIOCON', 'CIPLA', 'DRREDDY', 'GLDRX', 'LUPIN', 'SUNPHARMA',
+                # Infra & Realty (10)
+                'ADANIGREEN', 'ADANIPORTS', 'ADANITRANS', 'ADANIPOWER', 'BHARTIARTL', 'GMRINFRA', 'JSWSTEEL', 'LTTS', 'OBEROIRLTY', 'SUNTV',
+                # Chemicals & Materials (6)
+                'AMBUJACEM', 'BOSCHLTD', 'HCLTECH', 'HINDALCO', 'HINDCOPPER', 'NMDC',
+                # Auto (6)
+                'BAJAJ', 'BAJAJFINSV', 'BAJAJHLDNG', 'EICHERMOT', 'HEROMOTOCO', 'TVS',
+                # Industrial (8)
+                'ABB', 'CUMMINSIND', 'KPILTECH', 'LAXMIMACH', 'NATIONALUM', 'PAGEIND', 'PIIND', 'SIEMENS',
+                # Services (4)
+                'IRFC', 'IRCTC', 'MOENERGY', 'NAUKRI',
+                # Diversified (8)
+                'BRENT', 'COTTON', 'CRUDEOIL', 'GOLDGULD', 'SILVER', 'JSWENERGY', 'MRF', 'SYNGENE',
+                # Additional Core (8)
+                'AMBER', 'BSOFT', 'CAMS', 'GRANULES', 'INDIGO', 'KALYANKJIL', 'MPHASIS', 'OFSS',
+                # Additional Approved F&O (12)
+                'CENTRALBK', 'CRISIL', 'DEEPAKINDS', 'EXIDEIND', 'FSL', 'GLENMARK', 'GRASIM', 'INOXWIND', 'KPILTECH', 'LICHSGFIN', 'MCLRENSP', 'MOTILALOSWL',
+                # Options Market Makers (5)
+                'NATCOPHARM', 'NUVOCO', 'PETRONET', 'RBLBANK', 'SYNGENE'
+            ]
+            print(f"⚠️  Using fallback hardcoded list: {len(underlyings)} symbols")
         
         instruments = []
         
@@ -270,35 +278,56 @@ def convert_broker_format_to_standard(broker_instruments):
     return instruments
 
 def generate_synthetic_nfo():
-    """Generate synthetic NFO instruments for testing"""
+    """Generate synthetic NFO instruments for testing - uses FO_UNIVERSE from config"""
     
     instruments = []
     token_counter = 100000
     
-    # Common F&O underlyings with their strike intervals based on price
-    # Price rule: <500: 5-10, 500-2000: 10-20, >2000: 50
-    underlyings = {
+    # Build underlyings from FO_UNIVERSE config
+    # Default strike intervals based on typical NSE conventions
+    underlyings_config = {}
+    
+    if OptionsTradingConfig and hasattr(OptionsTradingConfig, 'FO_UNIVERSE'):
+        # Use all symbols from FO_UNIVERSE with smart defaults
+        for symbol in OptionsTradingConfig.FO_UNIVERSE:
+            # Default strike interval (can be overridden below)
+            # Rule: <500: 5, 500-2000: 10, 2000-5000: 20, >5000: 50
+            underlyings_config[symbol] = {'interval': 10, 'spot': 1000}
+    
+    # Override with known real prices and intervals
+    known_configs = {
         # Indices
         'BANKNIFTY': {'interval': 100, 'spot': 47000},
         'NIFTY': {'interval': 50, 'spot': 23500},
         'FINNIFTY': {'interval': 100, 'spot': 22000},
         
-        # F&O Stocks from today's alerts with real spot prices and intervals
-        'AMBER': {'interval': 50, 'spot': 7066},           # High price, 50-point
-        'BSOFT': {'interval': 10, 'spot': 417.6},          # <500, 10-point
-        'GRANULES': {'interval': 10, 'spot': 573},         # <500, 10-point
-        'INDUSINDBK': {'interval': 10, 'spot': 855.35},    # <2000, 10-point
-        'MPHASIS': {'interval': 20, 'spot': 2862},         # 1000-2000, 20-point
-        'OFSS': {'interval': 50, 'spot': 8131.5},          # High price, 50-point
+        # High price stocks (>5000)
+        'AMBER': {'interval': 50, 'spot': 7066},
+        'BOSCHLTD': {'interval': 100, 'spot': 6340},
+        'OFSS': {'interval': 50, 'spot': 8131.5},
+        'MRF': {'interval': 200, 'spot': 413000},
         
-        # Previously supported stocks
-        'POWERINDIA': {'interval': 50, 'spot': 22755, 'has_strikes': [22500, 22550, 22600, 22650, 22700, 22750, 22850, 22900, 22950, 23000, 23050, 23100, 23150, 23200]},
+        # Medium-high (2000-5000)
         'TCS': {'interval': 50, 'spot': 4125},
         'INFY': {'interval': 50, 'spot': 2890},
+        'ASIANPAINT': {'interval': 20, 'spot': 2955},
+        'MPHASIS': {'interval': 20, 'spot': 2862},
+        'MARUTI': {'interval': 100, 'spot': 10500},
+        
+        # Medium (500-2000)
         'RELIANCE': {'interval': 10, 'spot': 1285},
         'TECHM': {'interval': 10, 'spot': 1677},
-        'ASIANPAINT': {'interval': 20, 'spot': 2955},
+        'INDUSINDBK': {'interval': 10, 'spot': 855.35},
+        'CROMPTON': {'interval': 5, 'spot': 252},  # CROMPTON - newly added
+        
+        # Low (<500)
+        'BSOFT': {'interval': 10, 'spot': 417.6},
+        'GRANULES': {'interval': 10, 'spot': 573},
     }
+    
+    # Merge known configs into underlyings_config
+    underlyings_config.update(known_configs)
+    underlyings = underlyings_config
     
     # Expiries (next 3 weekly Thursdays + monthly)
     expiries = ['2025-12-04', '2025-12-11', '2025-12-18', '2025-12-25']

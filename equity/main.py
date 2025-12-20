@@ -269,6 +269,25 @@ if __name__ == "__main__":
     
     # Use exclusive file lock for atomic PID check+write
     try:
+        # ENHANCED: Check for stale lock file BEFORE trying to acquire
+        if lock_file.exists() and pid_file.exists():
+            try:
+                with open(pid_file, 'r') as f:
+                    lock_pid = int(f.read().strip())
+                # Check if that PID is actually running
+                try:
+                    os.kill(lock_pid, 0)
+                except OSError:
+                    # PID is stale - force clean the lock file
+                    print(f"🧹 Cleaning stale lock file (PID {lock_pid} not running)")
+                    try:
+                        lock_file.unlink()
+                        pid_file.unlink()
+                    except:
+                        pass
+            except:
+                pass
+        
         # Open lock file for writing (create if doesn't exist)
         lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY, 0o644)
         

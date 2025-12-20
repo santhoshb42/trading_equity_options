@@ -66,6 +66,7 @@ class SymbolPerformanceTracker:
     def __init__(self, symbol_stats_file: Optional[Path] = None):
         self.symbol_stats_file = Path(symbol_stats_file) if symbol_stats_file else Path(LearningConfig.SYMBOL_STATS_FILE)
         
+        # Initialize with predefined symbols, but allow dynamic addition
         self.symbol_stats = {symbol: {
             'total_trades': 0,
             'wins': 0,
@@ -98,9 +99,25 @@ class SymbolPerformanceTracker:
             predicted_prob: ML model's predicted win probability
             trading_mode: 'PAPER' or 'LIVE' - mode in which trade was executed
         """
+        # Dynamically create symbol entry if it doesn't exist (for options contracts)
         if symbol not in self.symbol_stats:
-            logger.warning(f"SYMBOL_TRACKER: UNKNOWN_SYMBOL | {symbol}")
-            return
+            logger.info(f"SYMBOL_TRACKER: NEW_SYMBOL_ADDED | {symbol}")
+            self.symbol_stats[symbol] = {
+                'total_trades': 0,
+                'wins': 0,
+                'losses': 0,
+                'total_profit': 0.0,
+                'avg_profit_per_trade': 0.0,
+                'avg_win': 0.0,
+                'avg_loss': 0.0,
+                'trade_history': deque(maxlen=LearningConfig.LOOKBACK_TRADES),
+                'recent_form': 'neutral',
+                'win_rate': 0.0,
+                'win_rate_last_10': 0.0,
+                'reliability_score': 0.5,
+                'confidence_multiplier': 1.0,
+                'last_updated': datetime.now().isoformat()
+            }
         
         stats = self.symbol_stats[symbol]
         

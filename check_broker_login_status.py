@@ -33,17 +33,22 @@ class BotHealthChecker:
             'api_connected': False,
             'session_valid': False,
             'last_activity': None,
+            'time_since_activity_seconds': None,
             'errors': [],
             'warnings': [],
             'details': {}
         }
         
-        # Check process
+        # Check process - MUST be running
         try:
             result = os.popen('pgrep -f "equity.*main.py"').read().strip()
             status['process_running'] = bool(result)
             if result:
                 status['details']['pid'] = result
+            else:
+                status['errors'].append("Process not running - bot is DEAD")
+                status['session_valid'] = False
+                return status
         except:
             pass
         
@@ -64,6 +69,18 @@ class BotHealthChecker:
                         if '|' in last_line:
                             timestamp = last_line.split('|')[0].strip()
                             status['last_activity'] = timestamp
+                            
+                            # Calculate time since last activity
+                            try:
+                                last_time = datetime.fromisoformat(timestamp)
+                                time_diff = datetime.now() - last_time
+                                status['time_since_activity_seconds'] = int(time_diff.total_seconds())
+                                
+                                # If logs are too old, mark as stale
+                                if time_diff.total_seconds() > 300:  # 5+ minutes
+                                    status['warnings'].append(f"Logs are stale ({time_diff.total_seconds()}s old)")
+                            except:
+                                pass
         except Exception as e:
             status['errors'].append(f"Error reading equity logs: {e}")
         
@@ -84,8 +101,8 @@ class BotHealthChecker:
         except:
             pass
         
-        # Validate session
-        status['session_valid'] = status['broker_logged_in'] and len(status['errors']) == 0
+        # Validate session: process MUST be running AND broker logged in
+        status['session_valid'] = status['process_running'] and status['broker_logged_in'] and len(status['errors']) == 0
         
         return status
     
@@ -98,18 +115,23 @@ class BotHealthChecker:
             'api_connected': False,
             'session_valid': False,
             'last_activity': None,
+            'time_since_activity_seconds': None,
             'errors': [],
             'warnings': [],
             'details': {},
             'initialization_issue': None
         }
         
-        # Check process
+        # Check process - MUST be running
         try:
             result = os.popen('pgrep -f "options.*main.py"').read().strip()
             status['process_running'] = bool(result)
             if result:
                 status['details']['pid'] = result
+            else:
+                status['errors'].append("Process not running - bot is DEAD")
+                status['session_valid'] = False
+                return status
         except:
             pass
         
@@ -151,6 +173,18 @@ class BotHealthChecker:
                         if '|' in line and ('INFO' in line or 'DEBUG' in line):
                             timestamp = line.split('|')[0].strip()
                             status['last_activity'] = timestamp
+                            
+                            # Calculate time since last activity
+                            try:
+                                last_time = datetime.fromisoformat(timestamp)
+                                time_diff = datetime.now() - last_time
+                                status['time_since_activity_seconds'] = int(time_diff.total_seconds())
+                                
+                                # If logs are too old, mark as stale
+                                if time_diff.total_seconds() > 300:  # 5+ minutes
+                                    status['warnings'].append(f"Logs are stale ({time_diff.total_seconds()}s old) - process may be frozen")
+                            except:
+                                pass
                             break
                     
                     # Check for auth errors in entire log
@@ -165,8 +199,12 @@ class BotHealthChecker:
         except Exception as e:
             status['errors'].append(f"Error reading options logs: {e}")
         
-        # Validate session
-        status['session_valid'] = status['broker_logged_in'] and len(status['errors']) == 0
+        # Validate session: process MUST be running AND broker logged in AND recent activity
+        status['session_valid'] = (status['process_running'] and 
+                                  status['broker_logged_in'] and 
+                                  len(status['errors']) == 0 and
+                                  status['time_since_activity_seconds'] is not None and
+                                  status['time_since_activity_seconds'] < 300)  # Activity within last 5 mins
         
         return status
     
@@ -245,7 +283,10 @@ class BotHealthChecker:
         print(f"│ Session Status: {session:<50} │")
         
         if bot_status['last_activity']:
-            print(f"│ Last Activity:  {bot_status['last_activity']:<50} │")
+            activity_info = bot_status['last_activity']
+            if bot_status['time_since_activity_seconds'] is not None:
+                activity_info += f" ({bot_status['time_since_activity_seconds']}s ago)"
+            print(f"│ Last Activity:  {activity_info:<50} │")
         
         if bot_status.get('initialization_issue'):
             print(f"│ ⚠️  Init Issue:  {bot_status['initialization_issue']:<50} │")

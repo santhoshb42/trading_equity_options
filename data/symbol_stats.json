@@ -1,0 +1,75 @@
+{
+  "BANKNIFTY": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_profit": 0.0,
+    "avg_profit_per_trade": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "recent_form": "neutral",
+    "win_rate": 0.0,
+    "win_rate_last_10": 0.0,
+    "reliability_score": 0.5,
+    "confidence_multiplier": 1.0,
+    "last_updated": "2025-12-20T17:44:18.522367",
+    "trade_history": []
+  },
+  "NIFTY": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_profit": 0.0,
+    "avg_profit_per_trade": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "recent_form": "neutral",
+    "win_rate": 0.0,
+    "win_rate_last_10": 0.0,
+    "reliability_score": 0.5,
+    "confidence_multiplier": 1.0,
+    "last_updated": "2025-12-20T17:44:18.522407",
+    "trade_history": []
+  },
+  "FINNIFTY": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_profit": 0.0,
+    "avg_profit_per_trade": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "recent_form": "neutral",
+    "win_rate": 0.0,
+    "win_rate_last_10": 0.0,
+    "reliability_score": 0.5,
+    "confidence_multiplier": 1.0,
+    "last_updated": "2025-12-20T17:44:18.522412",
+    "trade_history": []
+  },
+  "INFY30DEC251840CE": {
+    "total_trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_profit": 250.5,
+    "avg_profit_per_trade": 250.5,
+    "avg_win": 250.5,
+    "avg_loss": 0.0,
+    "recent_form": "hot",
+    "win_rate": 1.0,
+    "win_rate_last_10": 1.0,
+    "reliability_score": 0.3,
+    "confidence_multiplier": 1.0,
+    "last_updated": "2025-12-20T17:44:18.523246",
+    "trade_history": [
+      {
+        "date": "2025-12-20T17:44:18.523236",
+        "won": true,
+        "profit": 250.5,
+        "predicted_prob": 0.6,
+        "profit_range": "big_win",
+        "trading_mode": "PAPER"
+      }
+    ]
+  }
+}

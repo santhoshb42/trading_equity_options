@@ -1,9 +1,7 @@
-//@version=6
-indicator("Sniper v7.10 – Adaptive Early-Market Filters + 9:33 Valid Alerts", overlay=true)
+//@version=5
+indicator("Sniper v7.11 – Smart Hybrid Gainer Engine (9:30–10:30)", overlay=true)
 
-//────────────────────────────────────────────
 // INPUTS
-//────────────────────────────────────────────
 emaShort = input.int(9,  "EMA Short")
 emaLong  = input.int(20, "EMA Long")
 rsiLen   = input.int(14, "RSI Length")
@@ -17,173 +15,98 @@ minAdx   = input.float(20.0, "Min ADX (strict after 9:45)")
 minAtrPc = input.float(0.15, "Min ATR% (strict after 9:45)")
 minBody  = input.float(0.55, "Min Body Ratio")
 exhaustPc= input.float(2.5, "Exhaustion % Above EMA9")
-
 useResistance  = input.bool(true, "Require Resistance Break")
 resistanceBars = input.int(3, "Resistance Lookback Bars")
-
 maxGap = input.float(3.0, "Max Gap % Allowed")
 
-//────────────────────────────────────────────
 // CORE CALCULATIONS
-//────────────────────────────────────────────
 ema9  = ta.ema(close, emaShort)
 ema20 = ta.ema(close, emaLong)
 vwap  = ta.vwap(hlc3)
 rsi   = ta.rsi(close, rsiLen)
 atr   = ta.atr(atrLen)
-atrPc = (atr / close) * 100.0
+atrPc = atr / close * 100.0
 [_, _, adxVal] = ta.dmi(dmiLen, dmiLen)
 
 body      = math.abs(close - open)
-barRange  = math.max(high - low, 0.0)
-bodyRatio = barRange == 0.0 ? 0.0 : body / barRange
-
-// Previous Day Close (PDC) - required for hybrid strategy
+barRange  = math.max(high - low, 0.0001)
+bodyRatio = body / barRange
 pdc = request.security(syminfo.tickerid, "D", close[1])
 
-//────────────────────────────────────────────
 // TIME WINDOWS
-//────────────────────────────────────────────
-sessionStart     = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
-sessionEnd       = timestamp("GMT+5:30", year, month, dayofmonth, 10, 30)
-inSession        = time >= sessionStart and time <= sessionEnd
+sessionStart = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
+sessionEnd   = timestamp("GMT+5:30", year, month, dayofmonth, 10, 30)
+start933     = timestamp("GMT+5:30", year, month, dayofmonth, 9, 33)
+start945     = timestamp("GMT+5:30", year, month, dayofmonth, 9, 45)
+inSession = time >= sessionStart and time <= sessionEnd
+after933  = time >= start933
 
-alertTriggerTime = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
-is933 = time >= alertTriggerTime and time < alertTriggerTime + 5*60000
-
-// Opening rush windows (9:30 AM onwards) - RELAXED FOR SCALPING
-openingRush1 = time >= alertTriggerTime and time < alertTriggerTime + 5*60000       // 9:30–9:35 (MOST RELAXED)
-openingRush2 = time >= alertTriggerTime and time < alertTriggerTime + 10*60000      // 9:30–9:40 (RELAXED)
-openingRush3 = time >= alertTriggerTime and time < alertTriggerTime + 15*60000      // 9:30–9:45 (MODERATE)
-
-//────────────────────────────────────────────
 // ADAPTIVE FILTERS
-//────────────────────────────────────────────
-
-// ADX adaptive requirement - HYBRID QUALITY APPROACH (balanced for opening rush)
-// 9:30-9:35: ADX >= 12 (catch momentum, filter noise)
-// 9:35-9:40: ADX >= 13 (slight relaxation as volume builds)
-// 9:40-9:45: ADX >= 15 (moderate, normal opening momentum)
-// 9:45+: ADX >= 20 (STRICT, normal market conditions)
-adxReq = is933 ? 12 : openingRush2 ? 13 : openingRush3 ? 15 : minAdx
+adxReq = time < start945 ? 15 : minAdx
 fADX   = adxVal >= adxReq
-
-// ATR% adaptive requirement - HYBRID QUALITY APPROACH (meaningful volatility)
-// 9:30-9:35: ATR >= 0.08% (meaningful moves, not noise)
-// 9:35-9:40: ATR >= 0.10% (consistent volatility)
-// 9:40-9:45: ATR >= 0.12% (moderate, normal opening momentum)
-// 9:45+: ATR >= 0.15% (STRICT, normal)
-atrReq = is933 ? 0.08 : openingRush2 ? 0.10 : openingRush3 ? 0.12 : minAtrPc
+atrReq = time < start945 ? 0.12 : minAtrPc
 fATR   = atrPc >= atrReq
-
-// Adaptive Volume Logic (ANY strength signal passes)
-volAvg   = ta.sma(volume, volLen)
-volOk_adapt =
-     (volume > volAvg * volMult) or               // long MA spike
-     (volume > ta.sma(volume, 5) * 1.1) or        // short MA spike
-     (volume > volume[1] * 1.05)                  // rising vs previous bar
-
-fVolume = volOk_adapt
-
-// Other filters - RELAXED FOR OPENING RUSH SCALPING
-exhaust   = (close - ema9) / ema9 * 100.0
-fExhaust  = exhaust < exhaustPc
-
-fAboveMA  = close > ema9 and close > ema20 and close > vwap
-
-// RSI filter - HYBRID APPROACH (balanced for quality momentum)
-// 9:30-9:35: RSI >= 55 (avoid oversold, catch building momentum)
-// 9:35-9:40: RSI >= 56 (slight relaxation as momentum builds)
-// 9:40-9:45: RSI >= 57 (moderate, normal opening momentum)
-// 9:45+: RSI >= 58 (STRICT, normal conditions)
-rsiLower = is933 ? 55.0 : openingRush2 ? 56.0 : openingRush3 ? 57.0 : minRsi
-rsiUpper = maxRsi  // Keep upper bound same
-fRSI      = rsi >= rsiLower and rsi <= rsiUpper
-fBody     = bodyRatio >= minBody
-
-// Gap filter
+volAvg = ta.sma(volume, volLen)
+fVolume = volume > volAvg * volMult or volume > ta.sma(volume, 5) * 1.1 or volume > volume[1] * 1.05
+exhaust  = (close - ema9) / ema9 * 100.0
+fExhaust = exhaust < exhaustPc
+fAboveMA = close > ema9 and close > ema20 and close > vwap
+rsiLower = time < start945 ? 57.0 : minRsi
+fRSI = rsi >= rsiLower and rsi <= maxRsi
+fBody = bodyRatio >= minBody
 open_gap_pct = na(close[1]) ? 0.0 : (open - close[1]) / close[1] * 100.0
 fGap = math.abs(open_gap_pct) < maxGap
-
-// Resistance break (non repaint)
 prevHigh = ta.highest(high[1], resistanceBars)
-fResistance = useResistance ? close > prevHigh * 1.002 : true
+fResistance = time < start945 or (not useResistance or close > prevHigh * 1.002)
+pdcConfirm = close > pdc or time < start945
 
-//────────────────────────────────────────────
-// FINAL FILTER DECISION (HYBRID: QUALITY + PDC CONFIRMATION)
-//────────────────────────────────────────────
-// PDC (Previous Day Close) requirement: Current price must be above yesterday's close
-pdcConfirm = close > pdc
+// SMART HYBRID ENGINE
+earlyEngine = time < start945 and close > vwap and ema9 > ema20 and rsi >= 60 and volume > volAvg * 1.3
+lateEngine  = time >= start945 and close > vwap and close > ema20 and adxVal >= 22 and volume > volAvg * 1.4
 
-allFilters =
-     fAboveMA and
-     fRSI and
-     fATR and
-     fADX and
-     fBody and
-     fVolume and
-     fExhaust and
-     fResistance and
-     fGap and
-     inSession and
-     pdcConfirm
+// ANTI-FADE / NO-DUD FILTER
+lowerHighs = high < high[1] and high[1] < high[2]
+weakClose  = close < open and close < ema9
+midFail    = close < (high + low) / 2
+isFading = lowerHighs or weakClose or midFail
+strongClose = close > open and close > high[1] and bodyRatio >= 0.55
+antiFade = strongClose and not isFading
 
-//────────────────────────────────────────────
-// SCORING (unchanged)
-//────────────────────────────────────────────
-vwapLeadPct = (close - vwap) / vwap * 100.0
-emaGapPct   = (close - ema9) / ema9 * 100.0
-hlRangePct  = barRange == 0.0 ? 0.0 : (barRange / close) * 100.0
-closeToHigh = barRange == 0.0 ? 0.0 : ((close - low) / barRange) * 100.0
-atrJump     = na(atrPc[1]) ? 0.0 : atrPc - atrPc[1]
-pdh         = request.security(syminfo.tickerid, "D", high[1])
+// BURST LIMITER (3-MIN, MAX 5)
+bucket = math.floor(time / (3 * 60000))
+var int bucketTrades = 0
+var int lastBucket = na
+if bucket != lastBucket
+    bucketTrades := 0
+    lastBucket := bucket
+burstOK = bucketTrades < 5
 
-volStd  = ta.stdev(volume, volLen)
-vol_z   = volStd == 0.0 ? 0.0 : (volume - volAvg) / volStd
-rsiMean = ta.sma(rsi, rsiLen)
-rsiStd  = ta.stdev(rsi, rsiLen)
-z_rsi   = rsiStd == 0.0 ? 0.0 : (rsi - rsiMean) / rsiStd
-pc_lead_pct = na(close[1]) ? 0.0 : (close - close[1]) / close[1] * 100.0
-
-ultra_pass = (vwapLeadPct >= 0.35 and adxVal >= 27 and vol_z >= 1.2) ? 1 : 0
-
-score = 0.0
-score += fAboveMA ? 12.5 : 0
-score += fRSI ? 12.5 : 0
-score += fATR ? 12.5 : 0
-score += fADX ? 12.5 : 0
-score += fBody ? 12.5 : 0
-score += fVolume ? 12.5 : 0
-score += fExhaust ? 12.5 : 0
-score += pdcConfirm ? 12.5 : 0
-
-verdict    = allFilters ? 1.0 : 0.0
-confidence = allFilters ? math.min(95.0, 80.0 + score * 0.3) : 0.0
-
-//────────────────────────────────────────────
-// JSON PAYLOAD
-//────────────────────────────────────────────
-fmt(x) => str.tostring(x, format.mintick)
-
-jsonMsg = "{\"Alerts\":[{\"symbol\":\""+syminfo.ticker+"\",\"action\":\"BUY\",\"price\":\""+fmt(close)+"\",\"score\":\""+fmt(score)+"\",\"confidence\":\""+fmt(confidence)+"\",\"verdict\":\""+fmt(verdict)+"\",\"vwap\":\""+fmt(vwap)+"\",\"rsi\":\""+fmt(rsi)+"\",\"atr\":\""+fmt(atr)+"\",\"adx\":\""+fmt(adxVal)+"\",\"volume\":\""+fmt(volume)+"\",\"ema9\":\""+fmt(ema9)+"\",\"ema20\":\""+fmt(ema20)+"\",\"pdc\":\""+fmt(pdc)+"\",\"pdc_confirm\":\""+fmt(pdcConfirm ? 1 : 0)+"\",\"pdh\":\""+fmt(pdh)+"\",\"ema_gap_pct\":\""+fmt(emaGapPct)+"\",\"vwap_lead_pct\":\""+fmt(vwapLeadPct)+"\",\"atr_pct\":\""+fmt(atrPc)+"\",\"vol_z\":\""+fmt(vol_z)+"\",\"z_rsi\":\""+fmt(z_rsi)+"\",\"heat_ok\":\""+fmt(allFilters ? 1 : 0)+"\",\"body_ratio\":\""+fmt(bodyRatio)+"\",\"open_gap_pct\":\""+fmt(math.abs(open_gap_pct))+"\",\"hl_range_pct\":\""+fmt(hlRangePct)+"\",\"pc_lead_pct\":\""+fmt(pc_lead_pct)+"\",\"close_to_high\":\""+fmt(closeToHigh)+"\",\"atr_jump\":\""+fmt(atrJump)+"\",\"above_vwap\":\""+fmt(fAboveMA ? 1 : 0)+"\",\"time_ok\":\""+fmt(inSession ? 1 : 0)+"\",\"resistance_break\":\""+fmt(fResistance ? 1 : 0)+"\",\"vol_quality\":\""+fmt(fVolume ? 1 : 0)+"\"}]}"
-
-//────────────────────────────────────────────
-// ONE ALERT PER SYMBOL PER DAY
-//────────────────────────────────────────────
-var alertedToday = false
+// DAILY LIMIT (MAX 20)
+var int dailyTrades = 0
 newDay = ta.change(time("D")) != 0
 if newDay
+    dailyTrades := 0
+dailyOK = dailyTrades < 20
+
+// FINAL FILTER DECISION
+allFilters = inSession and after933 and (earlyEngine or lateEngine) and antiFade and fATR and fADX and fRSI and fBody and fVolume and fExhaust and fGap and fResistance and pdcConfirm and burstOK and dailyOK
+
+// JSON PAYLOAD
+fmt(x) => str.tostring(x, format.mintick)
+jsonMsg = "{\"Alerts\":[{\"symbol\":\""+syminfo.ticker+"\",\"action\":\"BUY\",\"price\":\""+fmt(close)+"\",\"score\":\""+fmt(0)+"\",\"confidence\":\""+fmt(0)+"\",\"verdict\":\""+fmt(allFilters ? 1 : 0)+"\",\"vwap\":\""+fmt(vwap)+"\",\"rsi\":\""+fmt(rsi)+"\",\"atr\":\""+fmt(atr)+"\",\"adx\":\""+fmt(adxVal)+"\",\"volume\":\""+fmt(volume)+"\",\"ema9\":\""+fmt(ema9)+"\",\"ema20\":\""+fmt(ema20)+"\",\"pdc\":\""+fmt(pdc)+"\",\"pdc_confirm\":\""+fmt(pdcConfirm ? 1 : 0)+"\"}]}"
+
+// ONE ALERT PER SYMBOL PER DAY
+var alertedToday = false
+if newDay
     alertedToday := false
-
-alertCond = allFilters and time >= alertTriggerTime and not alertedToday
-
+alertCond = allFilters and not alertedToday
 if alertCond
     alertedToday := true
+    bucketTrades += 1
+    dailyTrades += 1
     alert(jsonMsg, alert.freq_once_per_bar_close)
 
-//────────────────────────────────────────────
 // PLOTS
-//────────────────────────────────────────────
 plot(ema9,  "EMA9",  color=color.yellow)
 plot(ema20, "EMA20", color=color.orange)
 plot(vwap,  "VWAP",  color=color.blue)

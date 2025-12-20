@@ -382,6 +382,54 @@ class PriorityRateLimiter:
         
         return True
     
+    def refund_tokens(self, endpoint: str = "api_call", tokens: int = 1) -> bool:
+        """
+        Refund tokens when an API call fails after tokens were consumed
+        
+        CRITICAL: This prevents token starvation when API calls fail with exceptions.
+        When rate limiter consumes tokens via acquire() but the API call throws an exception,
+        we must refund the tokens to avoid depleting the bucket.
+        
+        Args:
+            endpoint: API endpoint name
+            tokens: Number of tokens to refund (default 1)
+            
+        Returns:
+            True if refund successful, False otherwise
+        """
+        priority = self.get_priority(endpoint)
+        
+        try:
+            # Refund to general pool (safe, won't exceed capacity)
+            with self.second_bucket.lock:
+                old_general = self.second_bucket.general_tokens
+                self.second_bucket.general_tokens = min(
+                    self.second_bucket.general_capacity,
+                    self.second_bucket.general_tokens + tokens
+                )
+            
+            with self.minute_bucket.lock:
+                old_minute = self.minute_bucket.general_tokens
+                self.minute_bucket.general_tokens = min(
+                    self.minute_bucket.general_capacity,
+                    self.minute_bucket.general_tokens + tokens
+                )
+            
+            log_event("RATE_LIMIT_TOKEN_REFUND",
+                     f"Refunded {tokens} tokens for {endpoint} ({priority.name}) after API failure",
+                     endpoint=endpoint,
+                     priority=priority.name,
+                     second_bucket_refund=int(self.second_bucket.general_tokens - old_general),
+                     minute_bucket_refund=int(self.minute_bucket.general_tokens - old_minute))
+            
+            return True
+        except Exception as e:
+            log_event("RATE_LIMIT_REFUND_FAILED",
+                     f"Failed to refund tokens for {endpoint}: {str(e)}",
+                     endpoint=endpoint,
+                     error=str(e))
+            return False
+    
     def get_statistics(self) -> Dict[str, Any]:
         """Get comprehensive statistics"""
         with self.lock:

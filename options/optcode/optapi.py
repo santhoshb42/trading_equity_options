@@ -9,6 +9,8 @@ With extensive logging and alert system integration.
 import json
 from datetime import datetime
 from typing import Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 try:
     from flask import Flask, request, jsonify
@@ -25,6 +27,14 @@ from .optsignalvalidator import (
     OptionsSignalValidator, get_options_signal_filter
 )
 from .optlogging import logger, log_alert, log_signal_validation, log_event
+
+# Learning engine integration
+try:
+    from .options_learning_engine import SymbolPerformanceTracker
+    HAS_LEARNING_ENGINE = True
+except ImportError:
+    HAS_LEARNING_ENGINE = False
+    SymbolPerformanceTracker = None
 
 # Alert system integration
 try:
@@ -54,11 +64,25 @@ def create_options_api_app():
     
     # Options trading state
     from optcode.instrument_manager import get_instrument_manager
+    from pathlib import Path
+    
+    # Initialize learning engine for ML trade recording
+    learning_engine = None
+    if HAS_LEARNING_ENGINE:
+        try:
+            # Use options-specific data directory for learning
+            options_learning_file = Path(__file__).parent.parent / "data" / "learning" / "symbol_stats.json"
+            learning_engine = SymbolPerformanceTracker(symbol_stats_file=options_learning_file)
+            logger.info("API: LEARNING_ENGINE_INITIALIZED")
+        except Exception as e:
+            logger.warning(f"API: LEARNING_ENGINE_INIT_FAILED | {str(e)}")
+    
     state = {
         'broker': get_options_broker(),
         'monitor': get_option_monitor(),
         'signal_filter': get_options_signal_filter(),
         'instrument_manager': get_instrument_manager(),
+        'learning_engine': learning_engine,
         'alert_manager': None,  # Will be set by main bot
         'active': False,
         'startup_time': None
@@ -105,6 +129,9 @@ def create_options_api_app():
         """
         Main webhook endpoint for options trading signals.
         Accepts TradingView alerts and processes them.
+        
+        Burst handling: Multiple alerts in one request are processed in parallel
+        using ThreadPoolExecutor to minimize latency (default: max 5 workers).
         """
         try:
             logger.debug(f"WEBHOOK: Received request | remote_addr={request.remote_addr}")
@@ -119,17 +146,42 @@ def create_options_api_app():
             
             # Extract alert(s)
             alerts = data if isinstance(data, list) else [data]
-            logger.info(f"WEBHOOK: Processing {len(alerts)} alert(s)")
+            logger.info(f"WEBHOOK: Processing {len(alerts)} alert(s) | burst_mode={len(alerts) > 1}")
             
+            # Process alerts in parallel for burst handling
             results = []
-            for idx, alert in enumerate(alerts, 1):
-                logger.debug(f"WEBHOOK: Processing alert {idx}/{len(alerts)} | symbol={alert.get('symbol')}")
-                result = _process_options_alert(alert, state)
+            if len(alerts) > 1:
+                # Burst mode: use ThreadPoolExecutor for parallel processing
+                max_workers = min(5, len(alerts))  # Process up to 5 alerts in parallel
+                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="webhook_alert") as executor:
+                    futures = []
+                    for idx, alert in enumerate(alerts, 1):
+                        # Submit each alert for processing
+                        future = executor.submit(_process_options_alert, alert, state)
+                        futures.append((idx, alert, future))
+                    
+                    # Collect results as they complete
+                    for idx, alert, future in futures:
+                        try:
+                            result = future.result(timeout=30)  # 30 second timeout per alert
+                            results.append(result)
+                            log_alert(alert, result['status'], result)
+                            logger.debug(f"WEBHOOK: Alert {idx}/{len(alerts)} completed | symbol={alert.get('symbol')} | status={result['status']}")
+                        except Exception as e:
+                            logger.error(f"WEBHOOK: Alert {idx}/{len(alerts)} failed | {str(e)}")
+                            results.append({
+                                'symbol': alert.get('symbol', 'UNKNOWN'),
+                                'status': 'error',
+                                'error': str(e)
+                            })
+            else:
+                # Single alert: process directly
+                result = _process_options_alert(alerts[0], state)
                 results.append(result)
-                log_alert(alert, result['status'], result)
+                log_alert(alerts[0], result['status'], result)
             
             successful = sum(1 for r in results if r['status'] == 'success')
-            logger.info(f"WEBHOOK: Completed | total={len(alerts)} | successful={successful}")
+            logger.info(f"WEBHOOK: Completed | total={len(alerts)} | successful={successful} | time_mode={'parallel' if len(alerts) > 1 else 'direct'}")
             
             return jsonify({
                 'status': 'processed',
@@ -385,6 +437,224 @@ def create_options_api_app():
         except Exception as e:
             logger.error(f"OI_BUILDUP_ENDPOINT: ERROR | {str(e)}")
             return jsonify({'error': str(e)}), 500
+    
+    @app.route('/square-off', methods=['POST'])
+    def square_off_all_positions():
+        """
+        Square off all open options positions at 3:12 PM (EOD).
+        
+        Enhanced Logic:
+        1. Close ALL open positions (no exceptions)
+        2. Avoid EOD market volatility/pressure (3:12 PM = 18 min before close)
+        3. Lock in profits and losses before 3:30 PM expiry
+        4. Free up capital for next day
+        5. Detect and force-close stagnant positions (0% gain for 24+ hours)
+        
+        Stagnant Position Detection:
+        - Positions with ~0% gain (±0.1%) = likely illiquid/stuck
+        - Held for 24+ hours = confirmed stagnant (e.g., INFY30DEC251840CE from Dec 15)
+        - These are closed at best available bid even if at minor loss
+        - Marked in logs as "STAGNANT" for tracking
+        
+        Called at: 3:12 PM (15:12 IST) daily via cron job
+        
+        Returns:
+            {
+                "status": "success",
+                "message": "All positions squared off",
+                "positions_closed": N,
+                "positions_stagnant_closed": M,
+                "total_pnl": X.XX,
+                "timestamp": "..."
+            }
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            log_event("EOD_SQUARE_OFF", "🛑 Attempting to square off all options positions at 3:12 PM")
+            
+            if not state.get('broker'):
+                return jsonify({"error": "Broker not initialized"}), 503
+            
+            monitor = state.get('monitor')
+            if not monitor:
+                return jsonify({"error": "Monitor not initialized"}), 503
+            
+            # Get all active positions from monitor pool
+            all_positions = monitor.get_all_positions()
+            
+            # CRITICAL: Filter to only ACTIVE positions (not already closed)
+            # Closed positions have exit_premium and exit_time set
+            positions_to_close = [
+                pos for pos in all_positions 
+                if not pos.get('exit_premium') and not pos.get('exit_time')
+            ]
+            
+            # VERIFICATION: Check with broker to confirm positions
+            broker_verification = state['broker'].verify_positions_with_broker()
+            broker_open_positions = broker_verification.get('net_positions', {})
+            
+            log_event("EOD_SQUARE_OFF_START", 
+                     f"Starting EOD square-off | Internal active: {len(positions_to_close)} | "
+                     f"Broker open: {len(broker_open_positions)} | "
+                     f"Already closed (filtered): {len(all_positions) - len(positions_to_close)}")
+            
+            if not positions_to_close:
+                log_event("EOD_SQUARE_OFF_COMPLETE", "✅ No open positions to close")
+                return jsonify({
+                    "status": "success",
+                    "message": "No open positions to close",
+                    "positions_closed": 0,
+                    "positions_stagnant_closed": 0,
+                    "total_pnl": 0,
+                    "timestamp": datetime.now().isoformat()
+                }), 200
+            
+            # Analyze and close positions
+            total_pnl = 0
+            closed_count = 0
+            stagnant_count = 0
+            errors = []
+            current_time = datetime.now()
+            
+            for pos in positions_to_close:
+                try:
+                    symbol = pos.get('symbol', 'UNKNOWN')
+                    contract = pos.get('contract', '')
+                    quantity = pos.get('quantity', 0)
+                    entry_premium = pos.get('entry_premium', 0)
+                    current_ltp = pos.get('current_ltp', entry_premium)
+                    entry_time_str = pos.get('entry_time')
+                    
+                    # Calculate gain percentage
+                    gain_percent = 0
+                    if entry_premium > 0:
+                        gain_percent = ((current_ltp - entry_premium) / entry_premium) * 100
+                    
+                    # Detect stagnant positions (0% gain for 24+ hours)
+                    is_stagnant = False
+                    hours_held = None
+                    if entry_time_str and abs(gain_percent) < 0.1:  # Almost 0% gain
+                        try:
+                            # Parse entry time and calculate hold duration
+                            if 'T' in entry_time_str:
+                                entry_time = datetime.fromisoformat(entry_time_str.split('T')[0] + 'T' + entry_time_str.split('T')[1].split('.')[0])
+                            else:
+                                entry_time = datetime.fromisoformat(entry_time_str)
+                            hours_held = (current_time - entry_time).total_seconds() / 3600
+                            # Stagnant if: same price for 24+ hours = illiquid/stuck
+                            if hours_held >= 24:
+                                is_stagnant = True
+                        except Exception as time_err:
+                            logger.debug(f"Could not parse entry time for {symbol}: {str(time_err)}")
+                            pass
+                    
+                    # Place exit order (market order)
+                    exit_order = state['broker'].place_options_order(
+                        symbol=symbol,  # Use full symbol, not 'contract'
+                        action="SELL",
+                        quantity=quantity,
+                        price=0  # Market order
+                    )
+                    
+                    if exit_order:
+                        # Calculate PnL (for CALL options: sell premium - buy premium)
+                        pnl = (current_ltp - entry_premium) * quantity
+                        total_pnl += pnl
+                        closed_count += 1
+                        
+                        # CRITICAL: Mark position as closed in monitor to update exit_time and exit_premium
+                        # This ensures the position gets removed in cleanup
+                        monitor.close_position(symbol, current_ltp, "EOD_SQUAREOFF")
+                        
+                        # LEARNING ENGINE: Record trade outcome for ML pattern learning
+                        if state.get('learning_engine') and HAS_LEARNING_ENGINE:
+                            try:
+                                # Extract symbol name (remove -EQ suffix if present)
+                                base_symbol = symbol.split('-')[0] if '-' in symbol else symbol
+                                # Check if it's a win (positive PnL)
+                                is_win = pnl > 0
+                                # Record to learning engine
+                                state['learning_engine'].record_trade(
+                                    symbol=base_symbol,
+                                    won=is_win,
+                                    profit=pnl,
+                                    predicted_prob=0.5,  # Default if ML prediction not available
+                                    trading_mode=OptionsTradingConfig.TRADING_MODE
+                                )
+                                logger.debug(f"LEARNING_ENGINE: TRADE_RECORDED | {base_symbol} | won={is_win} | pnl=₹{pnl:.2f}")
+                            except Exception as learn_err:
+                                logger.warning(f"LEARNING_ENGINE_RECORD_ERROR: {symbol} | {str(learn_err)}")
+                        
+                        if is_stagnant:
+                            stagnant_count += 1
+                            log_event("EOD_STAGNANT_POSITION_CLOSED", 
+                                     f"🔴 Force-closed stagnant position: {symbol} | Gain: {gain_percent:.2f}% | Held: {hours_held:.1f}h | PnL: ₹{pnl:.2f}",
+                                     symbol=symbol, contract=contract, gain_percent=round(gain_percent, 2), 
+                                     hours_held=round(hours_held, 1) if hours_held else None, pnl=round(pnl, 2))
+                            logger.warning(f"EOD_STAGNANT_CLOSE: {symbol} | {gain_percent:.2f}% gain in {hours_held:.1f}h | PnL: ₹{pnl:.2f}")
+                        else:
+                            log_event("EOD_POSITION_CLOSED", 
+                                     f"✅ Closed {symbol} | Gain: {gain_percent:.2f}% | PnL: ₹{pnl:.2f}",
+                                     symbol=symbol, contract=contract, gain_percent=round(gain_percent, 2), pnl=round(pnl, 2))
+                    else:
+                        errors.append(f"{symbol}: Failed to place exit order")
+                        log_event("EOD_POSITION_CLOSE_FAILED", f"❌ Failed to close {symbol}",
+                                 symbol=symbol, contract=contract)
+                except Exception as pos_err:
+                    errors.append(f"{pos.get('symbol', 'UNKNOWN')}: {str(pos_err)}")
+                    logger.error(f"EOD_POSITION_CLOSE_ERROR: {pos.get('symbol')} | {str(pos_err)}")
+            
+            log_event("EOD_SQUARE_OFF_COMPLETE", 
+                     f"✅ EOD square-off complete | Active closed: {closed_count}/{len(positions_to_close)} | Stagnant: {stagnant_count} | Already closed: {len(all_positions) - len(positions_to_close)} | PnL: ₹{total_pnl:.2f}",
+                     closed=closed_count, stagnant=stagnant_count, total=len(positions_to_close), 
+                     already_closed=len(all_positions) - len(positions_to_close), pnl=round(total_pnl, 2))
+            
+            # CLEANUP: Remove closed positions from the positions dictionary and save
+            try:
+                closed_symbols = []
+                for symbol in list(monitor.positions.keys()):
+                    position = monitor.positions[symbol]
+                    # If position has exit_premium or exit_time, it's closed - remove it
+                    if hasattr(position, 'exit_premium') and position.exit_premium is not None:
+                        closed_symbols.append(symbol)
+                        del monitor.positions[symbol]
+                    elif hasattr(position, 'exit_time') and position.exit_time is not None:
+                        closed_symbols.append(symbol)
+                        del monitor.positions[symbol]
+                
+                # Save cleaned positions to JSON
+                if closed_symbols:
+                    monitor._save_positions()
+                    log_event("EOD_CLEANUP_COMPLETE", 
+                             f"🧹 Cleaned up {len(closed_symbols)} closed positions from tracking | Removed: {', '.join(closed_symbols[:3])}{'...' if len(closed_symbols) > 3 else ''}",
+                             removed_count=len(closed_symbols),
+                             removed_symbols=closed_symbols)
+                    logger.info(f"EOD_CLEANUP: Removed {len(closed_symbols)} closed positions from tracking")
+            except Exception as cleanup_err:
+                logger.warning(f"EOD_CLEANUP: Error cleaning positions | {str(cleanup_err)}")
+            
+            return jsonify({
+                "status": "success",
+                "message": f"✅ Squared off {closed_count}/{len(positions_to_close)} positions at 3:12 PM",
+                "positions_closed": closed_count,
+                "positions_stagnant_closed": stagnant_count,
+                "positions_total": len(positions_to_close),
+                "broker_verified_open": len(broker_open_positions),
+                "broker_positions": broker_open_positions,
+                "positions_remaining": len(monitor.positions),  # After cleanup
+                "total_pnl": round(total_pnl, 2),
+                "errors": errors if errors else None,
+                "timestamp": datetime.now().isoformat()
+            }), 200
+        except Exception as e:
+            logger.error(f"EOD_SQUARE_OFF_ERROR: {str(e)}")
+            log_event("EOD_SQUARE_OFF_ERROR", f"❌ Square-off failed: {str(e)}")
+            return jsonify({
+                "status": "error",
+                "message": f"❌ Square-off failed: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }), 500
     
     # Store state for access in routes
     app.options_state = state

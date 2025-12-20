@@ -232,6 +232,13 @@ class OptionPosition:
         self.last_trailing_sl_price = None  # Last calculated trailing SL price
         self.trailing_sl_update_count = 0  # Count of trailing SL adjustments
         
+        # TRIAL SL tracking
+        self.trial_sl_enabled = False  # TRIAL SL activated (5% from peak after 10% gain)
+        self.trial_sl_price = None  # Current TRIAL SL price (5% below peak)
+        self.trial_sl_activation_time = None  # When TRIAL SL was activated
+        self.trial_sl_update_count = 0  # Count of TRIAL SL adjustments
+        self.hard_sl_price = None  # Hard SL: -20% from entry (default)
+        
         # P&L tracking
         self.unrealized_pnl = 0.0
         self.realized_pnl = None
@@ -320,7 +327,20 @@ class OptionPosition:
             'highest_premium': self.highest_premium,
             'days_to_expiry': self.days_to_expiry(),
             'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated,
-            'underlying_alert_price': self.underlying_alert_price
+            'underlying_alert_price': self.underlying_alert_price,
+            'trailing_sl_activated': self.trailing_sl_activated,
+            'last_trailing_sl_price': self.last_trailing_sl_price,
+            'trailing_sl_activation_time': self.trailing_sl_activation_time,
+            'trailing_sl_update_count': self.trailing_sl_update_count,
+            # TRIAL SL fields
+            'hard_sl_price': self.hard_sl_price,
+            'trial_sl_enabled': self.trial_sl_enabled,
+            'trial_sl_price': self.trial_sl_price,
+            'trial_sl_activation_time': self.trial_sl_activation_time,
+            'trial_sl_update_count': self.trial_sl_update_count,
+            # Exit fields (CRITICAL: Used to identify closed positions in squareoff)
+            'exit_premium': self.exit_premium,
+            'exit_time': self.exit_time.isoformat() if isinstance(self.exit_time, datetime) and self.exit_time else self.exit_time,
         }
 
 # =============================================================================
@@ -370,6 +390,13 @@ class OptionPositionMonitor:
                     underlying_alert_price: Optional[float] = None) -> bool:
         """Add new option position"""
         try:
+            # STUCK POSITION FILTER: Reject positions marked as stuck intraday
+            STUCK_INTRADAY_SYMBOLS = {'SONACOMS30DEC25490CE', 'INDIANB30DEC25780CE'}
+            if symbol in STUCK_INTRADAY_SYMBOLS:
+                logger.warning(f"POSITION_ADD: REJECTED_STUCK_INTRADAY | {symbol}")
+                print(f"⚠️ REJECTED: Position {symbol} is marked as stuck (cannot close in PAPER mode)")
+                return False
+            
             # SAFETY CHECK: Reject positions with zero entry premium (prevents stale positions)
             if entry_premium <= 0:
                 logger.warning(f"POSITION_ADD: REJECTED_ZERO_PREMIUM | {symbol} | premium={entry_premium}")
@@ -398,6 +425,10 @@ class OptionPositionMonitor:
             )
             
             self.positions[symbol] = position
+            
+            # 🔧 INITIALIZE HARD SL: -20% from entry premium
+            position.hard_sl_price = position.entry_premium * 0.8  # -20% SL
+            
             self._save_positions()
             
             # ADD TO ACTIVE SYMBOL POOL for bulk LTP fetching
@@ -665,92 +696,130 @@ class OptionPositionMonitor:
     
     def check_trailing_stop_losses(self) -> List[Dict[str, Any]]:
         """
-        Trail stop loss up as position gains (lock in profits every 10% gain).
+        TRIAL SL Implementation:
         
-        TRIAL MODE: Aggressive profit locking with 5% SL
-        - Entry at ₹100, SL = ₹80 (20% hard stop)
-        - Reaches ₹110 (+10%) → Move SL to ₹104.5 (5% below new peak) - AGGRESSIVE LOCKING
-        - Reaches ₹121 (+21%) → Move SL to ₹114.95 (5% below new peak)
-        - Continue trailing up with 5% buffer or exit when SL hit
+        Phase 1: DEFAULT -20% SL (Entry to +9.99% gain)
+        - SL stays at -20% from entry
+        - Example: Entry ₹100, SL = ₹80
         
-        This provides aggressive profit protection while letting winners run.
+        Phase 2: TRIAL SL ACTIVATION (Gain >= 10%)
+        - Switch to TRIAL SL: 5% below current peak
+        - Example: Peak ₹110 (+10%), TRIAL SL = ₹104.5
+        - Log: "TRIAL_SL_ACTIVATED"
+        
+        Phase 3: TRIAL SL TRAILING (As price increases)
+        - Update TRIAL SL = 5% below new peak
+        - Example: Peak ₹121 (+21%), TRIAL SL = ₹114.95
+        - Trail it up continuously as peak increases
+        - Log: "TRIAL_SL_UPDATED"
+        
+        Exit: When price hits TRIAL SL or hard SL
         """
         closed = []
-        # TRIAL MODE: Use 5% buffer for aggressive profit locking after 10% gain
-        trailing_buffer = 5.0  # AGGRESSIVE: 5% buffer (instead of 20%)
-        gain_threshold = OptionsTradingConfig.TRAILING_GAIN_THRESHOLD  # 10%
+        logger.info(f"CHECK_TRIAL_SL: Starting checks for {len(self.positions)} positions")
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
             
-            # Only check if position is winning
-            if position.unrealized_pnl <= 0:
-                continue
-            
-            # Calculate gain from entry
+            # Calculate current gain %
             gain_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
             
-            # If gained at least 10%, calculate trailing SL
-            if gain_percent >= gain_threshold:
-                # Trailing SL = Current peak - 5% of peak (AGGRESSIVE for trial mode)
-                trailing_sl = position.highest_premium * (1 - trailing_buffer / 100)
+            # Determine which SL to use
+            is_trial_sl_enabled = position.trial_sl_enabled
+            
+            # ============================================================
+            # PHASE 1 & 2: Check if we should activate TRIAL SL
+            # ============================================================
+            if not is_trial_sl_enabled and gain_percent >= 10.0:
+                # 🚀 ACTIVATE TRIAL SL at 10% gain
+                position.trial_sl_enabled = True
+                position.trial_sl_activation_time = datetime.now().isoformat()
+                position.trial_sl_price = position.highest_premium * 0.95  # 5% below peak
+                is_trial_sl_enabled = True
                 
-                # 🎯 Log when trailing SL is FIRST ACTIVATED (paper trading only)
-                if not position.trailing_sl_activated:
-                    position.trailing_sl_activated = True
-                    position.trailing_sl_activation_time = datetime.now().isoformat()
-                    position.last_trailing_sl_price = trailing_sl
-                    log_event("TRAILING_SL_ACTIVATED", 
-                             f"Trailing SL activated for {symbol} (PAPER MODE - aggressive 5% locking)",
-                             symbol=symbol,
-                             gain_percent=round(gain_percent, 2),
-                             entry_premium=position.entry_premium,
-                             peak_premium=position.highest_premium,
-                             initial_trailing_sl=round(trailing_sl, 2),
-                             current_premium=position.current_premium,
-                             buffer_percentage=trailing_buffer,
-                             reason="Gain reached 10% threshold - AGGRESSIVE LOCKING ACTIVATED")
+                log_event("TRIAL_SL_ACTIVATED",
+                         f"✅ TRIAL SL ACTIVATED for {symbol} (10% gain reached)",
+                         symbol=symbol,
+                         gain_percent=round(gain_percent, 2),
+                         entry_premium=position.entry_premium,
+                         peak_premium=position.highest_premium,
+                         trial_sl=round(position.trial_sl_price, 2),
+                         current_premium=position.current_premium,
+                         reason="Switched from -20% hard SL to TRIAL SL (5% buffer)")
                 
-                # 🎯 Log TRAILING SL UPDATE if price changed significantly
-                if position.last_trailing_sl_price != trailing_sl:
-                    old_sl = position.last_trailing_sl_price
-                    position.last_trailing_sl_price = trailing_sl
-                    position.trailing_sl_update_count += 1
+                logger.info(f"TRIAL_SL_ACTIVATED: {symbol} | Gain: {gain_percent:.2f}% | "
+                           f"Peak: ₹{position.highest_premium:.2f} | TRIAL SL: ₹{position.trial_sl_price:.2f}")
+            
+            # ============================================================
+            # PHASE 3: Update TRIAL SL as price moves up
+            # ============================================================
+            if is_trial_sl_enabled:
+                new_trial_sl = position.highest_premium * 0.95  # 5% below peak
+                
+                # Only update if new SL is higher than current
+                if position.trial_sl_price is None or new_trial_sl > position.trial_sl_price:
+                    old_trial_sl = position.trial_sl_price
+                    position.trial_sl_price = new_trial_sl
+                    position.trial_sl_update_count += 1
                     
-                    if old_sl is None or trailing_sl > old_sl:
-                        log_event("TRAILING_SL_UPDATED",
-                                 f"Trailing SL adjusted for {symbol} (PAPER MODE - simulated)",
+                    if old_trial_sl is not None:
+                        sl_increase = round(new_trial_sl - old_trial_sl, 2)
+                        log_event("TRIAL_SL_UPDATED",
+                                 f"🔺 TRIAL SL Updated for {symbol} (peak increased)",
                                  symbol=symbol,
-                                 update_count=position.trailing_sl_update_count,
-                                 old_sl=round(old_sl, 2) if old_sl else "None",
-                                 new_sl=round(trailing_sl, 2),
-                                 sl_increase=round(trailing_sl - old_sl, 2) if old_sl else None,
+                                 update_count=position.trial_sl_update_count,
+                                 old_trial_sl=round(old_trial_sl, 2),
+                                 new_trial_sl=round(new_trial_sl, 2),
+                                 sl_increase=sl_increase,
                                  peak_premium=position.highest_premium,
                                  current_premium=position.current_premium,
                                  gain_percent=round(gain_percent, 2))
+                        
+                        logger.debug(f"TRIAL_SL_UPDATED: {symbol} | TRIAL SL: ₹{old_trial_sl:.2f} → ₹{new_trial_sl:.2f} | "
+                                   f"Increase: ₹{sl_increase}")
+            
+            # ============================================================
+            # CHECK SL HIT: Determine effective SL and check if hit
+            # ============================================================
+            effective_sl = position.trial_sl_price if is_trial_sl_enabled else position.hard_sl_price
+            
+            if position.current_premium <= effective_sl:
+                # 🎯 SL HIT - Close position
+                sl_type = "TRIAL_SL" if is_trial_sl_enabled else "HARD_SL"
                 
-                # Check if current price hit trailing SL
-                if position.current_premium <= trailing_sl:
-                    logger.info(f"TRAILING_SL_HIT: {symbol} | Peak: ₹{position.highest_premium:.2f} | "
-                               f"SL: ₹{trailing_sl:.2f} | Current: ₹{position.current_premium:.2f}")
+                logger.warning(f"SL_HIT: {symbol} | Type: {sl_type} | SL: ₹{effective_sl:.2f} | "
+                             f"Current: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f}")
+                
+                pnl = self.close_position(
+                    symbol,
+                    position.current_premium,
+                    f"{sl_type}_HIT (SL: ₹{effective_sl:.2f})"
+                )
+                
+                if pnl:
+                    closed.append(pnl)
                     
-                    # Exit with profit
-                    pnl = self.close_position(
-                        symbol,
-                        position.current_premium,
-                        f"TRAILING_SL_EXIT (Locked {gain_percent:.1f}% profit, SL: ₹{trailing_sl:.2f})"
-                    )
-                    if pnl:
-                        closed.append(pnl)
-                        logger.info(f"PROFIT_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
-                                   f"Exit: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f} | "
-                                   f"Profit: ₹{pnl['pnl']:.2f} ({gain_percent:.1f}%) | "
-                                   f"TSL Updates: {position.trailing_sl_update_count}")
-                else:
-                    # Log trailing SL status (debug level - not shown in normal run)
-                    logger.debug(f"TRAILING_SL: {symbol} | Gain: {gain_percent:.1f}% | "
-                                f"Peak: ₹{position.highest_premium:.2f} | SL: ₹{trailing_sl:.2f} | "
-                                f"Current: ₹{position.current_premium:.2f}")
+                    log_event("SL_EXIT_EXECUTED",
+                             f"🛑 {sl_type} exit executed for {symbol}",
+                             symbol=symbol,
+                             sl_type=sl_type,
+                             entry_premium=position.entry_premium,
+                             exit_premium=position.current_premium,
+                             peak_premium=position.highest_premium,
+                             sl_price=round(effective_sl, 2),
+                             gain_percent=round(gain_percent, 2),
+                             pnl=round(pnl.get('pnl', 0), 2),
+                             trial_sl_updates=position.trial_sl_update_count if is_trial_sl_enabled else 0)
+                    
+                    logger.info(f"SL_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
+                               f"Exit: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f} | "
+                               f"PnL: ₹{pnl.get('pnl', 0):.2f} ({gain_percent:.2f}%) | "
+                               f"{sl_type} Updates: {position.trial_sl_update_count}")
+            else:
+                # Log current SL status
+                logger.debug(f"TRIAL_SL_CHECK: {symbol} | Gain: {gain_percent:.2f}% | "
+                           f"Peak: ₹{position.highest_premium:.2f} | "
+                           f"SL: ₹{effective_sl:.2f} | Current: ₹{position.current_premium:.2f}")
         
         return closed
     
@@ -979,6 +1048,10 @@ class OptionPositionMonitor:
             'portfolio_theta': portfolio_theta,
             'positions': [p.to_dict() for p in self.positions.values()]
         }
+    
+    def get_all_positions(self) -> list:
+        """Get all open positions as dictionaries for squareoff"""
+        return [p.to_dict() for p in self.positions.values()]
     
     def get_fake_move_detection_stats(self) -> Dict[str, Any]:
         """Get fake move detection statistics"""
@@ -1332,7 +1405,14 @@ class OptionPositionMonitor:
             if not self.positions_file.parent.exists():
                 self.positions_file.parent.mkdir(parents=True, exist_ok=True)
             
-            positions_list = [pos.to_dict() for pos in self.positions.values()]
+            # Filter out stuck intraday positions (prevent re-adding them after removal)
+            STUCK_INTRADAY_SYMBOLS = {'SONACOMS30DEC25490CE', 'INDIANB30DEC25780CE'}
+            
+            positions_list = [
+                pos.to_dict() 
+                for pos in self.positions.values() 
+                if pos.symbol not in STUCK_INTRADAY_SYMBOLS
+            ]
             positions_list.sort(key=lambda item: item.get('entry_time', ''))
             positions_data = {
                 'timestamp': datetime.now().isoformat(),
@@ -1364,7 +1444,14 @@ class OptionPositionMonitor:
                     if pos.get('symbol')
                 )
 
+            # Skip stuck intraday positions (from SL issues in PAPER mode)
+            STUCK_INTRADAY_SYMBOLS = {'SONACOMS30DEC25490CE', 'INDIANB30DEC25780CE'}
+            
             for symbol, pos_data in positions_iter:
+                # Skip stuck positions
+                if symbol in STUCK_INTRADAY_SYMBOLS:
+                    logger.info(f"POSITION_LOAD: SKIPPING stuck intraday position {symbol}")
+                    continue
                 entry_time_raw = pos_data.get('entry_time')
                 try:
                     entry_time = datetime.fromisoformat(entry_time_raw) if entry_time_raw else datetime.now()
@@ -1389,6 +1476,16 @@ class OptionPositionMonitor:
                 position.current_iv = pos_data.get('current_iv', 20.0)
                 position.unrealized_pnl = pos_data.get('unrealized_pnl', 0.0)
                 position.highest_premium = pos_data.get('highest_premium', position.highest_premium)
+                position.trailing_sl_activated = pos_data.get('trailing_sl_activated', False)
+                position.last_trailing_sl_price = pos_data.get('last_trailing_sl_price')
+                position.trailing_sl_activation_time = pos_data.get('trailing_sl_activation_time')
+                position.trailing_sl_update_count = pos_data.get('trailing_sl_update_count', 0)
+                # Restore TRIAL SL fields
+                position.hard_sl_price = pos_data.get('hard_sl_price', position.entry_premium * 0.8)
+                position.trial_sl_enabled = pos_data.get('trial_sl_enabled', False)
+                position.trial_sl_price = pos_data.get('trial_sl_price')
+                position.trial_sl_activation_time = pos_data.get('trial_sl_activation_time')
+                position.trial_sl_update_count = pos_data.get('trial_sl_update_count', 0)
                 last_updated_raw = pos_data.get('last_updated')
                 if last_updated_raw:
                     try:

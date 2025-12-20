@@ -743,7 +743,11 @@ def validate_buy_signal_with_analytics(alert: Dict[str, Any]) -> Dict[str, Any]:
             if hasattr(rate_limiter, 'get_statistics'):
                 stats = rate_limiter.get_statistics()
                 second_bucket = stats.get('second_bucket', {})
-                available_tokens = second_bucket.get('tokens', 1)
+                # FIX: Check for BOTH critical_tokens and general_tokens (not the non-existent 'tokens' key)
+                # This is for PriorityRateLimiter which splits capacity between critical and general
+                critical_tokens = second_bucket.get('critical_tokens', 3)
+                general_tokens = second_bucket.get('general_tokens', 4)
+                available_tokens = critical_tokens + general_tokens  # Total available for all priorities
                 
                 # If <3 tokens available, skip analytics to reserve tokens for order placement
                 if available_tokens < 3:
@@ -1612,12 +1616,61 @@ def handle_buy_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         # Pre-allocate capital before order placement (need to track for rollback)
         trading_state.allocate_capital(symbol, required_capital)
         
-        order = trading_state.broker.place_order_safe(
-            symbol=symbol,
-            action="BUY",
-            quantity=quantity,
-            price=0  # Market order
-        )
+        # 🔄 RETRY LOGIC FOR BROKER API ERRORS
+        max_retries = 5
+        retry_delays = [1, 2, 4, 8, 16]  # Exponential backoff in seconds
+        last_error = None
+        
+        for attempt in range(max_retries):
+            order = trading_state.broker.place_order_safe(
+                symbol=symbol,
+                action="BUY",
+                quantity=quantity,
+                price=0  # Market order
+            )
+            
+            if order:
+                # ✅ Order placed successfully
+                log_event("ORDER_PLACED_SUCCESS", f"{symbol} order placed (attempt {attempt + 1}/{max_retries})",
+                         symbol=symbol, attempt=attempt + 1)
+                break
+            
+            # ❌ Order placement failed - check if it's retryable
+            if attempt < max_retries - 1:
+                # Get error details
+                actual_reason = "Broker API call failed"
+                if (hasattr(trading_state.broker, 'last_order_error') and 
+                    trading_state.broker.last_order_error):
+                    actual_reason = trading_state.broker.last_order_error
+                
+                # Check if this is a retryable error (broker API issue, not fundamental problem)
+                is_retryable = (
+                    'NoneType' in actual_reason or  # Malformed response
+                    'API' in actual_reason or  # Generic API error
+                    'timeout' in actual_reason.lower()  # Timeout
+                )
+                
+                if is_retryable:
+                    wait_time = retry_delays[attempt]
+                    log_event("ORDER_RETRY_SCHEDULED", f"{symbol} will retry in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+                             symbol=symbol, wait_seconds=wait_time, actual_error=actual_reason)
+                    
+                    # Wait before retry with exponential backoff
+                    import time
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Not retryable - stop trying
+                    last_error = actual_reason
+                    log_event("ORDER_NOT_RETRYABLE", f"{symbol} failed with non-retryable error: {actual_reason}",
+                             symbol=symbol, error=actual_reason)
+                    break
+            else:
+                # Max retries exhausted
+                last_error = actual_reason if 'actual_reason' in locals() else "Max retries exhausted"
+                log_event("ORDER_RETRIES_EXHAUSTED", f"{symbol} failed after {max_retries} attempts",
+                         symbol=symbol, final_error=last_error)
+                break
         
         if not order:
             # 🔧 FIX GAP-001: Release capital if order placement fails
@@ -2071,12 +2124,61 @@ def handle_sell_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             }
         
         # Place SELL order
-        order = trading_state.broker.place_order_safe(
-            symbol=symbol,
-            action="SELL",
-            quantity=position["quantity"],
-            price=0  # Market order
-        )
+        # 🔄 RETRY LOGIC FOR BROKER API ERRORS
+        max_retries = 5
+        retry_delays = [1, 2, 4, 8, 16]  # Exponential backoff in seconds
+        last_error = None
+        
+        for attempt in range(max_retries):
+            order = trading_state.broker.place_order_safe(
+                symbol=symbol,
+                action="SELL",
+                quantity=position["quantity"],
+                price=0  # Market order
+            )
+            
+            if order:
+                # ✅ Order placed successfully
+                log_event("ORDER_PLACED_SUCCESS", f"{symbol} SELL order placed (attempt {attempt + 1}/{max_retries})",
+                         symbol=symbol, attempt=attempt + 1)
+                break
+            
+            # ❌ Order placement failed - check if it's retryable
+            if attempt < max_retries - 1:
+                # Get error details
+                actual_reason = "Broker API call failed"
+                if (hasattr(trading_state.broker, 'last_order_error') and 
+                    trading_state.broker.last_order_error):
+                    actual_reason = trading_state.broker.last_order_error
+                
+                # Check if this is a retryable error (broker API issue, not fundamental problem)
+                is_retryable = (
+                    'NoneType' in actual_reason or  # Malformed response
+                    'API' in actual_reason or  # Generic API error
+                    'timeout' in actual_reason.lower()  # Timeout
+                )
+                
+                if is_retryable:
+                    wait_time = retry_delays[attempt]
+                    log_event("ORDER_RETRY_SCHEDULED", f"{symbol} SELL will retry in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+                             symbol=symbol, wait_seconds=wait_time, actual_error=actual_reason)
+                    
+                    # Wait before retry with exponential backoff
+                    import time
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Not retryable - stop trying
+                    last_error = actual_reason
+                    log_event("ORDER_NOT_RETRYABLE", f"{symbol} SELL failed with non-retryable error: {actual_reason}",
+                             symbol=symbol, error=actual_reason)
+                    break
+            else:
+                # Max retries exhausted
+                last_error = actual_reason if 'actual_reason' in locals() else "Max retries exhausted"
+                log_event("ORDER_RETRIES_EXHAUSTED", f"{symbol} SELL failed after {max_retries} attempts",
+                         symbol=symbol, final_error=last_error)
+                break
         
         if not order:
             # 🔍 RETRIEVE ACTUAL ERROR REASON & CLASSIFY IT
@@ -2201,7 +2303,11 @@ def validate_sell_signal_with_analytics(alert: Dict[str, Any], position: Dict[st
             if hasattr(rate_limiter, 'get_statistics'):
                 stats = rate_limiter.get_statistics()
                 second_bucket = stats.get('second_bucket', {})
-                available_tokens = second_bucket.get('tokens', 1)
+                # FIX: Check for BOTH critical_tokens and general_tokens (not the non-existent 'tokens' key)
+                # This is for PriorityRateLimiter which splits capacity between critical and general
+                critical_tokens = second_bucket.get('critical_tokens', 3)
+                general_tokens = second_bucket.get('general_tokens', 4)
+                available_tokens = critical_tokens + general_tokens  # Total available for all priorities
                 
                 # If <3 tokens available, skip analytics to reserve tokens for order placement
                 if available_tokens < 3:
@@ -2952,13 +3058,24 @@ def square_off_all_positions():
                          context={'symbol': position.get('symbol')})
                 errors.append(error_msg)
         
-        # 🔧 CRITICAL FIX: Save closed positions to disk to prevent re-entry
+        # 🔧 CRITICAL FIX: Remove closed positions from disk and save cleaned state
         try:
+            # Remove all CLOSED positions from active_positions before saving
+            symbols_to_remove = [sym for sym, pos in trading_state.active_positions.items() 
+                                if pos.get('status') == 'CLOSED']
+            
+            for sym in symbols_to_remove:
+                del trading_state.active_positions[sym]
+                log_event("SQUARE_OFF_POSITION_REMOVED", f"Removed closed position from tracking",
+                         symbol=sym)
+            
+            # Save cleaned positions (with closed ones removed)
             trading_state.save_positions()
-            log_event("SQUARE_OFF_POSITIONS_SAVED", f"Closed positions persisted to disk")
+            log_event("SQUARE_OFF_POSITIONS_CLEANED", f"Closed positions removed and saved",
+                     removed_count=len(symbols_to_remove))
         except Exception as save_error:
-            log_error("SQUARE_OFF_SAVE_ERROR", f"Failed to save positions after square-off: {str(save_error)}")
-            errors.append(f"Failed to persist closed positions to disk: {str(save_error)}")
+            log_error("SQUARE_OFF_SAVE_ERROR", f"Failed to clean positions after square-off: {str(save_error)}")
+            errors.append(f"Failed to clean closed positions from disk: {str(save_error)}")
         
         log_event("SQUARE_OFF_COMPLETE", 
                  f"Square-off complete: {closed_count} positions closed, {logged_count} trades logged, P&L: ₹{total_pnl:.2f}",
