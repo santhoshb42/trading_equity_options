@@ -1,5 +1,5 @@
 //@version=5
-indicator("Sniper v7.11 – Smart Hybrid Gainer Engine (9:30–10:30)", overlay=true)
+indicator("Sniper v7.13 – Smart Hybrid Gainer Engine (9:30–10:30)", overlay=true)
 
 // INPUTS
 emaShort = input.int(9,  "EMA Short")
