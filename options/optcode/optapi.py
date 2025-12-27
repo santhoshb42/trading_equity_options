@@ -28,6 +28,14 @@ from .optsignalvalidator import (
 )
 from .optlogging import logger, log_alert, log_signal_validation, log_event
 
+# Entry filter engine integration
+try:
+    from .entry_filter_engine import get_entry_filter
+    HAS_ENTRY_FILTER = True
+except ImportError:
+    HAS_ENTRY_FILTER = False
+    get_entry_filter = None
+
 # Learning engine integration
 try:
     from .options_learning_engine import SymbolPerformanceTracker
@@ -83,10 +91,20 @@ def create_options_api_app():
         'signal_filter': get_options_signal_filter(),
         'instrument_manager': get_instrument_manager(),
         'learning_engine': learning_engine,
+        'entry_filter': None,  # Will be initialized below
         'alert_manager': None,  # Will be set by main bot
         'active': False,
         'startup_time': None
     }
+    
+    # Initialize entry filter if available
+    if HAS_ENTRY_FILTER:
+        try:
+            state['entry_filter'] = get_entry_filter()
+            logger.info("API: ENTRY_FILTER_INITIALIZED")
+        except Exception as e:
+            logger.warning(f"API: ENTRY_FILTER_INIT_FAILED | {str(e)}")
+            state['entry_filter'] = None
     
     # Initialize alert manager if available
     if ALERT_SYSTEM_AVAILABLE:
@@ -707,21 +725,44 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 
                 logger.info(f"SENTIMENT_CHECK: {underlying} | entry_ok={entry_ok} | {entry_reason}")
                 
-                # IMPORTANT: Make sentiment filter non-blocking
-                # Log the result but don't reject the alert due to sentiment
-                # This allows trading during market hours when PCR/OI data is available
-                # but gracefully continues when data is not available (paper trading, outside hours)
+                # HARD BLOCKING: Reject entries if sentiment conditions are poor
+                # This prevents trading during unfavorable market conditions (high PCR, no OI buildup, etc)
                 if not entry_ok:
-                    logger.warning(f"ALERT_PROCESS: SENTIMENT_WARNING | symbol={symbol} | {entry_reason} | continuing anyway (sentiment non-blocking)")
-                    # Don't return/reject - continue with the trade
+                    # Distinguish between "data not ready" vs "actual poor conditions"
+                    if "PCR data not available" in entry_reason or "PCR=None" in entry_reason:
+                        # Data temporarily unavailable (market open, data lag) - still reject
+                        # to be conservative and wait for proper market data
+                        logger.error(f"ALERT_PROCESS: REJECTED_NO_DATA | symbol={symbol} | {entry_reason}")
+                        return {
+                            'symbol': symbol,
+                            'timestamp': timestamp,
+                            'status': 'rejected',
+                            'reason': f'PCR data not available - waiting for market data'
+                        }
+                    else:
+                        # Actual poor market condition (PCR too extreme, no buildup, etc)
+                        logger.error(f"ALERT_PROCESS: REJECTED_SENTIMENT | symbol={symbol} | {entry_reason}")
+                        return {
+                            'symbol': symbol,
+                            'timestamp': timestamp,
+                            'status': 'rejected',
+                            'reason': f'Poor market conditions: {entry_reason}'
+                        }
                 
-                if SentimentConfig.LOG_SENTIMENT_CHECKS and entry_ok:
+                # Entry passed sentiment check - log the good conditions
+                if SentimentConfig.LOG_SENTIMENT_CHECKS:
                     sentiment_data = sentiment_engine.get_symbol_sentiment(underlying)
-                    logger.info(f"SENTIMENT_DATA: {underlying} | pcr={sentiment_data.get('pcr')} | buildup={sentiment_data.get('oi_long_buildup')}")
+                    logger.info(f"SENTIMENT_DATA: {underlying} | pcr={sentiment_data.get('pcr')} | buildup={sentiment_data.get('oi_long_buildup')} | entry_approved")
             
             except Exception as e:
-                logger.warning(f"SENTIMENT_CHECK: ERROR | {underlying} | {str(e)} | continuing anyway")
-                # Don't block on sentiment errors - continue with trade
+                # On sentiment check errors, be conservative and reject the trade
+                logger.error(f"SENTIMENT_CHECK: ERROR | {underlying} | {str(e)} | rejecting trade for safety")
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Sentiment check error: {str(e)}'
+                }
         
         # Fetch option chain
         available_capital = OptionsCapitalConfig.get_available_capital(0)
@@ -735,6 +776,21 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.debug(f"ALERT_PROCESS: CAPITAL_OK | available=₹{available_capital:.2f}")
+        
+        # ========================================================================
+        # CHECK DAILY TRADES LIMIT (HARDCODED 30 TRADES MAX PER DAY)
+        # ========================================================================
+        daily_trade_count = OptionsCapitalConfig.get_daily_trade_count()
+        if daily_trade_count >= OptionsCapitalConfig.MAX_TRADES_PER_DAY:
+            logger.warning(f"ALERT_PROCESS: DAILY_LIMIT_REACHED | symbol={symbol} | trades_today={daily_trade_count} | max={OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': f'Daily trade limit reached ({daily_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY})'
+            }
+        
+        logger.debug(f"ALERT_PROCESS: DAILY_LIMIT_OK | trades_today={daily_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
         
         # Check position slots
         summary = state['monitor'].get_position_summary()
@@ -766,6 +822,182 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.debug(f"ALERT_PROCESS: CHAIN_OK | contracts={len(chain.contracts)} | atm={chain.atm_strike}")
         
+        # NEW: Comprehensive Entry Filter (PCR + Momentum + Trend + IV + Market Hours + DTE)
+        if state['entry_filter']:
+            try:
+                # REAL DATA FETCH FROM BROKER - No bullshit fallback
+                from .technical_analyzer import get_technical_analyzer
+                from .market_sentiment import get_market_sentiment
+                
+                # Initialize data collection
+                broker = state['broker']
+                market_data = {}
+                fetch_results = {}
+                
+                # 1. MARKET SENTIMENT (PCR + OI)
+                try:
+                    sentiment_engine = get_market_sentiment(broker)
+                    sentiment = sentiment_engine.get_symbol_sentiment(underlying)
+                    market_data['pcr'] = sentiment.get('pcr')
+                    market_data['oi_buildup'] = sentiment.get('oi_long_buildup')
+                    fetch_results['sentiment'] = 'OK' if market_data['pcr'] else 'NO_DATA'
+                    if market_data['pcr']:
+                        logger.debug(f"ENTRY_FILTER: PCR fetched | {underlying} | PCR={market_data['pcr']:.2f}")
+                except Exception as e:
+                    fetch_results['sentiment'] = f'ERROR: {str(e)[:50]}'
+                    market_data['pcr'] = None
+                    market_data['oi_buildup'] = None
+                    logger.warning(f"ENTRY_FILTER: PCR fetch failed | {underlying} | {str(e)}")
+                
+                # 2. TECHNICAL INDICATORS (RSI, MACD, MA)
+                try:
+                    tech_analyzer = get_technical_analyzer(broker, underlying)
+                    if tech_analyzer:
+                        # RSI
+                        try:
+                            market_data['rsi_15m'] = tech_analyzer.get_rsi(15)
+                            if market_data['rsi_15m']:
+                                logger.debug(f"ENTRY_FILTER: RSI fetched | {underlying} | RSI={market_data['rsi_15m']:.2f}")
+                                fetch_results['rsi'] = 'OK'
+                            else:
+                                fetch_results['rsi'] = 'NO_DATA'
+                        except Exception as e:
+                            fetch_results['rsi'] = f'ERROR: {str(e)[:30]}'
+                            market_data['rsi_15m'] = None
+                            logger.debug(f"ENTRY_FILTER: RSI error | {underlying} | {str(e)}")
+                        
+                        # MACD
+                        try:
+                            market_data['macd_15m'] = tech_analyzer.get_macd(15)
+                            if market_data['macd_15m']:
+                                logger.debug(f"ENTRY_FILTER: MACD fetched | {underlying}")
+                                fetch_results['macd'] = 'OK'
+                            else:
+                                fetch_results['macd'] = 'NO_DATA'
+                        except Exception as e:
+                            fetch_results['macd'] = f'ERROR: {str(e)[:30]}'
+                            market_data['macd_15m'] = None
+                            logger.debug(f"ENTRY_FILTER: MACD error | {underlying} | {str(e)}")
+                        
+                        # MA 10 (short)
+                        try:
+                            market_data['ma_short'] = tech_analyzer.get_ma(10, 60)
+                            if market_data['ma_short']:
+                                logger.debug(f"ENTRY_FILTER: MA10 fetched | {underlying} | MA10={market_data['ma_short']:.2f}")
+                                fetch_results['ma_short'] = 'OK'
+                            else:
+                                fetch_results['ma_short'] = 'NO_DATA'
+                        except Exception as e:
+                            fetch_results['ma_short'] = f'ERROR: {str(e)[:30]}'
+                            market_data['ma_short'] = None
+                            logger.debug(f"ENTRY_FILTER: MA10 error | {underlying} | {str(e)}")
+                        
+                        # MA 20 (long)
+                        try:
+                            market_data['ma_long'] = tech_analyzer.get_ma(20, 60)
+                            if market_data['ma_long']:
+                                logger.debug(f"ENTRY_FILTER: MA20 fetched | {underlying} | MA20={market_data['ma_long']:.2f}")
+                                fetch_results['ma_long'] = 'OK'
+                            else:
+                                fetch_results['ma_long'] = 'NO_DATA'
+                        except Exception as e:
+                            fetch_results['ma_long'] = f'ERROR: {str(e)[:30]}'
+                            market_data['ma_long'] = None
+                            logger.debug(f"ENTRY_FILTER: MA20 error | {underlying} | {str(e)}")
+                        
+                        # Slope
+                        try:
+                            market_data['slope'] = tech_analyzer.get_ma_slope(10, 60)
+                            if market_data['slope'] is not None:
+                                logger.debug(f"ENTRY_FILTER: Slope fetched | {underlying} | slope={market_data['slope']:.4f}")
+                                fetch_results['slope'] = 'OK'
+                            else:
+                                fetch_results['slope'] = 'NO_DATA'
+                        except Exception as e:
+                            fetch_results['slope'] = f'ERROR: {str(e)[:30]}'
+                            market_data['slope'] = None
+                    else:
+                        fetch_results['tech'] = 'ANALYZER_NOT_AVAILABLE'
+                        market_data['rsi_15m'] = None
+                        market_data['macd_15m'] = None
+                        market_data['ma_short'] = None
+                        market_data['ma_long'] = None
+                        market_data['slope'] = None
+                except Exception as e:
+                    fetch_results['tech'] = f'ERROR: {str(e)[:50]}'
+                    market_data['rsi_15m'] = None
+                    market_data['macd_15m'] = None
+                    market_data['ma_short'] = None
+                    market_data['ma_long'] = None
+                    market_data['slope'] = None
+                    logger.warning(f"ENTRY_FILTER: Tech analyzer error | {underlying} | {str(e)}")
+                
+                # 3. OPTION CHAIN DATA (IV, DTE)
+                try:
+                    if hasattr(chain, 'get_iv_percentile'):
+                        market_data['iv_percentile'] = chain.get_iv_percentile()
+                        if market_data['iv_percentile'] is not None:
+                            logger.debug(f"ENTRY_FILTER: IV fetched | {underlying} | IV={market_data['iv_percentile']:.1f}%")
+                            fetch_results['iv'] = 'OK'
+                        else:
+                            fetch_results['iv'] = 'NO_DATA'
+                    else:
+                        market_data['iv_percentile'] = None
+                        fetch_results['iv'] = 'METHOD_NOT_AVAILABLE'
+                except Exception as e:
+                    fetch_results['iv'] = f'ERROR: {str(e)[:30]}'
+                    market_data['iv_percentile'] = None
+                    logger.debug(f"ENTRY_FILTER: IV error | {underlying} | {str(e)}")
+                
+                try:
+                    if hasattr(chain, 'get_days_to_expiry'):
+                        market_data['days_to_expiry'] = chain.get_days_to_expiry()
+                        if market_data['days_to_expiry'] is not None:
+                            logger.debug(f"ENTRY_FILTER: DTE fetched | {underlying} | DTE={market_data['days_to_expiry']}")
+                            fetch_results['dte'] = 'OK'
+                        else:
+                            fetch_results['dte'] = 'NO_DATA'
+                    else:
+                        market_data['days_to_expiry'] = None
+                        fetch_results['dte'] = 'METHOD_NOT_AVAILABLE'
+                except Exception as e:
+                    fetch_results['dte'] = f'ERROR: {str(e)[:30]}'
+                    market_data['days_to_expiry'] = None
+                    logger.debug(f"ENTRY_FILTER: DTE error | {underlying} | {str(e)}")
+                
+                # Log what we got
+                data_available = sum(1 for v in market_data.values() if v is not None)
+                logger.info(f"ENTRY_FILTER: DATA_FETCH | {underlying} | collected {data_available}/9 data points | status: {fetch_results}")
+                
+                # Build entry signal
+                entry_signal = {
+                    'symbol': symbol,
+                    'action': action,
+                    'confidence': float(alert.get('confidence', 0.5))
+                }
+                
+                # Validate entry with whatever data we have
+                is_entry_valid, entry_reason, entry_details = state['entry_filter'].validate(entry_signal, market_data)
+                
+                if not is_entry_valid:
+                    logger.warning(f"ENTRY_FILTER: REJECTED | symbol={symbol} | action={action} | reason={entry_reason} | data_collected={data_available}")
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': entry_reason,
+                        'filter_details': entry_details,
+                        'data_fetch_status': fetch_results
+                    }
+                
+                validators_passed = entry_details.get('validators_passed', 0)
+                logger.info(f"ENTRY_FILTER: PASSED | symbol={symbol} | action={action} | validators_passed={validators_passed} | data_collected={data_available}")
+            
+            except Exception as e:
+                # Log error but continue (don't block entry on filter error)
+                logger.error(f"ENTRY_FILTER: EXCEPTION | symbol={symbol} | {str(e)} | continuing anyway")
+                # Don't reject - let the trade proceed if other checks pass
+        
         # Get ATM contracts with offset
         # Use alert's price as current price for ATM calculation (already extracted above)
         contract_type = processed['recommended_contract']
@@ -786,6 +1018,19 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         selected_contract = ce if contract_type == 'CE' else pe
         
         logger.debug(f"ALERT_PROCESS: SELECTED | contract={selected_contract.symbol} | type={contract_type} | ltp=₹{selected_contract.ltp:.2f}")
+        
+        # Check Liquidity (Minimum OI threshold)
+        if SentimentConfig.CHECK_MIN_OI_ON_ENTRY:
+            if selected_contract.open_interest < SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:
+                logger.warning(f"ALERT_PROCESS: LIQUIDITY_FAILED | symbol={symbol} | contract={selected_contract.symbol} | oi={selected_contract.open_interest:,.0f} < {SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:,.0f}")
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Insufficient liquidity: OI={selected_contract.open_interest:,.0f} < {SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:,.0f}'
+                }
+            else:
+                logger.debug(f"ALERT_PROCESS: LIQUIDITY_OK | contract={selected_contract.symbol} | oi={selected_contract.open_interest:,.0f}")
         
         # Check Greeks constraints
         greeks_valid, greeks_msg = OptionsSignalValidator.check_greeks_constraints(
@@ -910,6 +1155,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.info(f"ALERT_PROCESS: ORDER_PLACED | order_id={order_id}")
         
+        # Increment daily trade counter
+        new_trade_count = OptionsCapitalConfig.increment_daily_trade_count()
+        logger.info(f"DAILY_TRADE_COUNT: Incremented to {new_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
+        
         # Send order filled/success alert
         if state['alert_manager']:
             try:
@@ -925,7 +1174,15 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             except Exception as e:
                 logger.warning(f"ORDER_FILLED_ALERT: FAILED | {str(e)}")
         
-        # Add position to monitor
+        # Add position to monitor with entry Greeks for ML learning
+        entry_greeks_data = {
+            'delta': selected_contract.delta,
+            'gamma': selected_contract.gamma,
+            'theta': selected_contract.theta,
+            'vega': selected_contract.vega,
+            'iv': selected_contract.iv
+        }
+        
         state['monitor'].add_position(
             symbol=selected_contract.symbol,
             underlying=underlying,
@@ -936,7 +1193,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             quantity=quantity,
             entry_premium=selected_contract.ltp,
             order_id=order_id,
-            underlying_alert_price=alert_price if alert_price > 0 else None
+            underlying_alert_price=alert_price if alert_price > 0 else None,
+            entry_greeks=entry_greeks_data  # ADDED: Pass entry Greeks
         )
         
         logger.info(f"ALERT_PROCESS: SUCCESS | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id}")

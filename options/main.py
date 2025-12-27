@@ -36,7 +36,7 @@ from optcode.optconfig import (
     get_optconfig_summary, validate_optconfig, OptionsCapitalConfig
 )
 from optcode.angelone_options import get_options_broker
-from optcode.optmonitor import get_option_monitor
+from optcode.optmonitor import get_option_monitor, call_with_timeout
 from optcode.optapi import get_options_api_server
 from optcode.optlogging import logger, log_event, log_state, print_session_summary
 from optcode.instrument_manager import get_instrument_manager
@@ -309,6 +309,9 @@ class OptionsTradingBot:
                     'last_cleanup': datetime.now().isoformat()
                 }, f, indent=2)
             
+            # RUN EOD ML LEARNING UPDATE (NEW)
+            self._run_eod_learning_update()
+            
             # Remove stale positions from active file
             active_positions = [p for p in positions if p not in stale_positions]
             with open(positions_file, 'w') as f:
@@ -321,6 +324,44 @@ class OptionsTradingBot:
         except Exception as e:
             logger.error(f"EOD_CLEANUP: FAILED | {str(e)}")
             print(f"   ❌ Cleanup failed: {str(e)}")
+    
+    def _run_eod_learning_update(self):
+        """Run end-of-day ML learning update after market close"""
+        try:
+            logger.info("EOD_LEARNING: START | Analyzing daily trades for ML patterns")
+            print(f"\n🤖 EOD Learning: Analyzing trades for ML pattern updates...")
+            
+            # Import ML integration
+            try:
+                from optcode.opt_ml_integration import get_ml_integration
+                ml_integration = get_ml_integration()
+            except ImportError:
+                logger.warning("EOD_LEARNING: ML_MODULES_NOT_AVAILABLE | Skipping")
+                print("   ⚠️ ML modules not available - skipping learning update")
+                return
+            
+            # Run EOD learning update with daily trades
+            # This analyzes entry/exit Greeks patterns from today's trades
+            learning_results = ml_integration.run_eod_learning_update()
+            
+            if learning_results:
+                logger.info(f"EOD_LEARNING: SUCCESS | {json.dumps(learning_results, indent=2)}")
+                print(f"   ✅ Learning update completed")
+                print(f"   📊 Analyzed {learning_results.get('daily_trades', 0)} trades")
+                print(f"   🎯 Win rate: {learning_results.get('win_rate', 0):.1f}%")
+                
+                # Log key insights
+                if learning_results.get('top_winners'):
+                    print(f"   ⭐ Best performers: {', '.join(learning_results['top_winners'][:3])}")
+                if learning_results.get('improvement_areas'):
+                    print(f"   📈 Areas for improvement: {', '.join(learning_results['improvement_areas'][:2])}")
+            else:
+                logger.warning("EOD_LEARNING: FAILED | No results returned")
+                print("   ⚠️ Learning update returned no results")
+        
+        except Exception as e:
+            logger.error(f"EOD_LEARNING: ERROR | {str(e)}")
+            print(f"   ❌ Learning update failed: {str(e)}")
     
     def _record_closed_positions_to_learning(self, closed_positions_list, exit_reason):
         """Record closed positions to learning engine for ML training"""
@@ -371,10 +412,20 @@ class OptionsTradingBot:
                     ltps_refreshed = False
                     if len(self.monitor.positions) > 0:
                         try:
-                            refresh_stats = self.monitor.refresh_position_ltps()
-                            if refresh_stats['ltps_updated'] > 0:
+                            # CRITICAL FIX: Add timeout to prevent monitoring thread from hanging
+                            # If refresh_position_ltps takes > 60 seconds, skip this cycle and continue
+                            refresh_stats = call_with_timeout(
+                                self.monitor.refresh_position_ltps,
+                                timeout_seconds=60.0  # 60-second timeout for entire LTP refresh (37 positions * ~1.5s per position)
+                            )
+                            
+                            if refresh_stats and refresh_stats.get('ltps_updated', 0) > 0:
                                 ltps_refreshed = True
                                 logger.debug(f"POSITION_MONITOR: LTP_REFRESH | updated={refresh_stats['ltps_updated']}/{len(self.monitor.positions)}")
+                            elif refresh_stats is None:
+                                logger.error("POSITION_MONITOR: LTP_REFRESH_TIMEOUT | skipping this cycle")
+                                time.sleep(current_interval)
+                                continue
                             
                             # Also refresh candle data for fake move detection
                             candle_stats = self.monitor.refresh_underlying_candles()
@@ -439,6 +490,32 @@ class OptionsTradingBot:
                                     )
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: PROFIT_ALERT_FAILED | {str(e)}")
+                    
+                    # ⭐ NEW: Check momentum reversal (EARLY EXIT to prevent hard SL)
+                    # This should run BEFORE check_stop_losses to catch reversals early
+                    momentum_exits = self.monitor.check_momentum_reversal()
+                    if momentum_exits:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(momentum_exits, "MOMENTUM_REVERSAL")
+                        
+                        for pos in momentum_exits:
+                            print(f"   ⚡ Momentum reversal exit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
+                            logger.warning(f"POSITION_MONITOR: MOMENTUM_EXIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'Momentum reversal (smart exit)'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: MOMENTUM_ALERT_FAILED | {str(e)}")
                     
                     # Check stop losses
                     stopped = self.monitor.check_stop_losses()

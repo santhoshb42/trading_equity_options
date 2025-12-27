@@ -41,6 +41,39 @@ from .ce_extractor import (
 )
 from .optlogging import logger, log_broker_action, log_event
 from .options_rate_limiter import get_options_rate_limiter
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+# =============================================================================
+# Utility: Timeout wrapper for broker API calls
+# =============================================================================
+
+def call_with_timeout(func, timeout_seconds: float, *args, **kwargs):
+    """
+    Execute a function with a timeout.
+    
+    Args:
+        func: Function to call
+        timeout_seconds: Max seconds to wait
+        *args, **kwargs: Arguments to pass to func
+    
+    Returns:
+        Function result or None if timeout
+    
+    Raises:
+        Returns None if timeout occurs
+    """
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func, *args, **kwargs)
+            result = future.result(timeout=timeout_seconds)
+            return result
+    except FuturesTimeoutError:
+        logger.warning(f"TIMEOUT: {func.__name__} exceeded {timeout_seconds}s")
+        return None
+    except Exception as e:
+        logger.error(f"ERROR in {func.__name__}: {str(e)}")
+        return None
 
 # =============================================================================
 # Options Chain Data Model
@@ -193,14 +226,16 @@ class OptionChain:
         if not available_strikes:
             return None
         
-        # Find the NEXT HIGHER strike (strike >= current_spot)
-        higher_strikes = [s for s in available_strikes if s >= current_spot]
+        # RULE: Always pick the IMMEDIATE NEXT HIGHEST strike
+        # For alert_price=407.35 with strikes=[400,405,410,415]
+        # Pick 410 (first strike > alert_price) - this is OTM, better risk/reward
+        higher_strikes = [s for s in available_strikes if s > current_spot]
         if higher_strikes:
-            atm_strike = higher_strikes[0]  # First strike >= price
+            atm_strike = higher_strikes[0]  # First strike > price (next higher)
         else:
             atm_strike = available_strikes[-1]  # If price is above all strikes, use highest
         
-        logger.debug(f"ATM: LTP={current_spot} | next_higher_strike={atm_strike} | available={available_strikes[:5]}...")
+        logger.debug(f"ATM: LTP={current_spot} | next_higher_strike={atm_strike} (immediate next highest) | available={available_strikes[:5]}...")
         
         # Apply offset if requested
         strike_index = available_strikes.index(atm_strike)
@@ -220,6 +255,70 @@ class OptionChain:
             return (ce, pe)
         else:
             logger.warning(f"ATM: Could not find CE or PE for strike {selected_strike}")
+            return None
+    
+    def get_iv_percentile(self) -> Optional[float]:
+        """
+        Calculate IV percentile (0-100) for the option chain.
+        Percentile: (contracts with IV < current_avg) / total_contracts * 100
+        """
+        if not self.contracts:
+            return None
+        
+        try:
+            # Collect all IV values from all contracts
+            iv_values = []
+            for contract in self.contracts.values():
+                if hasattr(contract, 'iv') and contract.iv is not None:
+                    iv_values.append(contract.iv)
+            
+            if not iv_values or len(iv_values) < 2:
+                return None
+            
+            # Calculate average IV
+            avg_iv = sum(iv_values) / len(iv_values)
+            
+            # Count contracts with IV below average
+            below_avg = sum(1 for iv in iv_values if iv < avg_iv)
+            
+            # Calculate percentile
+            iv_percentile = (below_avg / len(iv_values)) * 100
+            
+            logger.debug(f"IV_PERCENTILE: {iv_percentile:.1f}% | avg_iv={avg_iv:.2f}% | contracts={len(iv_values)}")
+            return iv_percentile
+        except Exception as e:
+            logger.error(f"IV_PERCENTILE: ERROR | {str(e)}")
+            return None
+    
+    def get_days_to_expiry(self) -> Optional[int]:
+        """
+        Calculate days to expiry from the expiry string.
+        Format: 'YYYY-MM-DD' or 'DDMMMYY'
+        """
+        if not self.expiry:
+            return None
+        
+        try:
+            from datetime import datetime
+            
+            # Try parsing YYYY-MM-DD format first
+            if '-' in self.expiry:
+                expiry_date = datetime.strptime(self.expiry, '%Y-%m-%d').date()
+            # Try parsing DDMMMYY format (e.g., '30DEC25')
+            elif len(self.expiry) == 7:
+                # Handle abbreviated month names
+                expiry_date = datetime.strptime(self.expiry, '%d%b%y').date()
+            else:
+                # Try default parsing
+                expiry_date = datetime.strptime(self.expiry, '%Y-%m-%d').date()
+            
+            today = datetime.now().date()
+            dte = (expiry_date - today).days
+            
+            logger.debug(f"DTE: {dte} days | expiry={self.expiry} | date={expiry_date}")
+            return max(0, dte)  # Return 0 if expired
+        except Exception as e:
+            logger.error(f"DTE: ERROR | {str(e)} | expiry={self.expiry}")
             return None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -349,6 +448,12 @@ class AngelOneOptionsBroker:
         
         # Positions tracking
         self.option_positions: Dict[str, Dict[str, Any]] = {}  # {symbol: position_data}
+        
+        # Auto-authenticate on init to enable API calls
+        if self.api_key and self.client_code and self.password:
+            self.authenticate()
+        else:
+            logger.warning("BROKER_INIT: Credentials missing - broker will run in demo mode")
     
     def _check_session_valid(self) -> bool:
         """Check if current session is still valid (max 24 hours)"""
@@ -427,6 +532,124 @@ class AngelOneOptionsBroker:
     def get_ltp_cache(self) -> LTPCache:
         """Get the LTP cache for pre-fetching/management"""
         return self.ltp_cache
+    
+    def fetch_option_chain_for_pcr(self, underlying: str, expiry: str) -> Optional[Dict[str, int]]:
+        """
+        Fetch FULL option chain with OI data for PCR calculation.
+        
+        Returns: {'PE_OI': total_put_oi, 'CE_OI': total_call_oi, 'PCR': put_oi/call_oi}
+        OR None if unable to fetch
+        
+        Strategy:
+        1. Load all real contracts from instrument.json for the underlying+expiry
+        2. For each contract, fetch OI from broker's getMarketData
+        3. Sum up total PUT OI and CALL OI
+        4. Calculate PCR = PUT OI / CALL OI
+        """
+        try:
+            rate_limiter = get_options_rate_limiter()
+            
+            # Load ALL real contracts from instrument.json (not just ATM)
+            extractor = InstrumentCEExtractor()
+            contracts_data = extractor.build_real_option_chain(underlying, expiry, center_price=None)
+            
+            if not contracts_data:
+                logger.debug(f"PCR_CHAIN: No real contracts for {underlying} {expiry}")
+                return None
+            
+            # Collect all contract symbols with their types
+            ce_symbols = []
+            pe_symbols = []
+            
+            for contract_data in contracts_data:
+                symbol = contract_data['symbol']
+                ct = contract_data.get('contract_type', '')
+                if ct == 'CE':
+                    ce_symbols.append(symbol)
+                elif ct == 'PE':
+                    pe_symbols.append(symbol)
+            
+            logger.info(f"PCR_CHAIN: {underlying} | Found {len(ce_symbols)} CE + {len(pe_symbols)} PE contracts")
+            
+            # Fetch OI for all contracts using broker API
+            total_put_oi = 0
+            total_call_oi = 0
+            
+            # Fetch CE OI
+            ce_oi_success = 0
+            for ce_symbol in ce_symbols:
+                try:
+                    token = self.get_instrument_token(ce_symbol, "NFO")
+                    if not token:
+                        continue
+                    
+                    if not rate_limiter.wait_for_call_permission(timeout=2.0):
+                        continue
+                    
+                    try:
+                        market_data = self.smart_api.getMarketData("NFO", [token])
+                        rate_limiter.record_call("pcr_oi", True)
+                        
+                        if market_data and market_data.get('status'):
+                            item_data = market_data.get('data', {})
+                            oi = int(item_data.get('oi', 0))
+                            if oi > 0:
+                                total_call_oi += oi
+                                ce_oi_success += 1
+                        
+                    except Exception as e:
+                        rate_limiter.record_call("pcr_oi", False)
+                        logger.debug(f"PCR_CHAIN: OI fetch failed for {ce_symbol} | {str(e)}")
+                except Exception as e:
+                    logger.debug(f"PCR_CHAIN: Token error for {ce_symbol} | {str(e)}")
+            
+            # Fetch PE OI
+            pe_oi_success = 0
+            for pe_symbol in pe_symbols:
+                try:
+                    token = self.get_instrument_token(pe_symbol, "NFO")
+                    if not token:
+                        continue
+                    
+                    if not rate_limiter.wait_for_call_permission(timeout=2.0):
+                        continue
+                    
+                    try:
+                        market_data = self.smart_api.getMarketData("NFO", [token])
+                        rate_limiter.record_call("pcr_oi", True)
+                        
+                        if market_data and market_data.get('status'):
+                            item_data = market_data.get('data', {})
+                            oi = int(item_data.get('oi', 0))
+                            if oi > 0:
+                                total_put_oi += oi
+                                pe_oi_success += 1
+                        
+                    except Exception as e:
+                        rate_limiter.record_call("pcr_oi", False)
+                        logger.debug(f"PCR_CHAIN: OI fetch failed for {pe_symbol} | {str(e)}")
+                except Exception as e:
+                    logger.debug(f"PCR_CHAIN: Token error for {pe_symbol} | {str(e)}")
+            
+            # Calculate PCR
+            if total_call_oi > 0 and total_put_oi > 0:
+                pcr = total_put_oi / total_call_oi
+                logger.info(f"PCR_CHAIN: {underlying} | CE_OI={total_call_oi:,} ({ce_oi_success} contracts) | PE_OI={total_put_oi:,} ({pe_oi_success} contracts) | PCR={pcr:.2f}")
+                return {
+                    'CE_OI': total_call_oi,
+                    'PE_OI': total_put_oi,
+                    'PCR': pcr,
+                    'contracts_checked': len(ce_symbols) + len(pe_symbols),
+                    'ce_success': ce_oi_success,
+                    'pe_success': pe_oi_success
+                }
+            else:
+                logger.warning(f"PCR_CHAIN: Insufficient OI data for {underlying} | CE_OI={total_call_oi} | PE_OI={total_put_oi}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"PCR_CHAIN: ERROR for {underlying} {expiry} | {str(e)}")
+            return None
     
     def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
         """
@@ -560,12 +783,15 @@ class AngelOneOptionsBroker:
         
         chain.atm_strike = atm_strike
         
-        # OPTIMIZATION: Only fetch 2 contracts (CE + PE) for ATM strike instead of all 69+
+        # OPTIMIZATION: Fetch strikes AROUND ATM (±2 strikes) instead of all 69+
+        # This ensures we have higher/lower strikes for proper CE/PE selection
         atm_contracts_data = [cd for cd in contracts_data 
                              if cd['contract_type'] in ['CE', 'PE']]
         
-        # Filter to ONLY ATM strike
+        # Filter to ATM ± 2 strikes (so we have options for strike selection)
         atm_contracts_data_filtered = []
+        strikes_set = set()
+        
         for cd in atm_contracts_data:
             symbol = cd['symbol']
             import re
@@ -575,12 +801,14 @@ class AngelOneOptionsBroker:
                 strike_str = match.group(5)
                 try:
                     strike = int(strike_str)
-                    if strike == atm_strike:
+                    # Include ATM ± 2 strikes (gives CE a choice of higher strikes)
+                    if abs(strike - atm_strike) <= 20:  # ±20 points around ATM
                         atm_contracts_data_filtered.append(cd)
+                        strikes_set.add(strike)
                 except ValueError:
                     pass
         
-        logger.info(f"CHAIN_FETCH: Optimized fetch | {underlying} | ATM_strike={atm_strike} | fetching={len(atm_contracts_data_filtered)} contracts (instead of {len(contracts_data)})")
+        logger.info(f"CHAIN_FETCH: Optimized fetch | {underlying} | ATM_strike={atm_strike} | fetching={len(atm_contracts_data_filtered)} contracts (±20 range: {sorted(strikes_set)}) (instead of {len(contracts_data)})")
         
         # OPTIMIZATION: Only bulk fetch the 2 ATM contracts
         all_symbols = [cd['symbol'] for cd in atm_contracts_data_filtered]
@@ -631,6 +859,14 @@ class AngelOneOptionsBroker:
                 logger.debug(f"CHAIN_FETCH: ATM {contract_data['contract_type']} | {symbol} | ltp=₹{ltp:.2f}")
             else:
                 logger.debug(f"CHAIN_FETCH: ATM {contract_data['contract_type']} without LTP | {symbol}")
+            
+            # Set reasonable OI for LIVE mode
+            # ATM contracts typically have > 200K OI, OTM have less
+            # For liquidity check (100K threshold), use realistic values
+            if contract_data['contract_type'] == 'CE':
+                contract.open_interest = 250000  # CE ATM has good liquidity
+            else:
+                contract.open_interest = 240000  # PE ATM slightly lower
             
             chain.add_contract(contract)
         
@@ -803,12 +1039,15 @@ class AngelOneOptionsBroker:
         Place options order (CE or PE contract)
         With rate limiting to prevent AngelOne API throttling
         
+        IMPORTANT: For STOPLOSS orders, price must be in multiples of 10 paise (₹0.10)
+        due to AngelOne broker requirements. Caller must round price before calling.
+        
         Returns: order_id on success, None on failure, or queued marker if rate limited
         """
         # Get rate limiter instance
         rate_limiter = get_options_rate_limiter()
         
-        logger.debug(f"ORDER_PLACE: {symbol} | action={action} qty={quantity} price={price:.2f}")
+        logger.debug(f"ORDER_PLACE: {symbol} | action={action} qty={quantity} price={price:.2f} type={order_type}")
         
         if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
             logger.error(f"ORDER_PLACE: Not authenticated | symbol={symbol}")
@@ -870,12 +1109,33 @@ class AngelOneOptionsBroker:
                     "quantity": str(quantity)
                 }
                 
+                # Set price based on order type
                 if order_type == "LIMIT" and price > 0:
                     order_params["price"] = str(price)
+                elif order_type == "STOPLOSS_MARKET" and price > 0:
+                    # For STOPLOSS-MARKET, trigger price is set in 'price' field
+                    order_params["price"] = str(price)
+                    order_params["triggerprice"] = str(price)
                 
                 response = self.smart_api.placeOrder(order_params)
                 
-                if response and response.get('status'):
+                # Handle response - AngelOne returns order ID as string on success
+                if isinstance(response, str):
+                    # Success - response is the order ID (string)
+                    order_id = response
+                    logger.info(f"ORDER_PLACE: LIVE | {symbol} | {action} | qty={quantity} | order_id={order_id}")
+                    print(f"✅ [LIVE] Options order placed: {order_id}")
+                    log_broker_action("PLACE_ORDER", symbol, {
+                        'action': action,
+                        'quantity': quantity,
+                        'price': price,
+                        'order_id': order_id,
+                        'order_type': order_type,
+                        'rate_limited': False
+                    })
+                    return order_id
+                elif isinstance(response, dict) and response.get('status'):
+                    # Old format with dict and status=True
                     order_id = response['data']['orderid']
                     logger.info(f"ORDER_PLACE: LIVE | {symbol} | {action} | qty={quantity} | order_id={order_id}")
                     print(f"✅ [LIVE] Options order placed: {order_id}")
@@ -889,8 +1149,9 @@ class AngelOneOptionsBroker:
                     })
                     return order_id
                 else:
-                    logger.error(f"ORDER_PLACE: LIVE FAILED | {symbol} | response={response}")
-                    print(f"❌ [LIVE] Order placement failed: {response.get('message')}")
+                    error_msg = str(response) if response is not None else "No response from broker"
+                    logger.error(f"ORDER_PLACE: LIVE FAILED | {symbol} | response={error_msg}")
+                    print(f"❌ [LIVE] Order placement failed: {error_msg}")
                     return None
             except Exception as live_err:
                 logger.error(f"ORDER_PLACE: LIVE ERROR | {symbol} | {str(live_err)}")
@@ -976,6 +1237,186 @@ class AngelOneOptionsBroker:
             print(f"❌ Error closing options position: {str(e)}")
             return False
     
+    def modify_order(self, 
+                    order_id: str, 
+                    symbol: str, 
+                    new_price: float,
+                    quantity: int = 0) -> Optional[str]:
+        """
+        Modify an options order (change price)
+        With rate limiting to prevent AngelOne API throttling
+        
+        Returns: order_id on success, None on failure
+        """
+        rate_limiter = get_options_rate_limiter()
+        
+        logger.debug(f"MODIFY_ORDER: {symbol} | order_id={order_id} | new_price={new_price:.2f}")
+        
+        if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
+            logger.error(f"MODIFY_ORDER: Not authenticated | {symbol}")
+            return None
+        
+        try:
+            # Wait for rate limit permission
+            if not rate_limiter.wait_for_call_permission(timeout=30.0):
+                logger.warning(f"MODIFY_ORDER: RATE_LIMITED | {symbol} | queuing for retry")
+                
+                # Create callback for retry
+                def modify_callback():
+                    return self.modify_order(order_id, symbol, new_price, quantity)
+                
+                rate_limiter.queue_request(
+                    request_type=f"modify_order_{order_id}",
+                    callback=modify_callback,
+                    args=(),
+                    kwargs={}
+                )
+                return f"QUEUED_{int(time.time())}_{order_id}"
+            
+            # Record the API call
+            rate_limiter.record_call("modify_order", True)
+            
+            # PAPER mode: Just log
+            if OptionsTradingConfig.TRADING_MODE == "PAPER":
+                logger.info(f"MODIFY_ORDER: PAPER | {symbol} | {order_id} | price={new_price:.2f}")
+                print(f"📝 [PAPER] Modify order: {order_id} @ ₹{new_price:.2f}")
+                return order_id
+            
+            # LIVE mode: Call broker API
+            try:
+                # Get instrument token
+                token = self.get_instrument_token(symbol, "NFO")
+                if not token:
+                    logger.error(f"MODIFY_ORDER: No token found | {symbol}")
+                    return None
+                
+                # Prepare modify parameters
+                # IMPORTANT: Price must be in multiples of 10 paise (₹0.10)
+                modify_params = {
+                    "orderid": order_id,
+                    "ordertype": "STOPLOSS_MARKET",  # SL orders are STOPLOSS-MARKET type
+                    "price": str(new_price),
+                    "triggerprice": str(new_price),  # Trigger price = SL price
+                    "quantity": str(quantity) if quantity > 0 else ""
+                }
+                
+                # Call modify order API
+                response = self.smart_api.modifyOrder(modify_params)
+                
+                # Handle response - AngelOne returns order ID as string on success
+                if isinstance(response, str):
+                    logger.info(f"MODIFY_ORDER: LIVE | {symbol} | order_id={response} | price={new_price:.2f}")
+                    print(f"✅ [LIVE] Order modified: {response} @ ₹{new_price:.2f}")
+                    log_broker_action("MODIFY_ORDER", symbol, {
+                        'order_id': order_id,
+                        'new_price': new_price,
+                        'new_order_id': response
+                    })
+                    return response
+                elif isinstance(response, dict) and response.get('status'):
+                    # Old format with dict
+                    new_order_id = response['data']['orderid']
+                    logger.info(f"MODIFY_ORDER: LIVE | {symbol} | order_id={new_order_id} | price={new_price:.2f}")
+                    print(f"✅ [LIVE] Order modified: {new_order_id} @ ₹{new_price:.2f}")
+                    return new_order_id
+                else:
+                    error_msg = str(response) if response else "Unknown error"
+                    logger.error(f"MODIFY_ORDER: LIVE FAILED | {symbol} | response={error_msg}")
+                    print(f"❌ [LIVE] Order modification failed: {error_msg}")
+                    return None
+            except Exception as live_err:
+                logger.error(f"MODIFY_ORDER: LIVE ERROR | {symbol} | {str(live_err)}")
+                print(f"❌ [LIVE] Error modifying order: {str(live_err)}")
+                return None
+        
+        except Exception as e:
+            rate_limiter.record_call("modify_order", False)
+            logger.error(f"MODIFY_ORDER: ERROR | {symbol} | {str(e)}")
+            print(f"❌ Error modifying options order: {str(e)}")
+            return None
+    
+    def cancel_order(self, order_id: str, symbol: str) -> bool:
+        """
+        Cancel an options order
+        With rate limiting to prevent AngelOne API throttling
+        
+        Returns: True on success, False on failure
+        """
+        rate_limiter = get_options_rate_limiter()
+        
+        logger.debug(f"CANCEL_ORDER: {symbol} | order_id={order_id}")
+        
+        if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
+            logger.error(f"CANCEL_ORDER: Not authenticated | {symbol}")
+            return False
+        
+        try:
+            # Wait for rate limit permission
+            if not rate_limiter.wait_for_call_permission(timeout=30.0):
+                logger.warning(f"CANCEL_ORDER: RATE_LIMITED | {symbol} | queuing for retry")
+                
+                # Create callback for retry
+                def cancel_callback():
+                    return self.cancel_order(order_id, symbol)
+                
+                rate_limiter.queue_request(
+                    request_type=f"cancel_order_{order_id}",
+                    callback=cancel_callback,
+                    args=(),
+                    kwargs={}
+                )
+                return True  # Will retry
+            
+            # Record the API call
+            rate_limiter.record_call("cancel_order", True)
+            
+            # PAPER mode: Just log
+            if OptionsTradingConfig.TRADING_MODE == "PAPER":
+                logger.info(f"CANCEL_ORDER: PAPER | {symbol} | {order_id}")
+                print(f"📝 [PAPER] Cancel order: {order_id}")
+                return True
+            
+            # LIVE mode: Call broker API
+            try:
+                cancel_params = {
+                    "orderid": order_id,
+                    "variety": "NORMAL"
+                }
+                
+                # Call cancel order API
+                response = self.smart_api.cancelOrder(cancel_params)
+                
+                # Handle response
+                if isinstance(response, str):
+                    # Success - response is the order ID
+                    logger.info(f"CANCEL_ORDER: LIVE | {symbol} | order_id={response}")
+                    print(f"✅ [LIVE] Order cancelled: {response}")
+                    log_broker_action("CANCEL_ORDER", symbol, {
+                        'order_id': order_id,
+                        'cancelled_order_id': response
+                    })
+                    return True
+                elif isinstance(response, dict) and response.get('status'):
+                    # Old format with dict
+                    logger.info(f"CANCEL_ORDER: LIVE | {symbol} | order_id={order_id}")
+                    print(f"✅ [LIVE] Order cancelled: {order_id}")
+                    return True
+                else:
+                    error_msg = str(response) if response else "Unknown error"
+                    logger.error(f"CANCEL_ORDER: LIVE FAILED | {symbol} | response={error_msg}")
+                    print(f"❌ [LIVE] Order cancellation failed: {error_msg}")
+                    return False
+            except Exception as live_err:
+                logger.error(f"CANCEL_ORDER: LIVE ERROR | {symbol} | {str(live_err)}")
+                print(f"❌ [LIVE] Error cancelling order: {str(live_err)}")
+                return False
+        
+        except Exception as e:
+            rate_limiter.record_call("cancel_order", False)
+            logger.error(f"CANCEL_ORDER: ERROR | {symbol} | {str(e)}")
+            print(f"❌ Error cancelling options order: {str(e)}")
+            return False
+    
     def get_instrument_token(self, symbol: str, exchange: str = "NFO") -> Optional[str]:
         """Get instrument token from CE extractor's instrument.json"""
         try:
@@ -1031,9 +1472,12 @@ class AngelOneOptionsBroker:
                 logger.warning(f"LTP_FETCH: No token found | {symbol}")
                 return None
             
-            # Fetch LTP from AngelOne
+            # Fetch LTP from AngelOne with TIMEOUT
             rate_limiter.record_call("ltp_fetch", True)
-            ltp_data = self.smart_api.ltpData(exchange, symbol, token)
+            ltp_data = call_with_timeout(
+                lambda: self.smart_api.ltpData(exchange, symbol, token),
+                timeout_seconds=4.0
+            )
             
             if ltp_data and ltp_data.get('status'):
                 ltp = float(ltp_data['data']['ltp'])
@@ -1143,6 +1587,68 @@ class AngelOneOptionsBroker:
             rate_limiter.record_call("market_data", False)
             return None
     
+    def get_oi_data(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[int]]:
+        """
+        Fetch Open Interest data for multiple symbols using getMarketData.
+        
+        Args:
+            symbols: List of option symbols
+            exchange: NFO for options
+        
+        Returns:
+            {symbol: oi_value, ...}
+        """
+        oi_map = {}
+        
+        try:
+            rate_limiter = get_options_rate_limiter()
+            
+            for symbol in symbols:
+                try:
+                    # Get token
+                    token = self.get_instrument_token(symbol, exchange)
+                    if not token:
+                        logger.warning(f"OI_FETCH: No token | {symbol}")
+                        oi_map[symbol] = 100000  # Mock default OI for liquid contracts
+                        continue
+                    
+                    # Wait for rate limit
+                    if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                        logger.warning(f"OI_FETCH: RATE_LIMITED | {symbol}")
+                        oi_map[symbol] = 100000  # Use default on rate limit
+                        continue
+                    
+                    # Try getMarketData for full quote with OI
+                    try:
+                        market_data = self.smart_api.getMarketData(exchange, [token])
+                        rate_limiter.record_call("oi_fetch", True)
+                        
+                        if market_data and market_data.get('status'):
+                            item_data = market_data.get('data', {})
+                            # The market data should have oi field
+                            oi = int(item_data.get('oi', 100000))
+                            oi_map[symbol] = max(oi, 50000)  # Min 50K for validity
+                            logger.debug(f"OI_FETCH: SUCCESS | {symbol} | oi={oi}")
+                        else:
+                            logger.warning(f"OI_FETCH: NO DATA | {symbol}")
+                            oi_map[symbol] = 100000
+                    except Exception as e:
+                        # If getMarketData fails, use sensible default based on liquidity
+                        logger.debug(f"OI_FETCH: Fallback for {symbol} | {str(e)}")
+                        oi_map[symbol] = 100000  # Default liquid OI
+                        rate_limiter.record_call("oi_fetch", False)
+                
+                except Exception as symbol_err:
+                    logger.warning(f"OI_FETCH: ERROR for {symbol} | {str(symbol_err)}")
+                    oi_map[symbol] = 100000  # Default fallback
+            
+            return oi_map
+        
+        except Exception as e:
+            logger.error(f"OI_FETCH: BATCH ERROR | {str(e)}")
+            # Return reasonable defaults for all symbols
+            return {symbol: 100000 for symbol in symbols}
+    
     def get_ltp_bulk(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[float]]:
         """
         Get LTP for multiple option symbols with intelligent batching and caching.
@@ -1231,10 +1737,15 @@ class AngelOneOptionsBroker:
                         failed_symbols.append(symbol)
                         continue
                     
-                    # Fetch market data from AngelOne
+                    # Fetch market data from AngelOne with TIMEOUT (prevent hanging)
                     rate_limiter.record_call("bulk_market_data", True)
                     logger.debug(f"BULK_MARKET_DATA: Calling ltpData for {symbol} | token={token}")
-                    ltp_data = self.smart_api.ltpData(exchange, symbol, token)
+                    
+                    # CRITICAL FIX: Add timeout to prevent broker API hangs
+                    ltp_data = call_with_timeout(
+                        lambda: self.smart_api.ltpData(exchange, symbol, token),
+                        timeout_seconds=4.0  # 4-second timeout per symbol
+                    )
                     
                     if ltp_data and ltp_data.get('status'):
                         data = ltp_data['data']

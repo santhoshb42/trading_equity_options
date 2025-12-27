@@ -12,6 +12,7 @@ Strategy:
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import json
+import os
 from .optlogging import logger
 
 # =============================================================================
@@ -36,60 +37,75 @@ class MarketSentiment:
     
     def fetch_pcr_ratio(self) -> Dict[str, float]:
         """
-        Fetch Put-Call Ratio for all symbols
+        Fetch REAL Put-Call Ratio from broker (SmartAPI putCallRatio).
+        
+        Returns OPTIONS PCR (cumulative across all strikes) mapped to FUT symbol names.
+        PCR = Total PUT OI / Total CALL OI
         
         Returns:
             {symbol: pcr_value, ...}
         """
         try:
-            # Try to fetch from broker if available
-            if hasattr(self.broker, 'call_smartapi'):
-                response = self.broker.call_smartapi(
-                    endpoint='/marketData/v1/putCallRatio',
-                    method='GET'
-                )
-                
-                if not response or not response.get('status'):
-                    logger.error(f"PCR_FETCH: API_FAILED | {response.get('message') if response else 'No response'}")
-                    # Fall through to fallback data
-                else:
-                    pcr_map = {}
-                    for item in response.get('data', []):
-                        trading_symbol = item.get('tradingSymbol', '')
-                        pcr = float(item.get('pcr', 0))
-                        
-                        # Extract base symbol (remove FUT and date)
-                        base_symbol = trading_symbol.split('FUT')[0] if 'FUT' in trading_symbol else trading_symbol
-                        pcr_map[base_symbol] = pcr
-                    
-                    logger.info(f"PCR_FETCH: SUCCESS | symbols={len(pcr_map)}")
-                    return pcr_map
+            import re
             
-            # Fallback: Use mock data for paper trading / when API unavailable
-            logger.info(f"PCR_FETCH: Using fallback/mock data (broker API unavailable or paper mode)")
-            fallback_pcr = {
-                'BANKNIFTY': 0.75,      # Bullish (PCR < 0.8)
-                'NIFTY': 0.78,          # Bullish
-                'FINNIFTY': 0.72,       # Bullish
-                'SENSEX': 0.80,         # Neutral (PCR = 0.8)
-                'MIDCPNIFTY': 0.85,     # Slightly bearish
-                'RELIANCE': 0.90,       # Bearish
-                'HDFC': 0.88,           # Bearish
-                'INFY': 0.85,           # Slightly bearish
-                'TCS': 0.82,            # Neutral
-                'LT': 0.79,             # Bullish
-            }
-            logger.debug(f"PCR_FETCH: Fallback data loaded | symbols={len(fallback_pcr)}")
-            return fallback_pcr
+            pcr_map = {}
+            
+            # Fetch from broker's putCallRatio API
+            try:
+                if hasattr(self.broker, 'smart_api') and self.broker.smart_api:
+                    logger.debug("PCR_FETCH: Fetching from broker SmartAPI putCallRatio()...")
+                    broker_pcr_data = self.broker.smart_api.putCallRatio()
+                    
+                    if broker_pcr_data and isinstance(broker_pcr_data, dict):
+                        data_list = broker_pcr_data.get('data', [])
+                        
+                        if data_list:
+                            logger.info(f"PCR_FETCH: ✅ Broker returned {len(data_list)} PCR entries")
+                            
+                            for item in data_list:
+                                # Broker returns: {'pcr': 0.47, 'tradingSymbol': 'NIFTY30DEC25FUT'}
+                                # PCR is for OPTIONS (all strikes aggregated), mapped to FUT symbol
+                                trading_symbol = item.get('tradingSymbol', '')
+                                pcr_value = float(item.get('pcr', 0))
+                                
+                                if not trading_symbol or pcr_value <= 0:
+                                    continue
+                                
+                                # Extract underlying symbol from tradingSymbol
+                                # Examples: 'NIFTY30DEC25FUT' -> 'NIFTY'
+                                #           'BANKNIFTY27DEC25FUT' -> 'BANKNIFTY'
+                                #           'RELIANCE26DEC25FUT' -> 'RELIANCE'
+                                underlying = trading_symbol
+                                
+                                # Remove date patterns (e.g., '30DEC25') and FUT suffix
+                                underlying = re.sub(r'\d{1,2}[A-Z]{3}\d{2}', '', underlying)
+                                underlying = underlying.replace('FUT', '').strip().upper()
+                                
+                                if underlying and pcr_value > 0:
+                                    pcr_map[underlying] = pcr_value
+                            
+                            if pcr_map:
+                                logger.info(f"PCR_FETCH: ✅ SUCCESS from BROKER | {len(pcr_map)} symbols | Top 10: {list(pcr_map.keys())[:10]}")
+                                return pcr_map
+                            else:
+                                logger.error(f"PCR_FETCH: Broker returned data but failed to parse PCR values")
+                                raise Exception("Failed to parse broker PCR data")
+                        else:
+                            logger.error(f"PCR_FETCH: Broker returned empty data list")
+                            raise Exception("Broker returned empty PCR data")
+                    else:
+                        logger.error(f"PCR_FETCH: Broker returned unexpected format: {type(broker_pcr_data)}")
+                        raise Exception(f"Unexpected broker response format")
+                else:
+                    logger.error(f"PCR_FETCH: Broker smart_api not available")
+                    raise Exception("Broker API not initialized")
+            except Exception as e:
+                logger.error(f"PCR_FETCH: Broker putCallRatio failed: {e}")
+                raise  # No fallback - broker must work
             
         except Exception as e:
-            logger.error(f"PCR_FETCH: ERROR | {str(e)}")
-            # Return fallback data even on error
-            return {
-                'BANKNIFTY': 0.75,
-                'NIFTY': 0.78,
-                'FINNIFTY': 0.72
-            }
+            logger.error(f"PCR_FETCH: CRITICAL ERROR | {str(e)}")
+            raise  # Re-raise - broker must be available
     
     # =========================================================================
     # OI Buildup Fetching
@@ -214,14 +230,38 @@ class MarketSentiment:
         Returns:
             (is_entry_ok, reason)
         """
+        import time
         from .optconfig import SentimentConfig
         
-        # Fetch if not provided
+        # Fetch if not provided (with retry logic for brief data lags)
         if pcr is None:
             pcr_map = self.fetch_pcr_ratio()
             pcr = pcr_map.get(symbol)
+            
+            # RETRY LOGIC: If PCR data missing, retry with configurable delays
+            # This handles brief market data lags without blocking trades
+            retry_count = 0
+            max_retries = SentimentConfig.PCR_RETRY_MAX_ATTEMPTS - 1  # -1 because initial fetch counts as attempt 1
+            retry_delay = SentimentConfig.PCR_RETRY_DELAY_SECONDS
+            
+            if SentimentConfig.PCR_RETRY_ENABLED and pcr is None:
+                while retry_count < max_retries:
+                    logger.debug(f"PCR_RETRY: {symbol} | attempt {retry_count + 2}/{SentimentConfig.PCR_RETRY_MAX_ATTEMPTS} | waiting {retry_delay}s")
+                    time.sleep(retry_delay)
+                    retry_count += 1
+                    pcr_map = self.fetch_pcr_ratio()
+                    pcr = pcr_map.get(symbol)
+                    if pcr is not None:
+                        break
+            
             if pcr is None:
-                return False, "PCR data not available"
+                # After all retries exhausted, still no data - use DEFAULT PCR (0.8 = neutral)
+                # This allows trades when broker API is unavailable, with neutral sentiment assumption
+                logger.warning(f"PCR_DATA_MISSING: {symbol} | no data after {SentimentConfig.PCR_RETRY_MAX_ATTEMPTS} attempts | using DEFAULT PCR")
+                pcr = 0.8  # Neutral PCR - allows entry
+            elif retry_count > 0:
+                # Data arrived on retry - log it
+                logger.info(f"PCR_RETRY_SUCCESS: {symbol} | recovered on attempt {retry_count + 1}/{SentimentConfig.PCR_RETRY_MAX_ATTEMPTS}")
         
         # PCR check (loose)
         if pcr > SentimentConfig.ENTRY_PCR_MAX:
