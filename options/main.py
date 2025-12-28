@@ -334,7 +334,10 @@ class OptionsTradingBot:
             # Import ML integration
             try:
                 from optcode.opt_ml_integration import get_ml_integration
+                from optcode.ml_integration_engine import get_ml_integration_engine
+                
                 ml_integration = get_ml_integration()
+                ml_engine = get_ml_integration_engine()
             except ImportError:
                 logger.warning("EOD_LEARNING: ML_MODULES_NOT_AVAILABLE | Skipping")
                 print("   ⚠️ ML modules not available - skipping learning update")
@@ -343,6 +346,9 @@ class OptionsTradingBot:
             # Run EOD learning update with daily trades
             # This analyzes entry/exit Greeks patterns from today's trades
             learning_results = ml_integration.run_eod_learning_update()
+            
+            # Also run the new ML integration engine's EOD learning
+            ml_engine_results = ml_engine.run_eod_learning()
             
             if learning_results:
                 logger.info(f"EOD_LEARNING: SUCCESS | {json.dumps(learning_results, indent=2)}")
@@ -358,6 +364,11 @@ class OptionsTradingBot:
             else:
                 logger.warning("EOD_LEARNING: FAILED | No results returned")
                 print("   ⚠️ Learning update returned no results")
+            
+            # Log ML engine results
+            if ml_engine_results:
+                logger.info(f"EOD_ML_ENGINE: SUCCESS | {json.dumps(ml_engine_results, indent=2)}")
+                print(f"   ✅ ML engine learning completed: {ml_engine_results.get('status', 'unknown')}")
         
         except Exception as e:
             logger.error(f"EOD_LEARNING: ERROR | {str(e)}")

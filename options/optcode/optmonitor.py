@@ -8,7 +8,7 @@ and P&L calculation specific to derivatives trading.
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -260,6 +260,18 @@ class OptionPosition:
             'iv': 20.0
         }
         
+        # Greeks tracking for smart exit detection (NEW)
+        # Store individual delta, gamma, theta, vega at entry
+        self.entry_delta = 0.5
+        self.entry_gamma = 0.05
+        self.entry_theta = -0.02
+        self.entry_vega = 0.1
+        self.entry_iv = 20.0
+        
+        # Greeks history for trend detection (list of dicts with timestamp)
+        self.greeks_history = []  # Format: [{'timestamp': dt, 'delta': x, 'gamma': y, 'theta': z, 'vega': v, 'iv': i}, ...]
+        self.last_greeks_capture = None  # Last time Greeks were captured to history
+        
         # Exit tracking
         self.exit_premium = None
         self.exit_time = None
@@ -313,6 +325,15 @@ class OptionPosition:
         self.current_greeks = greeks
         self.current_iv = iv
         self.last_updated = datetime.now()
+        
+        # Update Greeks history for trend detection
+        delta = greeks.get('delta', 0.5)
+        gamma = greeks.get('gamma', 0.05)
+        theta = greeks.get('theta', -0.02)
+        vega = greeks.get('vega', 0.1)
+        
+        self.update_greeks_history(delta, gamma, theta, vega, iv)
+        
         self._calculate_unrealized_pnl()
     
     def _calculate_unrealized_pnl(self):
@@ -365,6 +386,22 @@ class OptionPosition:
             'exit_reason': exit_reason,
             'underlying_alert_price': self.underlying_alert_price,
             'entry_time': self.entry_time.isoformat() if isinstance(self.entry_time, datetime) else self.entry_time,
+            # Entry and Exit Greeks for ML learning
+            'entry_greeks': self.entry_greeks,
+            'exit_greeks': self.exit_greeks,
+            'entry_delta': self.entry_greeks.get('delta', 0.5),
+            'entry_gamma': self.entry_greeks.get('gamma', 0.05),
+            'entry_theta': self.entry_greeks.get('theta', -0.02),
+            'entry_vega': self.entry_greeks.get('vega', 0.1),
+            'entry_iv': self.entry_greeks.get('iv', 20.0),
+            'exit_delta': self.exit_greeks.get('delta', 0.5),
+            'exit_gamma': self.exit_greeks.get('gamma', 0.05),
+            'exit_theta': self.exit_greeks.get('theta', -0.02),
+            'exit_vega': self.exit_greeks.get('vega', 0.1),
+            'exit_iv': self.exit_greeks.get('iv', 20.0),
+            # Contract details for ML
+            'contract_type': self.contract_type,
+            'action': self.action,
             # 🔴 IMPORTANT: Add trailing SL tracking for PNL analysis
             'highest_premium': self.highest_premium,
             'trial_sl_enabled': self.trial_sl_enabled,
@@ -373,6 +410,127 @@ class OptionPosition:
             'trailing_sl_activated': self.trailing_sl_activated,
             'last_trailing_sl_price': self.last_trailing_sl_price,
             'trailing_sl_updates': self.trailing_sl_update_count,
+        }
+    
+    # =========================================================================
+    # Greeks Tracking Methods for Smart Exit Detection
+    # =========================================================================
+    
+    def capture_entry_greeks(self, delta: float, gamma: float, theta: float, vega: float, iv: float):
+        """Capture Greeks at position entry (called once when position opens)"""
+        self.entry_delta = delta
+        self.entry_gamma = gamma
+        self.entry_theta = theta
+        self.entry_vega = vega
+        self.entry_iv = iv
+        
+        # Also update entry_greeks dict for backward compatibility
+        self.entry_greeks = {
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega,
+            'iv': iv
+        }
+        
+        # Initialize history with entry Greeks
+        self.greeks_history = [{
+            'timestamp': datetime.now(),
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega,
+            'iv': iv
+        }]
+        self.last_greeks_capture = datetime.now()
+    
+    def update_greeks_history(self, delta: float, gamma: float, theta: float, vega: float, iv: float) -> bool:
+        """
+        Update Greeks history with current values.
+        Returns True if update was recorded, False if skipped (to prevent duplicate entries within same second).
+        Maintains history of last 20 measurements for trend calculation.
+        """
+        now = datetime.now()
+        
+        # Avoid duplicate entries within the same second
+        if self.last_greeks_capture and (now - self.last_greeks_capture).total_seconds() < 1.0:
+            return False
+        
+        # Add to history
+        self.greeks_history.append({
+            'timestamp': now,
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega,
+            'iv': iv
+        })
+        
+        # Keep only last 20 measurements (2 minutes of data at 10-second intervals)
+        if len(self.greeks_history) > 20:
+            self.greeks_history = self.greeks_history[-20:]
+        
+        self.last_greeks_capture = now
+        return True
+    
+    def get_delta_trend(self) -> Optional[float]:
+        """
+        Get delta change from previous measurement.
+        Returns: delta_change (current - previous)
+        Returns None if less than 2 measurements available.
+        """
+        if len(self.greeks_history) < 2:
+            return None
+        
+        current_delta = self.greeks_history[-1]['delta']
+        previous_delta = self.greeks_history[-2]['delta']
+        
+        return current_delta - previous_delta
+    
+    def get_gamma_change(self) -> Optional[float]:
+        """Get gamma change from entry"""
+        if not self.entry_gamma or len(self.greeks_history) == 0:
+            return None
+        
+        current_gamma = self.greeks_history[-1]['gamma']
+        return current_gamma / self.entry_gamma if self.entry_gamma != 0 else None
+    
+    def get_theta_change(self) -> Optional[float]:
+        """Get theta change from entry (absolute difference)"""
+        if not self.entry_theta or len(self.greeks_history) == 0:
+            return None
+        
+        current_theta = self.greeks_history[-1]['theta']
+        return abs(current_theta) / abs(self.entry_theta) if self.entry_theta != 0 else None
+    
+    def get_iv_change_percent(self) -> Optional[float]:
+        """Get IV change from entry as percentage"""
+        if not self.entry_iv or len(self.greeks_history) == 0:
+            return None
+        
+        current_iv = self.greeks_history[-1]['iv']
+        return abs(current_iv - self.entry_iv) / self.entry_iv * 100 if self.entry_iv != 0 else None
+    
+    def get_greeks_age_seconds(self) -> Optional[float]:
+        """Get age of current Greeks data (seconds since last update)"""
+        if not self.last_greeks_capture:
+            return None
+        
+        return (datetime.now() - self.last_greeks_capture).total_seconds()
+    
+    def get_current_greeks(self) -> Optional[Dict[str, float]]:
+        """Get most recent Greeks values from history"""
+        if not self.greeks_history:
+            return None
+        
+        latest = self.greeks_history[-1]
+        return {
+            'delta': latest['delta'],
+            'gamma': latest['gamma'],
+            'theta': latest['theta'],
+            'vega': latest['vega'],
+            'iv': latest['iv'],
+            'timestamp': latest['timestamp'].isoformat() if isinstance(latest['timestamp'], datetime) else latest['timestamp']
         }
     
     def is_expired(self) -> bool:
@@ -384,6 +542,217 @@ class OptionPosition:
         """Get days remaining to expiry"""
         expiry_date = datetime.strptime(self.expiry, "%Y-%m-%d").date()
         return (expiry_date - datetime.now().date()).days
+    
+    # =========================================================================
+    # NEW: Advanced Greeks Analysis Methods (Audit Enhancement)
+    # =========================================================================
+    
+    def get_delta_trend_confirmed(self, required_cycles: int = 2, use_rolling_avg: bool = True) -> Tuple[bool, Optional[float]]:
+        """
+        Confirm delta reversal with multiple checks:
+        1. Check if trend confirmed for N consecutive cycles, OR
+        2. Check rolling average of last 3 samples
+        
+        Returns: (is_confirmed, delta_change_value)
+        
+        This reduces false positives from single-cycle volatility.
+        """
+        if len(self.greeks_history) < 2:
+            return False, None
+        
+        # Method 1: Check last N consecutive cycles for consistent decline
+        consecutive_declines = 0
+        for i in range(len(self.greeks_history) - 1, max(0, len(self.greeks_history) - required_cycles - 1), -1):
+            if i == len(self.greeks_history) - 1:
+                continue
+            
+            current = self.greeks_history[i]['delta']
+            previous = self.greeks_history[i - 1]['delta'] if i > 0 else None
+            
+            if previous and current < previous:
+                consecutive_declines += 1
+        
+        if consecutive_declines >= required_cycles - 1:
+            return True, self.get_delta_trend()
+        
+        # Method 2: Check rolling average of last 3 measurements
+        if use_rolling_avg and len(self.greeks_history) >= 3:
+            deltas = [m['delta'] for m in self.greeks_history[-3:]]
+            rolling_avg = sum(deltas) / len(deltas)
+            current_delta = self.greeks_history[-1]['delta']
+            
+            if current_delta < rolling_avg - 0.02:  # Declining trend in rolling avg
+                return True, self.get_delta_trend()
+        
+        return False, self.get_delta_trend()
+    
+    def get_gamma_status(self) -> Tuple[bool, float, Optional[str]]:
+        """
+        Check gamma health with BOTH relative (multiplier) AND absolute cap.
+        
+        Returns: (is_dangerous, gamma_value, reason)
+        
+        Triggers if:
+        - current_gamma > entry_gamma × 1.5, OR
+        - current_gamma > 0.04 (absolute cap)
+        """
+        if len(self.greeks_history) == 0:
+            return False, 0, None
+        
+        from .optconfig import OptionsTradingConfig
+        
+        current_gamma = self.greeks_history[-1]['gamma']
+        
+        # Check absolute cap
+        if current_gamma > OptionsTradingConfig.GAMMA_ABSOLUTE_CAP:
+            return True, current_gamma, f"absolute_cap_exceeded|gamma={current_gamma:.4f}|cap={OptionsTradingConfig.GAMMA_ABSOLUTE_CAP}"
+        
+        # Check multiplier
+        if self.entry_gamma > 0:
+            multiplier = current_gamma / self.entry_gamma
+            if multiplier > OptionsTradingConfig.GAMMA_MULTIPLIER_THRESHOLD:
+                return True, current_gamma, f"multiplier_exceeded|gamma_change={multiplier:.2f}x|entry={self.entry_gamma:.4f}"
+        
+        return False, current_gamma, None
+    
+    def get_theta_status(self) -> Tuple[bool, float, Optional[str], bool, bool]:
+        """
+        Check theta health with directional context.
+        
+        Returns: (is_dangerous, theta_value, reason, pnl_check_failed, delta_weakening)
+        
+        Only triggers theta exit if:
+        - |theta| > |entry_theta| × 3.0, AND
+        - (P&L <= 0 OR Delta is weakening)
+        
+        This avoids killing winning trades due to normal decay.
+        """
+        if len(self.greeks_history) == 0:
+            return False, 0, None, False, False
+        
+        from .optconfig import OptionsTradingConfig
+        
+        current_theta = self.greeks_history[-1]['theta']
+        
+        # Check multiplier first
+        if self.entry_theta != 0:
+            multiplier = abs(current_theta) / abs(self.entry_theta)
+            if multiplier <= OptionsTradingConfig.THETA_MULTIPLIER_THRESHOLD:
+                return False, current_theta, None, False, False
+        else:
+            return False, current_theta, None, False, False
+        
+        # Theta acceleration confirmed - now check contextual conditions
+        pnl_check = self.unrealized_pnl <= 0 if OptionsTradingConfig.ENABLE_THETA_PNL_CHECK else False
+        
+        delta_check = False
+        if OptionsTradingConfig.ENABLE_THETA_DELTA_CHECK:
+            delta_trend = self.get_delta_trend()
+            delta_check = delta_trend is not None and delta_trend < -0.02  # Delta weakening
+        
+        # Only exit if P&L bad OR delta weakening (not just theta acceleration alone)
+        is_dangerous = pnl_check or delta_check
+        
+        reason = None
+        if is_dangerous:
+            reason = f"theta_acceleration|multiplier={multiplier:.2f}x|pnl_check={pnl_check}|delta_weak={delta_check}"
+        
+        return is_dangerous, current_theta, reason, pnl_check, delta_check
+    
+    def get_vega_status(self) -> Tuple[bool, float, Optional[str]]:
+        """
+        Check vega crush with DYNAMIC thresholds based on IV regime.
+        
+        Returns: (is_dangerous, iv_change_percent, reason)
+        
+        If ENABLE_VEGA_DYNAMIC_THRESHOLD:
+        - Low IV regime (entry_iv < 50): threshold = 1.0%
+        - High IV regime (entry_iv >= 50): threshold = 3.0%
+        Else:
+        - Fixed threshold = 2.0%
+        """
+        if len(self.greeks_history) == 0 or self.entry_iv is None:
+            return False, 0, None
+        
+        from .optconfig import OptionsTradingConfig
+        
+        current_iv = self.greeks_history[-1]['iv']
+        iv_change_pct = abs(current_iv - self.entry_iv) / self.entry_iv * 100 if self.entry_iv > 0 else 0
+        
+        # Determine threshold
+        if OptionsTradingConfig.ENABLE_VEGA_DYNAMIC_THRESHOLD:
+            if self.entry_iv < OptionsTradingConfig.VEGA_IV_REGIME_BOUNDARY:
+                threshold = OptionsTradingConfig.VEGA_LOW_IV_THRESHOLD
+                regime = "low_iv"
+            else:
+                threshold = OptionsTradingConfig.VEGA_HIGH_IV_THRESHOLD
+                regime = "high_iv"
+        else:
+            threshold = OptionsTradingConfig.VEGA_CRUSH_FIXED_THRESHOLD
+            regime = "fixed"
+        
+        is_dangerous = iv_change_pct > threshold
+        
+        reason = None
+        if is_dangerous:
+            reason = f"vega_crush|iv_change={iv_change_pct:.2f}%|threshold={threshold}%|regime={regime}|entry_iv={self.entry_iv:.2f}|current_iv={current_iv:.2f}"
+        
+        return is_dangerous, iv_change_pct, reason
+    
+    def get_health_status(self) -> Tuple[bool, Dict[str, bool], str]:
+        """
+        Combined health check returning detailed breakdown of all signals.
+        
+        Returns: (is_unhealthy, conditions_dict, formatted_string)
+        
+        conditions_dict format:
+        {
+            'delta_reversal': bool,
+            'gamma_explosion': bool,
+            'theta_acceleration': bool,
+            'vega_crush': bool
+        }
+        
+        is_unhealthy = True if 2+ conditions are True
+        formatted_string = "delta_bad=True,gamma_bad=False,theta_bad=True,vega_bad=False"
+        """
+        conditions = {
+            'delta_reversal': False,
+            'gamma_explosion': False,
+            'theta_acceleration': False,
+            'vega_crush': False
+        }
+        
+        # Check delta reversal
+        delta_confirmed, _ = self.get_delta_trend_confirmed()
+        conditions['delta_reversal'] = delta_confirmed
+        
+        # Check gamma explosion
+        gamma_dangerous, _, _ = self.get_gamma_status()
+        conditions['gamma_explosion'] = gamma_dangerous
+        
+        # Check theta acceleration
+        theta_dangerous, _, _, _, _ = self.get_theta_status()
+        conditions['theta_acceleration'] = theta_dangerous
+        
+        # Check vega crush
+        vega_dangerous, _, _ = self.get_vega_status()
+        conditions['vega_crush'] = vega_dangerous
+        
+        # Count unhealthy conditions
+        unhealthy_count = sum(1 for v in conditions.values() if v)
+        is_unhealthy = unhealthy_count >= 2
+        
+        # Format string for logging
+        formatted = ",".join([
+            f"delta_bad={str(conditions['delta_reversal'])}",
+            f"gamma_bad={str(conditions['gamma_explosion'])}",
+            f"theta_bad={str(conditions['theta_acceleration'])}",
+            f"vega_bad={str(conditions['vega_crush'])}"
+        ])
+        
+        return is_unhealthy, conditions, formatted
+    
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert position to dictionary"""
@@ -399,6 +768,13 @@ class OptionPosition:
             'entry_premium_total': self.entry_premium * self.quantity,
             'entry_time': self.entry_time.isoformat() if isinstance(self.entry_time, datetime) else self.entry_time,
             'entry_greeks': self.entry_greeks,  # ADDED: Capture entry Greeks
+            # Greeks tracking fields (NEW)
+            'entry_delta': self.entry_delta,
+            'entry_gamma': self.entry_gamma,
+            'entry_theta': self.entry_theta,
+            'entry_vega': self.entry_vega,
+            'entry_iv': self.entry_iv,
+            'greeks_history_length': len(self.greeks_history),
             'order_id': self.order_id,
             'current_premium': self.current_premium,
             'current_premium_total': self.current_premium * self.quantity,
@@ -514,6 +890,19 @@ class OptionPositionMonitor:
             # STORE ENTRY GREEKS FOR ML LEARNING
             if entry_greeks:
                 position.entry_greeks = entry_greeks
+                # Capture individual Greeks fields for trend detection
+                position.capture_entry_greeks(
+                    delta=entry_greeks.get('delta', 0.5),
+                    gamma=entry_greeks.get('gamma', 0.05),
+                    theta=entry_greeks.get('theta', -0.02),
+                    vega=entry_greeks.get('vega', 0.1),
+                    iv=entry_greeks.get('iv', 20.0)
+                )
+                logger.debug(f"POSITION_INIT: Captured entry Greeks | symbol={symbol} | delta={position.entry_delta:.3f} | gamma={position.entry_gamma:.4f} | theta={position.entry_theta:.4f} | vega={position.entry_vega:.4f} | iv={position.entry_iv:.2f}")
+            else:
+                # No entry Greeks provided, use defaults
+                logger.warning(f"POSITION_INIT: No entry Greeks provided | symbol={symbol} | using defaults")
+                position.capture_entry_greeks(0.5, 0.05, -0.02, 0.1, 20.0)
             
             self.positions[symbol] = position
             
@@ -679,7 +1068,10 @@ class OptionPositionMonitor:
             # RECORD OUTCOME FOR ML LEARNING (NEW)
             try:
                 from .opt_ml_integration import get_ml_integration
+                from .ml_integration_engine import get_ml_integration_engine
+                
                 ml_integration = get_ml_integration()
+                ml_engine = get_ml_integration_engine()
                 
                 # Record trade outcome: WIN if PnL > 0, LOSS otherwise
                 trade_outcome = {
@@ -701,7 +1093,9 @@ class OptionPositionMonitor:
                     'exit_iv': position.current_iv          # Exit IV
                 }
                 
+                # Record to both systems
                 ml_integration.record_daily_trade(trade_outcome)
+                ml_engine.record_closed_trade(trade_outcome)
                 
                 logger.info(f"ML_OUTCOME_RECORDED: {symbol} | {'WIN' if trade_outcome['won'] else 'LOSS'} | "
                            f"PnL=₹{pnl_info['pnl']:.2f} | {exit_reason}")
@@ -1752,6 +2146,290 @@ class OptionPositionMonitor:
         logger.info(f"REFRESH_CANDLES: Complete | updated={candle_stats['candles_fetched']} | underlyings={len(underlyings)}")
         return candle_stats
     
+    # =========================================================================
+    # Greeks-Based Smart Exit Checks (NEW FRAMEWORK)
+    # =========================================================================
+    
+    def check_greeks_delta_reversal(self) -> List[Dict[str, Any]]:
+        """
+        Exit if delta declining rapidly - indicates reversal/momentum loss.
+        
+        IMPROVED: Requires confirmation via:
+        - 2 consecutive cycles of delta decline, OR
+        - Rolling average of last 3 samples showing declining trend
+        
+        This reduces false positives during volatile periods (whipsaw avoidance).
+        
+        Threshold: delta_change < -0.05 per cycle (confirmed)
+        """
+        closed = []
+        
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_delta_reversal | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # Use new confirmation logic with multiple sample checking
+                is_confirmed, delta_change = position.get_delta_trend_confirmed()
+                
+                logger.debug(f"GREEKS_EVAL: Delta reversal | {symbol} | delta_change={delta_change:.4f if delta_change else None} | confirmed={is_confirmed}")
+                
+                if is_confirmed and delta_change and delta_change < -0.05:
+                    logger.warning(f"GREEKS_SIGNAL: EXIT | {symbol} | reason=greeks_delta_reversal | delta_change={delta_change:.4f} | premium={position.current_premium:.2f}")
+                    
+                    closed_pos = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        "greeks_delta_reversal"
+                    )
+                    if closed_pos:
+                        closed.append(closed_pos)
+                
+            except Exception as e:
+                logger.error(f"GREEKS_CHECK: Delta reversal error | {symbol} | {str(e)}")
+        
+        logger.debug(f"GREEKS_CHECK: check_greeks_delta_reversal complete | closed={len(closed)}")
+        return closed
+    
+    def check_greeks_gamma_explosion(self) -> List[Dict[str, Any]]:
+        """
+        Exit if gamma spiked - indicates high binary risk near expiry.
+        
+        IMPROVED: Uses BOTH relative multiplier AND absolute cap:
+        - Trigger if current_gamma > entry_gamma × 1.5, OR
+        - Trigger if current_gamma > 0.04 (absolute safety limit)
+        
+        This protects against near-expiry binary behavior even when entry gamma is high.
+        
+        Thresholds:
+        - Multiplier: 1.5x from entry
+        - Absolute: 0.04 (configurable)
+        """
+        closed = []
+        
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_gamma_explosion | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # Use new status method with both checks
+                is_dangerous, current_gamma, reason = position.get_gamma_status()
+                
+                logger.debug(f"GREEKS_EVAL: Gamma explosion | {symbol} | current={current_gamma:.4f} | dangerous={is_dangerous} | reason={reason}")
+                
+                if is_dangerous:
+                    logger.warning(f"GREEKS_SIGNAL: EXIT | {symbol} | reason=greeks_gamma_explosion | {reason} | premium={position.current_premium:.2f}")
+                    
+                    closed_pos = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        "greeks_gamma_explosion"
+                    )
+                    if closed_pos:
+                        closed.append(closed_pos)
+                
+            except Exception as e:
+                logger.error(f"GREEKS_CHECK: Gamma explosion error | {symbol} | {str(e)}")
+        
+        logger.debug(f"GREEKS_CHECK: check_greeks_gamma_explosion complete | closed={len(closed)}")
+        return closed
+    
+    def check_greeks_theta_acceleration(self) -> List[Dict[str, Any]]:
+        """
+        Exit if theta accelerating rapidly - time decay is eating position.
+        
+        IMPROVED: Only triggers if:
+        - |current_theta| > |entry_theta| × 3, AND
+        - (P&L <= 0 OR Delta is weakening)
+        
+        This avoids killing winning trades due to normal time decay (theta noise).
+        Only exits when theta decay is combined with adverse conditions.
+        
+        Threshold: |current_theta| > |entry_theta| × 3.0 (confirmed with context check)
+        """
+        closed = []
+        
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_theta_acceleration | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # Use new status method with directional context
+                is_dangerous, current_theta, reason, pnl_check, delta_check = position.get_theta_status()
+                
+                logger.debug(f"GREEKS_EVAL: Theta acceleration | {symbol} | current={current_theta:.4f} | dangerous={is_dangerous} | pnl_check={pnl_check} | delta_check={delta_check} | reason={reason}")
+                
+                if is_dangerous:
+                    logger.warning(f"GREEKS_SIGNAL: EXIT | {symbol} | reason=greeks_theta_acceleration | {reason} | premium={position.current_premium:.2f}")
+                    
+                    closed_pos = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        "greeks_theta_acceleration"
+                    )
+                    if closed_pos:
+                        closed.append(closed_pos)
+                
+            except Exception as e:
+                logger.error(f"GREEKS_CHECK: Theta acceleration error | {symbol} | {str(e)}")
+        
+        logger.debug(f"GREEKS_CHECK: check_greeks_theta_acceleration complete | closed={len(closed)}")
+        return closed
+    
+    def check_greeks_vega_crush(self) -> List[Dict[str, Any]]:
+        """
+        Exit if IV crushing the position - volatility collapse.
+        
+        IMPROVED: Uses DYNAMIC threshold based on entry IV regime:
+        - Low IV regime (entry_iv < 50): threshold = 1.0% change
+        - High IV regime (entry_iv >= 50): threshold = 3.0% change
+        OR uses fixed threshold = 2.0% if dynamic disabled
+        
+        This provides context-aware volatility handling:
+        - 2% IV drop is normal in low-IV regimes, requires 1% only
+        - 2% IV drop is small in high-IV regimes, requires 3%
+        
+        Sharp IV drops hurt long options (our positions).
+        """
+        closed = []
+        
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_vega_crush | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # Use new status method with dynamic threshold
+                is_dangerous, iv_change_pct, reason = position.get_vega_status()
+                
+                logger.debug(f"GREEKS_EVAL: Vega crush | {symbol} | iv_change={iv_change_pct:.2f}% | dangerous={is_dangerous} | reason={reason}")
+                
+                if is_dangerous:
+                    logger.warning(f"GREEKS_SIGNAL: EXIT | {symbol} | reason=greeks_vega_crush | {reason} | premium={position.current_premium:.2f}")
+                    
+                    closed_pos = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        "greeks_vega_crush"
+                    )
+                    if closed_pos:
+                        closed.append(closed_pos)
+                
+            except Exception as e:
+                logger.error(f"GREEKS_CHECK: Vega crush error | {symbol} | {str(e)}")
+        
+        logger.debug(f"GREEKS_CHECK: check_greeks_vega_crush complete | closed={len(closed)}")
+        return closed
+    
+    def check_greeks_health_score(self) -> List[Dict[str, Any]]:
+        """
+        Combined health check - exit if 2+ Greeks conditions are unhealthy.
+        
+        IMPROVED: Provides detailed transparency in logging:
+        - Logs exact red flags: delta_bad=True, gamma_bad=False, theta_bad=True, vega_bad=False
+        - Shows which specific conditions failed
+        - Helps auditors understand exit decisions
+        
+        Uses improved individual checks:
+        - Delta with 2-cycle confirmation
+        - Gamma with absolute cap
+        - Theta with P&L/delta context
+        - Vega with dynamic threshold
+        
+        Trigger: 2 or more conditions are RED (unhealthy)
+        """
+        closed = []
+        
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_health_score | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # Use new unified status method
+                is_unhealthy, conditions, formatted_str = position.get_health_status()
+                
+                # Log with transparency
+                logger.debug(f"GREEKS_EVAL: Health score | {symbol} | {formatted_str} | unhealthy={is_unhealthy}")
+                
+                if is_unhealthy:
+                    # Build detailed reason string
+                    bad_reasons = [k for k, v in conditions.items() if v]
+                    reason_str = ",".join(bad_reasons)
+                    
+                    logger.warning(f"GREEKS_SIGNAL: EXIT | {symbol} | reason=greeks_health_failure | {formatted_str} | failed_reasons={reason_str} | premium={position.current_premium:.2f}")
+                    
+                    closed_pos = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        "greeks_health_failure"
+                    )
+                    if closed_pos:
+                        closed.append(closed_pos)
+                
+            except Exception as e:
+                logger.error(f"GREEKS_CHECK: Health score error | {symbol} | {str(e)}")
+        
+        logger.debug(f"GREEKS_CHECK: check_greeks_health_score complete | closed={len(closed)}")
+        return closed
+    
+    def check_ml_greeks_quality(self) -> List[Dict[str, Any]]:
+        """
+        ML-guided exit check - exit if Greeks quality degrades below threshold.
+        
+        Uses ML learning engine to score Greeks quality and exit early
+        if the position's Greeks setup becomes poor.
+        
+        This prevents holding positions with bad Greeks even if other signals haven't triggered.
+        
+        Returns:
+            List of closed positions
+        """
+        closed = []
+        
+        try:
+            from .ml_integration_engine import get_ml_integration_engine
+            ml_engine = get_ml_integration_engine()
+        except ImportError:
+            logger.debug("ML_QUALITY_CHECK: ML engine not available")
+            return closed
+        
+        logger.debug(f"ML_QUALITY_CHECK: Starting ML Greeks quality check | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            try:
+                position = self.positions[symbol]
+                
+                # Check if Greeks quality has degraded
+                should_exit, reason, ml_score = ml_engine.should_exit_by_ml_quality(
+                    position.current_greeks,
+                    position.contract_type,
+                    position.action
+                )
+                
+                if should_exit:
+                    logger.warning(f"ML_QUALITY: EXIT | {symbol} | reason={reason} | score={ml_score:.2f} | premium={position.current_premium:.2f}")
+                    
+                    closed_pos = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        f"ml_greeks_quality_degradation"
+                    )
+                    if closed_pos:
+                        closed.append(closed_pos)
+                        logger.info(f"ML_QUALITY: CLOSED | {symbol} | pnl=₹{closed_pos.get('pnl', 0):.2f}")
+                else:
+                    logger.debug(f"ML_QUALITY: PASS | {symbol} | score={ml_score:.2f}")
+            
+            except Exception as e:
+                logger.error(f"ML_QUALITY: ERROR | {symbol} | {str(e)}")
+        
+        logger.debug(f"ML_QUALITY_CHECK: Complete | closed={len(closed)}")
+        return closed
+    
     def perform_periodic_monitoring(self) -> Dict[str, Any]:
         """
         Perform all monitoring checks with rate limit handling.
@@ -1770,6 +2448,13 @@ class OptionPositionMonitor:
             'closed_by_trailing': [],
             'closed_by_momentum': [],
             'closed_by_sentiment': [],
+            # Greeks-based exits (NEW)
+            'closed_by_greeks_delta': [],
+            'closed_by_greeks_gamma': [],
+            'closed_by_greeks_theta': [],
+            'closed_by_greeks_vega': [],
+            'closed_by_greeks_health': [],
+            'closed_by_ml_quality': [],  # ML-guided exits (NEW)
             'ltps_refreshed': 0,
             'rate_limiter_stats': {},
             'error': None
@@ -1814,14 +2499,39 @@ class OptionPositionMonitor:
             sentiment_closes = self.check_sentiment_exit()
             monitoring_result['closed_by_sentiment'] = [p['symbol'] for p in sentiment_closes]
             
+            # ⭐ NEW: Greeks-based smart exit checks (FRAMEWORK)
+            logger.info(f"MONITORING: Starting Greeks-based exit checks")
+            
+            greeks_delta_closes = self.check_greeks_delta_reversal()
+            monitoring_result['closed_by_greeks_delta'] = [p['symbol'] for p in greeks_delta_closes]
+            
+            greeks_gamma_closes = self.check_greeks_gamma_explosion()
+            monitoring_result['closed_by_greeks_gamma'] = [p['symbol'] for p in greeks_gamma_closes]
+            
+            greeks_theta_closes = self.check_greeks_theta_acceleration()
+            monitoring_result['closed_by_greeks_theta'] = [p['symbol'] for p in greeks_theta_closes]
+            
+            greeks_vega_closes = self.check_greeks_vega_crush()
+            monitoring_result['closed_by_greeks_vega'] = [p['symbol'] for p in greeks_vega_closes]
+            
+            greeks_health_closes = self.check_greeks_health_score()
+            monitoring_result['closed_by_greeks_health'] = [p['symbol'] for p in greeks_health_closes]
+            
+            # ⭐ NEW: ML-guided Greeks quality exit (uses ML learning to exit early)
+            ml_quality_closes = self.check_ml_greeks_quality()
+            monitoring_result['closed_by_ml_quality'] = [p['symbol'] for p in ml_quality_closes]
+            
             # Get rate limiter statistics
             if self.broker:
                 monitoring_result['rate_limiter_stats'] = self.broker.get_rate_limiter_stats()
             
-            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(momentum_closes) + len(sl_closes) + len(sentiment_closes)
+            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(momentum_closes) + len(sl_closes) + len(sentiment_closes) + len(greeks_delta_closes) + len(greeks_gamma_closes) + len(greeks_theta_closes) + len(greeks_vega_closes) + len(greeks_health_closes) + len(ml_quality_closes)
             logger.info(f"MONITORING: Checked {len(self.positions)} positions | Closed {total_closed} "
                        f"(expiry={len(expired)}, profit={len(profit_closes)}, trailing={len(trailing_closes)}, "
-                       f"momentum={len(momentum_closes)}, stoploss={len(sl_closes)}, sentiment={len(sentiment_closes)})")
+                       f"momentum={len(momentum_closes)}, stoploss={len(sl_closes)}, sentiment={len(sentiment_closes)}, "
+                       f"greeks_delta={len(greeks_delta_closes)}, greeks_gamma={len(greeks_gamma_closes)}, "
+                       f"greeks_theta={len(greeks_theta_closes)}, greeks_vega={len(greeks_vega_closes)}, "
+                       f"greeks_health={len(greeks_health_closes)}, ml_quality={len(ml_quality_closes)})")
             
             # Log current position state summary
             if len(self.positions) > 0:
@@ -1929,6 +2639,23 @@ class OptionPositionMonitor:
                 position.trial_sl_price = pos_data.get('trial_sl_price')
                 position.trial_sl_activation_time = pos_data.get('trial_sl_activation_time')
                 position.trial_sl_update_count = pos_data.get('trial_sl_update_count', 0)
+                
+                # Restore Greeks tracking fields (NEW)
+                position.entry_delta = pos_data.get('entry_delta', 0.5)
+                position.entry_gamma = pos_data.get('entry_gamma', 0.05)
+                position.entry_theta = pos_data.get('entry_theta', -0.02)
+                position.entry_vega = pos_data.get('entry_vega', 0.1)
+                position.entry_iv = pos_data.get('entry_iv', 20.0)
+                
+                # Restore Greeks history for trend detection
+                if pos_data.get('entry_greeks'):
+                    position.entry_greeks = pos_data['entry_greeks']
+                
+                # Log restored Greeks tracking
+                logger.debug(f"POSITION_LOAD: Restored Greeks tracking | symbol={symbol} | "
+                           f"delta={position.entry_delta:.3f} | gamma={position.entry_gamma:.4f} | "
+                           f"theta={position.entry_theta:.4f} | vega={position.entry_vega:.4f}")
+                
                 last_updated_raw = pos_data.get('last_updated')
                 if last_updated_raw:
                     try:
