@@ -1096,22 +1096,22 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             # Don't block on ML errors - continue processing
         
         # Get lot size and calculate dynamic quantity based on budget utilization
-        from optcode.optconfig import OptionsTradingConfig
+        from optcode.optconfig import OptionsTradingConfig, OptionsCapitalConfig
         base_lot_size = state['instrument_manager'].get_lot_size(selected_contract.symbol)
         
         # Dynamic lot calculation: maximize capital utilization
         # Budget: CAP_PER_TRADE, Premium: selected_contract.ltp, Lot Size: base_lot_size
-        quantity = OptionsTradingConfig.calculate_quantity_for_capital(
+        quantity = OptionsCapitalConfig.calculate_quantity_for_capital(
             premium=selected_contract.ltp,
-            capital=OptionsTradingConfig.CAP_PER_TRADE,
+            capital=OptionsCapitalConfig.CAP_PER_TRADE,
             lot_size=base_lot_size
         )
         
         # Calculate actual cost and utilization percentage
         actual_cost = (quantity / base_lot_size) * selected_contract.ltp
-        utilization_pct = (actual_cost / OptionsTradingConfig.CAP_PER_TRADE) * 100 if OptionsTradingConfig.CAP_PER_TRADE > 0 else 0
+        utilization_pct = (actual_cost / OptionsCapitalConfig.CAP_PER_TRADE) * 100 if OptionsTradingConfig.CAP_PER_TRADE > 0 else 0
         
-        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | base_lotsize={base_lot_size} | premium=₹{selected_contract.ltp:.2f} | budget=₹{OptionsTradingConfig.CAP_PER_TRADE} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
+        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | base_lotsize={base_lot_size} | premium=₹{selected_contract.ltp:.2f} | budget=₹{OptionsCapitalConfig.CAP_PER_TRADE} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
         
         logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | premium=₹{selected_contract.ltp:.2f}")
         
