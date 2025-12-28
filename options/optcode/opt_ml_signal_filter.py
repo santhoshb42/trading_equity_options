@@ -15,6 +15,13 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from collections import deque
 import numpy as np
+import os
+
+# Import config
+try:
+    from .optconfig import MLConfig
+except ImportError:
+    MLConfig = None
 
 
 class GreeksQualityValidator:
@@ -35,19 +42,21 @@ class GreeksQualityValidator:
                                   contract_type: str,
                                   action: str) -> Tuple[bool, str]:
         """
-        Validate Greeks alignment with strategy
+        Validate Greeks alignment with strategy using configurable ranges
         
         For CE BUY:
-        - Positive Delta (0.3-0.7 optimal)
+        - Positive Delta (configurable range, default 0.2-0.8)
         - Positive Gamma (acceleration upward)
         - Negative Theta (cost of time)
         - Positive Vega (benefit from IV increase)
         
         For CE SELL:
-        - Negative Delta (-0.3 to -0.7)
+        - Negative Delta (configurable range, default -0.8 to -0.2)
         - Negative Gamma (acceleration downward, good for seller)
         - Positive Theta (profit from time decay)
         - Negative Vega (benefit from IV decrease)
+        
+        All thresholds loaded from MLConfig for easy tuning
         """
         self.filter_stats['total_signals'] += 1
         
@@ -59,35 +68,31 @@ class GreeksQualityValidator:
         action_upper = action.upper()
         ct_upper = contract_type.upper()
         
-        # Validate Delta
-        if ct_upper == 'CE' and action_upper == 'BUY':
-            if not (0.2 < delta < 0.8):
-                self.filter_stats['failed_delta'] += 1
-                return False, f"CE BUY: Delta {delta:.2f} not in optimal range (0.2-0.8)"
-        elif ct_upper == 'CE' and action_upper == 'SELL':
-            if not (-0.8 < delta < -0.2):
-                self.filter_stats['failed_delta'] += 1
-                return False, f"CE SELL: Delta {delta:.2f} not in optimal range (-0.8 to -0.2)"
-        elif ct_upper == 'PE' and action_upper == 'BUY':
-            if not (-0.8 < delta < -0.2):
-                self.filter_stats['failed_delta'] += 1
-                return False, f"PE BUY: Delta {delta:.2f} not in optimal range (-0.8 to -0.2)"
-        elif ct_upper == 'PE' and action_upper == 'SELL':
-            if not (0.2 < delta < 0.8):
-                self.filter_stats['failed_delta'] += 1
-                return False, f"PE SELL: Delta {delta:.2f} not in optimal range (0.2-0.8)"
+        # Get validation ranges from config
+        key = f"{ct_upper.lower()}_{action_upper.lower()}"
+        ranges = MLConfig.VALIDATION_RANGES.get(key, {}) if MLConfig else {}
         
-        # Validate Theta (time decay direction)
+        delta_min = ranges.get('delta_min', 0.2) if ct_upper == 'CE' and action_upper == 'BUY' else ranges.get('delta_min', -0.8)
+        delta_max = ranges.get('delta_max', 0.8) if ct_upper == 'CE' and action_upper == 'BUY' else ranges.get('delta_max', -0.2)
+        
+        # Validate Delta using config ranges
+        if not (delta_min < delta < delta_max):
+            self.filter_stats['failed_delta'] += 1
+            return False, f"{ct_upper} {action_upper}: Delta {delta:.2f} not in range ({delta_min}-{delta_max})"
+        
+        # Validate Theta (time decay direction) - configurable thresholds
         if action_upper == 'BUY':
             # Buyers lose to time decay - should be minimal
-            if theta < -0.15:  # Losing too much to theta
+            theta_threshold = float(os.getenv("ML_BUY_THETA_MIN", "-0.15"))  # Default: losing too much if < -0.15
+            if theta < theta_threshold:
                 self.filter_stats['failed_theta'] += 1
                 return False, f"{ct_upper} BUY: Theta {theta:.3f} too negative (buyer loses to decay)"
         else:  # SELL
             # Sellers benefit from time decay
-            if theta < 0.02:  # Not enough theta benefit
+            theta_threshold = float(os.getenv("ML_SELL_THETA_MIN", "0.02"))  # Default: need > 0.02 theta benefit
+            if theta < theta_threshold:
                 self.filter_stats['failed_theta'] += 1
-                return False, f"{ct_upper} SELL: Theta {theta:.3f} insufficient (need > 0.02)"
+                return False, f"{ct_upper} SELL: Theta {theta:.3f} insufficient (need > {theta_threshold})"
         
         # Validate Gamma (acceleration)
         # Generally prefer non-extreme gamma

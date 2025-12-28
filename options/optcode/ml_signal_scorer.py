@@ -27,6 +27,11 @@ from .optlogging import logger, log_event
 from .options_learning_engine import get_symbol_tracker, LearningConfig
 
 try:
+    from .optconfig import MLConfig
+except ImportError:
+    MLConfig = None
+
+try:
     from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
     from sklearn.svm import SVC
     from sklearn.preprocessing import StandardScaler
@@ -67,18 +72,18 @@ class MLScorerConfig:
         'days_to_expiry',      # Days remaining (0-30)
     ]
     
-    # Model weights for ensemble voting
-    RANDOM_FOREST_WEIGHT = 0.5
-    GRADIENT_BOOSTING_WEIGHT = 0.3
-    SVM_WEIGHT = 0.2
+    # Model weights for ensemble voting (loaded from config)
+    RANDOM_FOREST_WEIGHT = MLConfig.MODEL_WEIGHTS['random_forest'] if MLConfig else 0.5
+    GRADIENT_BOOSTING_WEIGHT = MLConfig.MODEL_WEIGHTS['gradient_boosting'] if MLConfig else 0.3
+    SVM_WEIGHT = MLConfig.MODEL_WEIGHTS['svm'] if MLConfig else 0.2
     
-    # Confidence adjustment
-    ML_SCORE_MIN = 0.3  # 30% floor
-    ML_SCORE_MAX = 0.85  # 85% ceiling (never predict too high)
+    # Confidence adjustment (loaded from config)
+    ML_SCORE_MIN = MLConfig.ML_SCORE_MIN if MLConfig else 0.3  # 30% floor
+    ML_SCORE_MAX = MLConfig.ML_SCORE_MAX if MLConfig else 0.85  # 85% ceiling (never predict too high)
     
-    # Feature defaults
-    DEFAULT_IV_PERCENTILE = 50
-    DEFAULT_VOLATILITY = 1.0
+    # Feature defaults (loaded from config)
+    DEFAULT_IV_PERCENTILE = MLConfig.DEFAULT_IV_PERCENTILE if MLConfig else 50
+    DEFAULT_VOLATILITY = MLConfig.DEFAULT_VOLATILITY if MLConfig else 1.0
 
 
 # =============================================================================

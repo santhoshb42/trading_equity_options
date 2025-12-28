@@ -27,6 +27,7 @@ try:
         ProbabilityOfProfitCalculator,
         VolatilityPercentileValidator,
     )
+    from .optconfig import MLConfig
     HAS_ML = True
 except ImportError as e:
     print(f"Warning: Could not import ML modules: {e}")
@@ -152,45 +153,53 @@ class MLIntegration:
         """
         Calculate overall ML confidence in the alert (0.0 to 1.0)
         
-        Combines multiple factors:
-        - Greeks quality (35%)
-        - Volatility regime fit (25%)
-        - PoP (25%)
-        - Contract type alignment (15%)
+        Combines multiple factors using configurable weights:
+        - Greeks quality (default 35%)
+        - Volatility regime fit (default 25%)
+        - PoP (default 25%)
+        - Contract type alignment (default 15%)
+        
+        All weights loaded from MLConfig for easy tuning
         """
         confidence = 0.0
         total_weight = 0.0
         
+        # Load weights from config
+        greeks_weight = MLConfig.CONFIDENCE_WEIGHTS.get('greeks_quality', 0.35)
+        regime_weight = MLConfig.CONFIDENCE_WEIGHTS.get('volatility_regime', 0.25)
+        pop_weight = MLConfig.CONFIDENCE_WEIGHTS.get('probability_of_profit', 0.25)
+        contract_weight = MLConfig.CONFIDENCE_WEIGHTS.get('contract_type_alignment', 0.15)
+        
         # Greeks quality
         if 'ml_greeks_score' in enriched_alert:
-            confidence += enriched_alert['ml_greeks_score'] * 0.35
-            total_weight += 0.35
+            confidence += enriched_alert['ml_greeks_score'] * greeks_weight
+            total_weight += greeks_weight
         
         # Regime fit
         if 'ml_regime' in enriched_alert and enriched_alert.get('ml_iv_suitable'):
-            confidence += 0.9 * 0.25  # Good fit if IV suitable
-            total_weight += 0.25
+            confidence += MLConfig.HIGH_CONFIDENCE_FALLBACK * regime_weight  # Good fit if IV suitable
+            total_weight += regime_weight
         elif 'ml_regime' in enriched_alert:
-            confidence += 0.5 * 0.25  # Medium fit otherwise
-            total_weight += 0.25
+            confidence += MLConfig.MEDIUM_CONFIDENCE_FALLBACK * regime_weight  # Medium fit otherwise
+            total_weight += regime_weight
         
         # PoP
         if 'ml_pop' in enriched_alert:
             pop = enriched_alert['ml_pop']
             # Normalize PoP to 0-1 (50% PoP = 0.5 confidence)
             pop_confidence = pop / 100.0
-            confidence += pop_confidence * 0.25
-            total_weight += 0.25
+            confidence += pop_confidence * pop_weight
+            total_weight += pop_weight
         
         # Contract type alignment
         if 'ml_preferred_contract' in enriched_alert:
             actual_ct = enriched_alert.get('contract_type', '')
             preferred_ct = enriched_alert['ml_preferred_contract']
             match = 1.0 if actual_ct == preferred_ct else 0.5
-            confidence += match * 0.15
-            total_weight += 0.15
+            confidence += match * contract_weight
+            total_weight += contract_weight
         
-        return confidence / total_weight if total_weight > 0 else 0.5
+        return confidence / total_weight if total_weight > 0 else MLConfig.DEFAULT_CONFIDENCE
     
     def rank_alerts_by_ml(self, alerts: List[Dict[str, Any]],
                          max_trades: int = 3) -> List[Dict[str, Any]]:
@@ -198,10 +207,15 @@ class MLIntegration:
         Rank and select alerts using ML engine
         
         Returns top N alerts sorted by ML confidence
+        Uses MLConfig.MAX_TRADES_PER_ML_CHECK if not specified
         """
         if not HAS_ML or not self.learning_engine:
             # Fallback to simple sorting
             return alerts[:max_trades]
+        
+        # Use config max if not overridden
+        if max_trades <= 0:
+            max_trades = MLConfig.MAX_TRADES_PER_ML_CHECK
         
         try:
             # Enrich all alerts
@@ -212,7 +226,7 @@ class MLIntegration:
             
             # Sort by ML confidence
             enriched_alerts.sort(
-                key=lambda a: a.get('ml_confidence', 0.5),
+                key=lambda a: a.get('ml_confidence', MLConfig.DEFAULT_CONFIDENCE),
                 reverse=True
             )
             

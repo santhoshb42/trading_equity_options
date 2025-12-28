@@ -28,6 +28,13 @@ from collections import defaultdict, deque
 import numpy as np
 from statistics import mean, stdev
 
+# Import ML config
+try:
+    from optconfig import MLConfig
+except ImportError:
+    # Fallback if optconfig not available
+    MLConfig = None
+
 
 class OptionsGreeksAnalyzer:
     """
@@ -45,24 +52,27 @@ class OptionsGreeksAnalyzer:
             'avg_gamma': 0.0,
             'avg_theta': 0.0,
             'avg_vega': 0.0,
-            'trades_history': deque(maxlen=100),
+            'trades_history': deque(maxlen=MLConfig.TRADE_HISTORY_SIZE if MLConfig else 100),
         })
         
-        # Best Greeks combinations observed
-        self.optimal_greeks = {
-            'ce_buy': {'delta': 0.65, 'gamma': 0.015, 'theta': -0.05, 'vega': 0.8},
-            'ce_sell': {'delta': -0.35, 'gamma': -0.015, 'theta': 0.05, 'vega': -0.8},
-            'pe_buy': {'delta': -0.65, 'gamma': 0.015, 'theta': -0.05, 'vega': 0.8},
-            'pe_sell': {'delta': 0.35, 'gamma': -0.015, 'theta': 0.05, 'vega': -0.8},
-        }
-        
-        # Greeks weights for scoring
-        self.greeks_weights = {
-            'delta': 0.35,  # Directional exposure (most important)
-            'gamma': 0.20,  # Acceleration (risk)
-            'theta': 0.25,  # Time decay benefit (income)
-            'vega': 0.20,   # Volatility exposure
-        }
+        # Load optimal Greeks from config (can be updated by learning)
+        if MLConfig:
+            self.optimal_greeks = MLConfig.OPTIMAL_GREEKS.copy()
+            self.greeks_weights = MLConfig.GREEKS_WEIGHTS.copy()
+        else:
+            # Fallback hardcoded values
+            self.optimal_greeks = {
+                'ce_buy': {'delta': 0.65, 'gamma': 0.015, 'theta': -0.05, 'vega': 0.8},
+                'ce_sell': {'delta': -0.35, 'gamma': -0.015, 'theta': 0.05, 'vega': -0.8},
+                'pe_buy': {'delta': -0.65, 'gamma': 0.015, 'theta': -0.05, 'vega': 0.8},
+                'pe_sell': {'delta': 0.35, 'gamma': -0.015, 'theta': 0.05, 'vega': -0.8},
+            }
+            self.greeks_weights = {
+                'delta': 0.35,
+                'gamma': 0.20,
+                'theta': 0.25,
+                'vega': 0.20,
+            }
     
     def record_greek_trade(self, contract_type: str, action: str, 
                           entry_greeks: Dict[str, float],

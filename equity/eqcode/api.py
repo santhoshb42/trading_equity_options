@@ -2883,25 +2883,49 @@ def square_off_all_positions():
         from pathlib import Path
         positions_file = Path(__file__).parent.parent / "data" / "positions.json"
         positions_to_close = []
+        positions_data = {}  # Initialize outside try block
         
         if positions_file.exists():
             try:
                 with open(positions_file, 'r') as f:
                     positions_data = json.load(f)
-                    # Filter for OPEN positions only
-                    positions_to_close = [pos for pos in positions_data.values() 
-                                         if pos.get('status') == 'OPEN']
+                    # Filter for OPEN positions that haven't been exited yet
+                    # ⚠️ CRITICAL FIX: Check if position already has exit_order_id or exit_price
+                    # This prevents double-closing positions that were already exited via SL/TRAIL SL
+                    positions_to_close = [
+                        pos for pos in positions_data.values() 
+                        if (pos.get('status') == 'OPEN' and 
+                            not pos.get('exit_order_id') and  # No SL exit pending
+                            not pos.get('exit_price'))  # No exit price (already exited)
+                    ]
                 log_event("SQUARE_OFF_LOADED_FROM_FILE", f"Loaded positions from file",
-                         file=str(positions_file), count=len(positions_to_close))
+                         file=str(positions_file), count=len(positions_to_close),
+                         total_positions=len(positions_data))
             except Exception as e:
                 log_error("SQUARE_OFF_LOAD_ERROR", f"Failed to load positions from file: {str(e)}")
                 positions_to_close = list(trading_state.active_positions.values())  # Fallback
+                positions_data = {}
         else:
             # Fallback to active_positions if file doesn't exist
             positions_to_close = list(trading_state.active_positions.values())
         
         log_event("SQUARE_OFF_START", f"Starting square-off of {len(positions_to_close)} positions", 
                  reason=reason)
+        
+        # Log positions that were already exited (skip logging in success response)
+        if positions_file.exists() and positions_data:
+            already_exited = [
+                pos for pos in positions_data.values() 
+                if (pos.get('status') == 'OPEN' and 
+                    (pos.get('exit_order_id') or pos.get('exit_price')))
+            ]
+            if already_exited:
+                for pos in already_exited:
+                    log_event("SQUARE_OFF_SKIPPED_ALREADY_EXITED", 
+                             f"Skipped {pos.get('symbol')} - already exited via SL/TRAIL SL",
+                             symbol=pos.get('symbol'),
+                             exit_order_id=pos.get('exit_order_id'),
+                             exit_price=pos.get('exit_price'))
         
         if not positions_to_close:
             log_event("SQUARE_OFF_COMPLETE", "No positions to square off")

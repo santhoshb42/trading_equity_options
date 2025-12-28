@@ -489,6 +489,19 @@ class OptionsRateLimiter:
                 }
             }
     
+    def get_utilization(self) -> float:
+        """
+        Get current rate limiter utilization (0.0 to 1.0)
+        Based on per-second bucket (more immediate)
+        
+        Returns:
+            Utilization percentage as float (0.0 = empty, 1.0 = full)
+        """
+        with self.lock:
+            self.second_bucket._refill()
+            utilization = (self.second_bucket.capacity - self.second_bucket.tokens) / self.second_bucket.capacity
+            return max(0.0, min(1.0, utilization))  # Clamp between 0 and 1
+    
     def reset_statistics(self):
         """Reset statistics counters"""
         with self.lock:
