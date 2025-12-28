@@ -49,6 +49,21 @@ except ImportError:
     HAS_LEARNING_ENGINE = False
     SymbolPerformanceTracker = None
 
+# Live Data Tracking system
+try:
+    from optcode.live_data_tracker import get_live_data_tracker
+    from optcode.live_data_table_formatter import get_table_formatter
+    HAS_LIVE_DATA = True
+except ImportError:
+    HAS_LIVE_DATA = False
+
+# EOD Backup handler
+try:
+    from eod_backup_handler import run_eod_backup
+    HAS_EOD_BACKUP = True
+except ImportError:
+    HAS_EOD_BACKUP = False
+
 # Alert system integration
 try:
     from alert_system import AlertManager, AlertLevel, AlertCategory
@@ -74,6 +89,8 @@ class OptionsTradingBot:
         self.instrument_manager = None
         self.alert_manager = None
         self.learning_engine = None  # ML learning for trade outcomes
+        self.live_data_tracker = None  # Live data tracking
+        self.live_data_formatter = None  # Table format generator
         self.trading_stats = {
             'orders_placed': 0,
             'orders_filled': 0,
@@ -152,6 +169,23 @@ class OptionsTradingBot:
         else:
             print(f"⚠️  Learning engine not available")
             logger.warning(f"BOT_INIT: LEARNING_ENGINE_UNAVAILABLE")
+        
+        # Initialize Live Data Tracking system
+        print(f"\n📊 Initializing Live Data Tracking...")
+        if HAS_LIVE_DATA:
+            try:
+                self.live_data_tracker = get_live_data_tracker()
+                self.live_data_formatter = get_table_formatter()
+                # Clear daily data at startup
+                self.live_data_tracker.clear_daily_data()
+                print(f"✅ Live data tracking ready - data will be saved to JSON/CSV/Markdown")
+                logger.info(f"BOT_INIT: LIVE_DATA_READY")
+            except Exception as e:
+                print(f"⚠️  Live data tracking failed to initialize: {str(e)}")
+                logger.warning(f"BOT_INIT: LIVE_DATA_INIT_FAILED | {str(e)}")
+        else:
+            print(f"⚠️  Live data tracking not available")
+            logger.warning(f"BOT_INIT: LIVE_DATA_UNAVAILABLE")
         
         # Initialize alert system
         if ALERT_SYSTEM_AVAILABLE:
@@ -311,6 +345,17 @@ class OptionsTradingBot:
             
             # RUN EOD ML LEARNING UPDATE (NEW)
             self._run_eod_learning_update()
+            
+            # RUN EOD BACKUP AND CLEAR LIVE DATA
+            if HAS_EOD_BACKUP:
+                try:
+                    logger.info("EOD_BACKUP: START | Backing up and clearing live data")
+                    print(f"\n📦 EOD Backup: Backing up live trading data...")
+                    run_eod_backup()
+                    logger.info("EOD_BACKUP: SUCCESS | Live data backed up and cleared")
+                except Exception as e:
+                    logger.error(f"EOD_BACKUP: FAILED | {str(e)}")
+                    print(f"   ⚠️  EOD backup failed: {str(e)}")
             
             # Remove stale positions from active file
             active_positions = [p for p in positions if p not in stale_positions]
