@@ -449,7 +449,12 @@ class AngelOneOptionsBroker:
         # Positions tracking
         self.option_positions: Dict[str, Dict[str, Any]] = {}  # {symbol: position_data}
         
-        # Auto-authenticate on init to enable API calls
+        # Authentication retry tracking (for rate limit handling)
+        self.auth_retry_count = 0
+        self.auth_last_retry_time = None
+        self.auth_rate_limit_detected = False
+        
+        # Auto-authenticate on init with retry logic to handle rate limits
         if self.api_key and self.client_code and self.password:
             self.authenticate()
         else:
@@ -467,14 +472,31 @@ class AngelOneOptionsBroker:
         
         return True
     
-    def authenticate(self) -> bool:
-        """Authenticate with AngelOne API"""
-        logger.debug("BROKER_AUTHENTICATE: Attempting broker authentication")
+    def authenticate(self, is_retry: bool = False) -> bool:
+        """Authenticate with AngelOne API with rate limit handling"""
+        logger.debug(f"BROKER_AUTHENTICATE: Attempting broker authentication (retry={is_retry})")
+        
+        # Rate limit detection and exponential backoff
+        if is_retry:
+            # Check if we're rate limited
+            if self.auth_rate_limit_detected:
+                # Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s max
+                wait_time = min(2 ** self.auth_retry_count, 32)
+                if self.auth_last_retry_time:
+                    elapsed = (datetime.now() - self.auth_last_retry_time).total_seconds()
+                    if elapsed < wait_time:
+                        remaining = wait_time - elapsed
+                        logger.debug(f"BROKER_AUTHENTICATE: Rate limit backoff | wait={remaining:.1f}s | retry_count={self.auth_retry_count}")
+                        return False  # Not ready to retry yet
+            self.auth_retry_count += 1
+            self.auth_last_retry_time = datetime.now()
         
         if not SmartConnect:
             logger.warning("BROKER_AUTHENTICATE: SmartAPI not available - running in demo mode")
             print("⚠️ SmartAPI not available - running in demo mode")
             self.authenticated = True
+            self.auth_retry_count = 0
+            self.auth_rate_limit_detected = False
             return True
         
         # PAPER mode: Authenticate to fetch LIVE data (LTP, IV, Greeks)
@@ -509,24 +531,71 @@ class AngelOneOptionsBroker:
                 self.refresh_token = data['data']['refreshToken']
                 self.authenticated = True
                 self.last_auth_time = datetime.now()
+                # Reset retry counters on success
+                self.auth_retry_count = 0
+                self.auth_rate_limit_detected = False
                 logger.info(f"BROKER_AUTHENTICATE: SUCCESS | client={self.client_code} | session_valid_until={self.last_auth_time + timedelta(hours=24)}")
                 print(f"✅ Options broker authenticated: {self.client_code}")
                 return True
             else:
-                logger.error(f"BROKER_AUTHENTICATE: FAILED | message={data.get('message')}")
-                print(f"❌ Options broker auth failed: {data.get('message')}")
-                return False
+                error_msg = data.get('message', 'Unknown error')
+                # Detect rate limit errors
+                if 'rate' in error_msg.lower() or 'exceed' in error_msg.lower() or 'access denied' in error_msg.lower():
+                    self.auth_rate_limit_detected = True
+                    logger.warning(f"BROKER_AUTHENTICATE: RATE_LIMITED | message={error_msg} | retry_count={self.auth_retry_count}")
+                    print(f"⚠️ Rate limited by broker - will retry with exponential backoff")
+                    return False
+                else:
+                    logger.error(f"BROKER_AUTHENTICATE: FAILED | message={error_msg}")
+                    print(f"❌ Options broker auth failed: {error_msg}")
+                    # Reset rate limit flag for non-rate-limit errors
+                    self.auth_rate_limit_detected = False
+                    self.auth_retry_count = 0
+                    return False
         except Exception as e:
-            logger.error(f"BROKER_AUTHENTICATE: ERROR | {str(e)}")
-            print(f"❌ Options broker auth error: {str(e)}")
-            return False
+            error_str = str(e)
+            # Detect rate limit in exception message
+            if 'rate' in error_str.lower() or 'exceed' in error_str.lower() or 'access denied' in error_str.lower():
+                self.auth_rate_limit_detected = True
+                logger.warning(f"BROKER_AUTHENTICATE: RATE_LIMIT_EXCEPTION | {error_str} | retry_count={self.auth_retry_count}")
+                print(f"⚠️ Rate limit detected - will retry with exponential backoff")
+                return False
+            else:
+                logger.error(f"BROKER_AUTHENTICATE: ERROR | {error_str}")
+                print(f"❌ Options broker auth error: {error_str}")
+                self.auth_rate_limit_detected = False
+                self.auth_retry_count = 0
+                return False
+                print(f"❌ Options broker auth error: {error_str}")
+                self.auth_rate_limit_detected = False
+                self.auth_retry_count = 0
+                return False
     
     def ensure_authenticated(self) -> bool:
         """Check and refresh authentication if needed - called before critical operations"""
         if not self._check_session_valid():
-            logger.info("BROKER_SESSION: REFRESHING | current session expired or invalid")
-            print("🔄 Refreshing broker session...")
-            return self.authenticate()
+            # Try authentication with retry if rate limited
+            if self.auth_rate_limit_detected:
+                # Check if enough time has passed for retry
+                if self.auth_last_retry_time:
+                    wait_time = min(2 ** self.auth_retry_count, 32)
+                    elapsed = (datetime.now() - self.auth_last_retry_time).total_seconds()
+                    if elapsed >= wait_time:
+                        # Ready to retry
+                        logger.info("BROKER_SESSION: RETRYING_AFTER_RATE_LIMIT | attempting authentication")
+                        return self.authenticate(is_retry=True)
+                    else:
+                        # Still in backoff period
+                        logger.debug(f"BROKER_SESSION: RATE_LIMIT_BACKOFF | wait={wait_time - elapsed:.1f}s")
+                        return False
+                else:
+                    # First attempt after rate limit
+                    return self.authenticate(is_retry=True)
+            else:
+                # No rate limit, just refresh
+                logger.info("BROKER_SESSION: REFRESHING | current session expired or invalid")
+                print("🔄 Refreshing broker session...")
+                return self.authenticate()
         return True
     
     def get_ltp_cache(self) -> LTPCache:
