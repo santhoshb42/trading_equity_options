@@ -540,15 +540,19 @@ class OptionsHybridLearningEngine:
         """
         Update learning models with today's trade results
         Called at end of day
+        
+        CRITICAL: All trades indexed by underlying (not full symbol) for data persistence
+        across contract expirations. After 30 days when contract expires, underlying
+        remains the same so learning persists.
         """
         for trade in daily_trades:
             # Record Greeks impact
-            if 'greeks_entry' in trade and 'greeks_exit' in trade:
+            if 'entry_greeks' in trade and 'exit_greeks' in trade:
                 self.greeks_analyzer.record_greek_trade(
                     contract_type=trade.get('contract_type', 'CE'),
                     action=trade.get('action', 'BUY'),
-                    entry_greeks=trade.get('greeks_entry', {}),
-                    exit_greeks=trade.get('greeks_exit', {}),
+                    entry_greeks=trade.get('entry_greeks', {}),
+                    exit_greeks=trade.get('exit_greeks', {}),
                     profit=trade.get('profit', 0.0),
                     won=trade.get('profit', 0.0) > 0,
                 )
@@ -561,7 +565,7 @@ class OptionsHybridLearningEngine:
                     profit=trade.get('profit', 0.0),
                 )
             
-            # Record contract type performance
+            # Record contract type performance (uses underlying - CORRECT)
             if 'contract_type' in trade:
                 self.contract_tracker.record_contract_trade(
                     underlying=trade.get('underlying', ''),
@@ -571,10 +575,10 @@ class OptionsHybridLearningEngine:
                     profit=trade.get('profit', 0.0),
                 )
             
-            # Record strike performance
+            # Record strike performance (use underlying, NOT full symbol - CRITICAL FIX)
             if 'strike_type' in trade:
                 self.strike_optimizer.record_strike_trade(
-                    symbol=trade.get('symbol', ''),
+                    symbol=trade.get('underlying', ''),  # Use underlying, not full symbol!
                     strike_type=trade['strike_type'],
                     action=trade.get('action', 'BUY'),
                     won=trade.get('profit', 0.0) > 0,

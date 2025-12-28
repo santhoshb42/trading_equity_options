@@ -240,6 +240,32 @@ class OptionsTradingConfig:
     MAX_GAMMA = float(os.getenv("OPTIONS_MAX_GAMMA", "0.05"))  # Max gamma (risk from price moves)
     MIN_THETA = float(os.getenv("OPTIONS_MIN_THETA", "-0.01"))  # Min theta (time decay preference)
     
+    # =========================================================================
+    # IMPROVED GREEKS EXIT THRESHOLDS (Audit Enhancement)
+    # =========================================================================
+    # These improvements reduce false positives and add confirmation logic
+    
+    # 1. DELTA REVERSAL - Confirmation for reduced whipsaw
+    DELTA_REVERSAL_THRESHOLD = float(os.getenv("OPTIONS_DELTA_REVERSAL_THRESHOLD", "-0.05"))  # Trigger: delta_change < -0.05
+    DELTA_REVERSAL_CONFIRM_CYCLES = int(os.getenv("OPTIONS_DELTA_REVERSAL_CONFIRM_CYCLES", "2"))  # Require 2 consecutive cycles OR rolling avg
+    ENABLE_DELTA_ROLLING_AVG = os.getenv("OPTIONS_ENABLE_DELTA_ROLLING_AVG", "true").lower() == "true"  # Use rolling average of last 3 samples
+    
+    # 2. GAMMA EXPLOSION - Absolute cap added for safety
+    GAMMA_MULTIPLIER_THRESHOLD = float(os.getenv("OPTIONS_GAMMA_MULTIPLIER_THRESHOLD", "1.5"))  # Trigger: gamma > 1.5x entry
+    GAMMA_ABSOLUTE_CAP = float(os.getenv("OPTIONS_GAMMA_ABSOLUTE_CAP", "0.04"))  # ALSO trigger if gamma > 0.04 (absolute limit)
+    
+    # 3. THETA ACCELERATION - Directional context check
+    THETA_MULTIPLIER_THRESHOLD = float(os.getenv("OPTIONS_THETA_MULTIPLIER_THRESHOLD", "3.0"))  # Trigger: |theta| > 3x entry
+    ENABLE_THETA_PNL_CHECK = os.getenv("OPTIONS_ENABLE_THETA_PNL_CHECK", "true").lower() == "true"  # Only exit if P&L <= 0
+    ENABLE_THETA_DELTA_CHECK = os.getenv("OPTIONS_ENABLE_THETA_DELTA_CHECK", "true").lower() == "true"  # Only exit if delta weakening
+    
+    # 4. VEGA CRUSH - Dynamic threshold based on entry IV
+    VEGA_CRUSH_FIXED_THRESHOLD = float(os.getenv("OPTIONS_VEGA_CRUSH_FIXED_THRESHOLD", "2.0"))  # Fixed: 2% IV change
+    ENABLE_VEGA_DYNAMIC_THRESHOLD = os.getenv("OPTIONS_ENABLE_VEGA_DYNAMIC_THRESHOLD", "true").lower() == "true"  # Use IV percentile instead
+    VEGA_LOW_IV_THRESHOLD = float(os.getenv("OPTIONS_VEGA_LOW_IV_THRESHOLD", "1.0"))  # 1% in low-IV regimes
+    VEGA_HIGH_IV_THRESHOLD = float(os.getenv("OPTIONS_VEGA_HIGH_IV_THRESHOLD", "3.0"))  # 3% in high-IV regimes
+    VEGA_IV_REGIME_BOUNDARY = float(os.getenv("OPTIONS_VEGA_IV_REGIME_BOUNDARY", "50.0"))  # Boundary between low/high IV
+    
     # IV (Implied Volatility) thresholds
     IV_PERCENTILE_MIN = int(os.getenv("OPTIONS_IV_PERCENTILE_MIN", "30"))  # Min IV percentile for entry
     IV_PERCENTILE_MAX = int(os.getenv("OPTIONS_IV_PERCENTILE_MAX", "90"))  # Max IV percentile for entry

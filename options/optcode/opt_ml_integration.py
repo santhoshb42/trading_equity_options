@@ -27,6 +27,7 @@ try:
         ProbabilityOfProfitCalculator,
         VolatilityPercentileValidator,
     )
+    from .ce_extractor import extract_underlying_from_symbol
     from .optconfig import MLConfig
     HAS_ML = True
 except ImportError as e:
@@ -76,6 +77,9 @@ class MLIntegration:
         """
         Enrich alert with ML analysis
         
+        CRITICAL: Extracts underlying from symbol to preserve learning across
+        contract expirations. All ML data indexed by underlying, not full symbol.
+        
         Adds:
         - Greeks quality score
         - Volatility regime and suitability
@@ -89,6 +93,11 @@ class MLIntegration:
         enriched = alert.copy()
         
         try:
+            # Extract underlying from symbol for data persistence
+            symbol = alert.get('symbol', '')
+            underlying = extract_underlying_from_symbol(symbol) if symbol else ''
+            enriched['underlying'] = underlying  # CRITICAL: Add underlying to alert
+            
             # Calculate Greeks quality score
             if greeks:
                 contract_type = alert.get('contract_type', 'CE')
@@ -123,16 +132,14 @@ class MLIntegration:
                 )
                 enriched['ml_pop'] = pop
             
-            # Get strike recommendation
-            symbol = alert.get('symbol', '')
-            if symbol:
+            # Get strike recommendation (use underlying, not full symbol)
+            if underlying:
                 preferred_strike = self.learning_engine.strike_optimizer.get_optimal_strike(
-                    symbol, action, []
+                    underlying, action, []
                 )
                 enriched['ml_preferred_strike'] = preferred_strike
             
-            # Get contract type preference
-            underlying = alert.get('underlying', '')
+            # Get contract type preference (already uses underlying)
             if underlying:
                 preferred_ct = self.learning_engine.contract_tracker.get_preferred_contract_type(
                     underlying

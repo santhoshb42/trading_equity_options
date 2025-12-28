@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .optlogging import logger, log_event
 from .optconfig import OptionsTradingConfig, MLConfig
+from .ce_extractor import extract_underlying_from_symbol
 
 # ML Components
 try:
@@ -71,6 +72,11 @@ class MLIntegrationEngine:
         Called immediately after position closes.
         Extracts all relevant data from position for learning.
         
+        CRITICAL: Extracts underlying from symbol to preserve learning across
+        contract expirations. After 30 days when contract expires, data indexed
+        by underlying (BANKNIFTY) will persist, but data indexed by full symbol
+        (BANKNIFTY26DEC24000CE) would be lost forever.
+        
         Args:
             position_data: Dict from OptionPosition.close_position()
                 Contains: entry_greeks, exit_greeks, profit, etc.
@@ -82,9 +88,14 @@ class MLIntegrationEngine:
             return False
         
         try:
+            # Get full symbol and extract underlying for data persistence
+            full_symbol = position_data.get('symbol', '')
+            underlying = extract_underlying_from_symbol(full_symbol)
+            
             # Extract key learning data from position
             trade_record = {
-                'symbol': position_data.get('symbol'),
+                'symbol': full_symbol,  # Keep full symbol for reference
+                'underlying': underlying,  # CRITICAL: Use this for data indexing!
                 'contract_type': position_data.get('contract_type', 'CE'),
                 'action': position_data.get('action', 'BUY'),
                 'entry_premium': position_data.get('entry_premium', 0),
@@ -105,7 +116,7 @@ class MLIntegrationEngine:
             self.ml_integration.record_daily_trade(trade_record)
             self.daily_trades.append(trade_record)
             
-            logger.debug(f"ML_ENGINE: TRADE_RECORDED | symbol={trade_record['symbol']} | pnl=₹{trade_record['profit']}")
+            logger.debug(f"ML_ENGINE: TRADE_RECORDED | symbol={full_symbol} | underlying={underlying} | pnl=₹{trade_record['profit']}")
             return True
         
         except Exception as e:

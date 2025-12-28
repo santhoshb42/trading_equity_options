@@ -592,15 +592,24 @@ def create_options_api_app():
                                 base_symbol = symbol.split('-')[0] if '-' in symbol else symbol
                                 # Check if it's a win (positive PnL)
                                 is_win = pnl > 0
-                                # Record to learning engine
+                                # Get Greeks from position object if available
+                                entry_greeks = pos.get('entry_greeks', {})
+                                exit_greeks = pos.get('exit_greeks', {})
+                                contract_type = pos.get('contract_type', 'CE')
+                                action = pos.get('action', 'BUY')
+                                # Record to learning engine with full Greeks data
                                 state['learning_engine'].record_trade(
                                     symbol=base_symbol,
                                     won=is_win,
                                     profit=pnl,
                                     predicted_prob=0.5,  # Default if ML prediction not available
-                                    trading_mode=OptionsTradingConfig.TRADING_MODE
+                                    trading_mode=OptionsTradingConfig.TRADING_MODE,
+                                    entry_greeks=entry_greeks,  # ADDED: Full entry Greeks
+                                    exit_greeks=exit_greeks,    # ADDED: Full exit Greeks
+                                    contract_type=contract_type,  # ADDED: CE or PE
+                                    action=action                 # ADDED: BUY or SELL
                                 )
-                                logger.debug(f"LEARNING_ENGINE: TRADE_RECORDED | {base_symbol} | won={is_win} | pnl=₹{pnl:.2f}")
+                                logger.debug(f"LEARNING_ENGINE: TRADE_RECORDED | {base_symbol} | won={is_win} | pnl=₹{pnl:.2f} | Greeks: {bool(entry_greeks)}")
                             except Exception as learn_err:
                                 logger.warning(f"LEARNING_ENGINE_RECORD_ERROR: {symbol} | {str(learn_err)}")
                         

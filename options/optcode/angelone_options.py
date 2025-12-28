@@ -737,18 +737,29 @@ class AngelOneOptionsBroker:
         try:
             key = (underlying, expiry)
             
-            # In LIVE mode: cache chains for 30 minutes (broker data is static)
+            # In LIVE mode: cache chains for 10 SECONDS ONLY (Greeks = fast market data)
+            # Greeks: delta/gamma change with price (seconds), theta/vega with time/IV (seconds)
+            # 10-second refresh = 1 monitoring cycle (every 10s monitoring = every cycle fresh)
+            # Matches monitoring cycle: position updates every 10s with fresh Greeks
+            # LTP: Already bulk fetched every 10s
+            # Greeks: Also refresh every 10s (no lagging data in position_positions.json)
+            # Use case: Catch bad delta swings, high theta decay, IV spikes → exit early
             # In PAPER mode with dynamic prices: don't cache (each alert price needs fresh chain)
             should_use_cache = OptionsTradingConfig.TRADING_MODE == "LIVE" or current_price is None
             
-            # Check cache (valid for 30 minutes in LIVE mode)
+            # Check cache (valid for 10 seconds in LIVE mode - matches monitoring cycle)
             if should_use_cache and key in self.option_chains:
                 last_update = self.chain_last_updated.get(key)
-                if last_update and (datetime.now() - last_update).total_seconds() < 1800:
-                    logger.debug(f"CHAIN_FETCH: Using cached chain | {underlying} {expiry}")
+                # 10 seconds = 1 monitoring cycle (monitoring runs every 10s, Greeks refresh every cycle)
+                if last_update and (datetime.now() - last_update).total_seconds() < 10:
+                    logger.debug(f"CHAIN_FETCH: Using cached chain | {underlying} {expiry} | age={(datetime.now() - last_update).total_seconds():.0f}s")
                     return self.option_chains[key]
+                else:
+                    # Cache expired - need fresh Greeks for monitoring decisions
+                    cache_age = (datetime.now() - last_update).total_seconds() if last_update else 0
+                    logger.info(f"CHAIN_FETCH: Cache expired | {underlying} | age={cache_age:.0f}s > 10s, fetching fresh Greeks (matches 10s monitoring cycle)")
             
-            logger.info(f"CHAIN_FETCH: Fetching chain | {underlying} {expiry} | cache_enabled={should_use_cache}")
+            logger.info(f"CHAIN_FETCH: Fetching fresh Greeks | {underlying} {expiry} | cache_enabled={should_use_cache} | mode={OptionsTradingConfig.TRADING_MODE}")
             
             # Wait for rate limit permission (with timeout)
             if not rate_limiter.wait_for_call_permission(timeout=30.0):
