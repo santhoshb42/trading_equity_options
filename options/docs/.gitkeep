@@ -1,0 +1,18 @@
+# This folder contains critical documentation and must NEVER be deleted
+# It is the "bible" for the Options Trading Bot system
+
+# Protected Files:
+# - README.md (Navigation guide)
+# - Architecture.md (System design)
+# - TRADING.md (Trading process)
+# - ML.md (Machine learning implementation)
+# - AUDIT.md (Code quality audit)
+
+# Any updates to documentation should:
+# 1. Be committed to git
+# 2. Be documented in commit message
+# 3. Update version numbers in each file
+# 4. Maintain backward compatibility
+
+Last Updated: December 28, 2025
+Status: Production Documentation - DO NOT DELETE
