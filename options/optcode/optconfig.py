@@ -70,11 +70,11 @@ class OptionsCapitalConfig:
     # Capital per trade (options contracts, 30K per trade)
     CAP_PER_TRADE = float(os.getenv("OPTIONS_CAP_PER_TRADE", "30000"))  # ₹30,000 per options trade
     
-    # Maximum concurrent positions (30 slots for aggressive options trading)
-    MAX_SLOTS = int(os.getenv("OPTIONS_MAX_SLOTS", "30"))  # Max 30 concurrent option positions
+    # Maximum concurrent positions (100 slots for aggressive options trading)
+    MAX_SLOTS = int(os.getenv("OPTIONS_MAX_SLOTS", "100"))  # Max 100 concurrent option positions
     
     # Maximum trades per day (HARDCODED - Do NOT exceed this limit)
-    MAX_TRADES_PER_DAY = int(os.getenv("OPTIONS_MAX_TRADES_PER_DAY", "30"))  # Max 30 TOTAL trades per day (not concurrent)
+    MAX_TRADES_PER_DAY = int(os.getenv("OPTIONS_MAX_TRADES_PER_DAY", "100"))  # Max 100 TOTAL trades per day (not concurrent) - OPTION A: Aggressive learning mode
     
     # Reserve capital (emergency buffer for options)
     RESERVE_CAPITAL = float(os.getenv("OPTIONS_RESERVE_CAPITAL", "50000"))  # ₹50,000 reserve
@@ -232,13 +232,13 @@ class OptionsTradingConfig:
     STRIKE_OFFSET = int(os.getenv("OPTIONS_STRIKE_OFFSET", "0"))  # ATM = 0, OTM = 1+ 
     
     # Expiry handling
-    EXPIRY_DAYS_TO_CLOSE = int(os.getenv("OPTIONS_EXPIRY_DAYS_TO_CLOSE", "1"))  # Close 1 day before expiry
-    PREFER_WEEKLY = os.getenv("OPTIONS_PREFER_WEEKLY", "True").lower() == "true"  # Prefer weekly contracts
+    EXPIRY_DAYS_TO_CLOSE = int(os.getenv("OPTIONS_EXPIRY_DAYS_TO_CLOSE", "-1"))  # -1 = disable, don't auto-close (allow trading through expiry)
+    PREFER_WEEKLY = os.getenv("OPTIONS_PREFER_WEEKLY", "False").lower() == "true"  # Prefer monthly contracts (CE only)
     
-    # Greeks constraints (delta, gamma, theta)
-    MAX_DELTA = float(os.getenv("OPTIONS_MAX_DELTA", "0.8"))  # Max delta for position (directional bias)
-    MAX_GAMMA = float(os.getenv("OPTIONS_MAX_GAMMA", "0.05"))  # Max gamma (risk from price moves)
-    MIN_THETA = float(os.getenv("OPTIONS_MIN_THETA", "-0.01"))  # Min theta (time decay preference)
+    # Greeks constraints (delta, gamma, theta) - DISABLED FOR LEARNING MODE
+    MAX_DELTA = float(os.getenv("OPTIONS_MAX_DELTA", "0.99"))  # Disabled - accept all delta values (0.99 to pass validation)
+    MAX_GAMMA = float(os.getenv("OPTIONS_MAX_GAMMA", "10.0"))  # Disabled - very high threshold (no real impact)
+    MIN_THETA = float(os.getenv("OPTIONS_MIN_THETA", "-100.0"))  # Disabled - very low threshold (accept all theta)
     
     # =========================================================================
     # IMPROVED GREEKS EXIT THRESHOLDS (Audit Enhancement)
@@ -250,14 +250,14 @@ class OptionsTradingConfig:
     DELTA_REVERSAL_CONFIRM_CYCLES = int(os.getenv("OPTIONS_DELTA_REVERSAL_CONFIRM_CYCLES", "2"))  # Require 2 consecutive cycles OR rolling avg
     ENABLE_DELTA_ROLLING_AVG = os.getenv("OPTIONS_ENABLE_DELTA_ROLLING_AVG", "true").lower() == "true"  # Use rolling average of last 3 samples
     
-    # 2. GAMMA EXPLOSION - Absolute cap added for safety
-    GAMMA_MULTIPLIER_THRESHOLD = float(os.getenv("OPTIONS_GAMMA_MULTIPLIER_THRESHOLD", "1.5"))  # Trigger: gamma > 1.5x entry
-    GAMMA_ABSOLUTE_CAP = float(os.getenv("OPTIONS_GAMMA_ABSOLUTE_CAP", "0.04"))  # ALSO trigger if gamma > 0.04 (absolute limit)
+    # 2. GAMMA EXPLOSION - DISABLED FOR LEARNING MODE
+    GAMMA_MULTIPLIER_THRESHOLD = float(os.getenv("OPTIONS_GAMMA_MULTIPLIER_THRESHOLD", "999.0"))  # Disabled - very high threshold
+    GAMMA_ABSOLUTE_CAP = float(os.getenv("OPTIONS_GAMMA_ABSOLUTE_CAP", "10.0"))  # Disabled - very high threshold
     
-    # 3. THETA ACCELERATION - Directional context check
-    THETA_MULTIPLIER_THRESHOLD = float(os.getenv("OPTIONS_THETA_MULTIPLIER_THRESHOLD", "3.0"))  # Trigger: |theta| > 3x entry
-    ENABLE_THETA_PNL_CHECK = os.getenv("OPTIONS_ENABLE_THETA_PNL_CHECK", "true").lower() == "true"  # Only exit if P&L <= 0
-    ENABLE_THETA_DELTA_CHECK = os.getenv("OPTIONS_ENABLE_THETA_DELTA_CHECK", "true").lower() == "true"  # Only exit if delta weakening
+    # 3. THETA ACCELERATION - DISABLED FOR LEARNING MODE
+    THETA_MULTIPLIER_THRESHOLD = float(os.getenv("OPTIONS_THETA_MULTIPLIER_THRESHOLD", "999.0"))  # Disabled - very high threshold
+    ENABLE_THETA_PNL_CHECK = os.getenv("OPTIONS_ENABLE_THETA_PNL_CHECK", "false").lower() == "true"  # Disabled
+    ENABLE_THETA_DELTA_CHECK = os.getenv("OPTIONS_ENABLE_THETA_DELTA_CHECK", "false").lower() == "true"  # Disabled
     
     # 4. VEGA CRUSH - Dynamic threshold based on entry IV
     VEGA_CRUSH_FIXED_THRESHOLD = float(os.getenv("OPTIONS_VEGA_CRUSH_FIXED_THRESHOLD", "2.0"))  # Fixed: 2% IV change
@@ -300,12 +300,14 @@ class MonitoringConfig:
     """Position monitoring configuration - IV decays FAST, so monitor more frequently"""
     
     # Base monitoring intervals (shorter than equity bot due to IV decay)
-    MONITOR_INTERVAL_SECONDS = int(os.getenv("MONITOR_INTERVAL", "10"))  # Default 10s (vs equity 20s)
+    # Options premiums move 2-3x faster than equity, so need sub-5s monitoring
+    # With 60s LTP cache, can monitor every 3s without API exhaustion
+    MONITOR_INTERVAL_SECONDS = int(os.getenv("MONITOR_INTERVAL", "3"))  # Default 3s - aggressive IV tracking
     
     # Adaptive intervals based on rate limiter health
-    MONITOR_INTERVAL_FAST = 8       # When rate limits are healthy (vs equity 15s) - for fast IV changes
-    MONITOR_INTERVAL_NORMAL = 10    # Normal monitoring (vs equity 20s) - standard IV tracking
-    MONITOR_INTERVAL_SLOW = 20      # When rate limits are stressed (vs equity 45s) - still faster than equity
+    MONITOR_INTERVAL_FAST = 2       # When rate limits are healthy - ultra-frequent IV tracking
+    MONITOR_INTERVAL_NORMAL = 3     # Normal monitoring - rapid IV tracking for options
+    MONITOR_INTERVAL_SLOW = 5       # When rate limits are stressed - still fast fallback
     
     # Rate limiter utilization thresholds for adaptive adjustment
     RATE_LIMIT_HEALTHY_THRESHOLD = 0.50     # < 50% utilization = FAST
@@ -418,6 +420,15 @@ class MLConfig:
     
     # Fallback confidence values
     HIGH_CONFIDENCE_FALLBACK = float(os.getenv("ML_HIGH_CONFIDENCE", "0.9"))   # Good regime fit
+    
+    # =========================================================================
+    # NEURAL ML CANDLE FETCHING (API RATE LIMIT FIX)
+    # =========================================================================
+    # Disable to reduce broker API calls during high-volume alert processing
+    # Each alert would otherwise fetch 20 candles = 20 API calls per alert
+    # With 100+ alerts = 2,000+ API calls = rate limit exceeded
+    # Keep disabled until we implement smart candle caching
+    FETCH_CANDLES_FOR_NEURAL_ML = False  # DISABLED to prevent rate limiting (Option A fix)
     MEDIUM_CONFIDENCE_FALLBACK = float(os.getenv("ML_MEDIUM_CONFIDENCE", "0.5"))  # Neutral fit
     DEFAULT_CONFIDENCE = float(os.getenv("ML_DEFAULT_CONFIDENCE", "0.5"))      # No data available
     
@@ -664,8 +675,8 @@ class SentimentConfig:
     # =========================================================================
     
     # PCR range for entry: wider range to catch moves early
-    ENTRY_PCR_MIN = 0.5        # Don't buy PE if PCR too low (already very bullish)
-    ENTRY_PCR_MAX = 1.3        # Can buy CE even if slightly bearish (loose upper limit)
+    ENTRY_PCR_MIN = 0.15       # Accept extreme bullish momentum (PCR 0.15+) - very bullish market today
+    ENTRY_PCR_MAX = 1.5        # Can buy CE even if bearish (very loose upper limit)
     
     # OI Buildup confirmation for entry (optional)
     CHECK_OI_BUILDUP_ON_ENTRY = True
@@ -698,8 +709,8 @@ class SentimentConfig:
     # Feature Flags
     # =========================================================================
     
-    ENABLE_SENTIMENT_FILTER = True            # Global toggle for sentiment checks (errors non-blocking)
-    ENABLE_SENTIMENT_EXIT = True             # Enable fade-based exit detection
+    ENABLE_SENTIMENT_FILTER = False           # Global toggle for sentiment checks - DISABLED FOR LEARNING MODE (Option A)
+    ENABLE_SENTIMENT_EXIT = False            # Disable fade-based exit detection for learning mode
     LOG_SENTIMENT_CHECKS = True              # Log all sentiment decisions
     ALERT_ON_SENTIMENT_CHANGE = True         # Send alerts when sentiment changes
     

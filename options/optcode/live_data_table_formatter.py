@@ -261,71 +261,159 @@ No closed trades.
     # =========================================================================
     
     def generate_csv(self) -> str:
-        """Generate CSV format for all trades - Essential columns only with alignment"""
-        live_data = self.load_live_data()
-        if not live_data:
-            return ""
+        """Generate CSV format with closed trades first, then ongoing trades"""
+        # Read closed trades from option_pnl_history.json
+        pnl_file = self.data_dir / 'option_pnl_history.json'
+        closed_trades = []
+        if pnl_file.exists():
+            with open(pnl_file, 'r') as f:
+                pnl_data = json.load(f)
+                if isinstance(pnl_data, list):
+                    closed_trades = pnl_data
+                else:
+                    closed_trades = pnl_data.get('trades', [])
         
-        trades = live_data['trades']
+        # Filter today's closed trades
+        today = datetime.now().date().isoformat()
+        today_closed = [t for t in closed_trades if (t.get('closed_at', '') or t.get('exit_time', '')).startswith(today)]
         
-        # Column widths for alignment
-        col_widths = {
-            'Trade ID': 12,
-            'Symbol': 25,
-            'Action': 6,
-            'Quantity': 8,
-            'Status': 8,
-            'Entry Premium': 15,
-            'Entry Value': 15,
-            'Alert Price': 12,
-            'Current Premium': 15,
-            'Current Value': 15,
-            'Highest Premium': 15,
-            'Unrealized PNL': 15,
-            'Unrealized PNL %': 15
-        }
+        # Read ongoing trades from option_positions.json
+        pos_file = self.data_dir / 'option_positions.json'
+        ongoing_trades = []
+        if pos_file.exists():
+            with open(pos_file, 'r') as f:
+                pos_data = json.load(f)
+                if isinstance(pos_data, dict):
+                    ongoing_trades = pos_data.get('positions', [])
+                else:
+                    ongoing_trades = pos_data
         
-        # Header row
-        headers = ['Trade ID', 'Symbol', 'Action', 'Quantity', 'Status', 
-                  'Entry Premium', 'Entry Value', 'Alert Price', 
-                  'Current Premium', 'Current Value', 'Highest Premium', 
-                  'Unrealized PNL', 'Unrealized PNL %']
+        def extract_underlying(symbol):
+            """Extract underlying from option symbol (e.g., INFY27JAN261640CE -> INFY)"""
+            import re
+            match = re.match(r'^([A-Z]+)', symbol)
+            return match.group(1) if match else 'N/A'
         
-        # Create header with proper alignment
-        csv = ""
-        for header in headers:
-            csv += f"{header:<{col_widths[header]}} | "
-        csv = csv.rstrip(" | ") + "\n"
+        # Generate CSV with fixed-width columns
+        csv_lines = []
         
-        # Separator line
-        csv += "-" * (sum(col_widths.values()) + len(headers) * 3) + "\n"
+        # === TIMESTAMP ===
+        csv_lines.append(f'Last Updated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        csv_lines.append("")
         
-        # Data rows
-        for trade in trades:
-            alert_price = trade.get('underlying_alert_price', '')
+        # === SECTION 1: CLOSED TRADES ===
+        csv_lines.append("=== CLOSED TRADES (Today) ===")
+        csv_lines.append("Sts | Underlying | Time  | Entry  | Exit   | High   | Qty    | PnL      | PnL%  | Dur   | Reason   | EntD   | EntG   | EntT   | ExD    | ExG    | ExT")
+        csv_lines.append("----+------------+-------+--------+--------+--------+--------+----------+-------+-------+----------+--------+--------+--------+--------+--------+--------")
+        
+        # Sort closed trades by close time (most recent first)
+        today_closed_sorted = sorted(today_closed, key=lambda x: x.get('closed_at', x.get('exit_time', '')), reverse=True)
+        
+        for trade in today_closed_sorted:
+            symbol = trade.get('symbol', 'N/A')
+            underlying = extract_underlying(symbol)[:12]  # Limit to 12 chars
             
-            row_data = [
-                trade['trade_id'],
-                trade['symbol'][:24],  # Truncate long symbols
-                trade['action'],
-                str(trade['quantity']),
-                trade['status'],
-                f"{trade['entry_premium']:.2f}",
-                f"{trade['entry_value']:.2f}",
-                str(alert_price),
-                f"{trade['current_premium']:.2f}",
-                f"{trade['current_value']:.2f}",
-                f"{trade['highest_premium']:.2f}",
-                f"{trade.get('unrealized_pnl', 0):.2f}",
-                f"{trade.get('unrealized_pnl_percent', 0):.2f}%"
-            ]
+            entry_time = trade.get('entry_time', 'N/A')
+            if len(entry_time) > 16:
+                entry_time = entry_time[11:16]  # Extract HH:MM only
             
-            for i, value in enumerate(row_data):
-                header = headers[i]
-                csv += f"{str(value):<{col_widths[header]}} | "
-            csv = csv.rstrip(" | ") + "\n"
+            entry_prem = trade.get('entry_premium', 0)
+            exit_prem = trade.get('exit_premium', 0)
+            highest_prem = trade.get('highest_premium', 0)
+            qty = trade.get('quantity', 0)
+            pnl = trade.get('pnl', 0)
+            pnl_pct = trade.get('pnl_percent', 0)
+            
+            # Duration
+            duration_sec = trade.get('duration', 0)
+            if duration_sec < 60:
+                duration = f"{duration_sec:.0f}s"
+            elif duration_sec < 3600:
+                duration = f"{duration_sec/60:.0f}m"
+            else:
+                duration = f"{duration_sec/3600:.1f}h"
+            
+            exit_reason = trade.get('exit_reason', 'N/A')
+            # Shorten exit reason
+            if 'TRIAL_SL_HIT' in exit_reason:
+                exit_reason = 'TRIAL_SL'
+            elif 'MOMENTUM_REVERSAL' in exit_reason:
+                exit_reason = 'MOMENTUM'
+            elif 'EXPIRY' in exit_reason:
+                exit_reason = 'EXPIRY'
+            elif 'TARGET' in exit_reason:
+                exit_reason = 'TARGET'
+            elif 'STOPLOSS' in exit_reason:
+                exit_reason = 'STOPLOSS'
+            elif 'EOD_SQUAREOFF' in exit_reason:
+                exit_reason = 'EOD_SQ'
+            
+            # Get entry/exit greeks
+            entry_greeks = trade.get('entry_greeks', {})
+            exit_greeks = trade.get('exit_greeks', {})
+            entry_delta = entry_greeks.get('delta', 0)
+            entry_gamma = entry_greeks.get('gamma', 0)
+            entry_theta = entry_greeks.get('theta', 0)
+            exit_delta = exit_greeks.get('delta', 0)
+            exit_gamma = exit_greeks.get('gamma', 0)
+            exit_theta = exit_greeks.get('theta', 0)
+            
+            # Format with fixed widths matching header
+            line = f"CLS | {underlying:<10} | {entry_time:>5} | {entry_prem:>6.2f} | {exit_prem:>6.2f} | {highest_prem:>6.2f} | {qty:>6d} | {pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8} | {entry_delta:>6.3f} | {entry_gamma:>6.3f} | {entry_theta:>6.2f} | {exit_delta:>6.3f} | {exit_gamma:>6.3f} | {exit_theta:>6.2f}"
+            csv_lines.append(line)
         
-        return csv
+        # === SECTION 2: ONGOING TRADES ===
+        csv_lines.append("")
+        csv_lines.append("=== ONGOING TRADES (Live) ===")
+        csv_lines.append("Sts | Underlying | Time  | Entry  | Curr   | High   | Qty    | UnPnL    | PnL%  | Dur   | EntD   | EntG   | EntT   | CurD   | CurG   | CurT")
+        csv_lines.append("----+------------+-------+--------+--------+--------+--------+----------+-------+-------+--------+--------+--------+--------+--------+--------")
+        
+        # Sort ongoing by entry time (oldest first)
+        ongoing_sorted = sorted(ongoing_trades, key=lambda x: x.get('entry_time', ''))
+        
+        for trade in ongoing_sorted:
+            symbol = trade.get('symbol', 'N/A')
+            underlying = extract_underlying(symbol)[:12]
+            
+            entry_time = trade.get('entry_time', 'N/A')
+            if len(entry_time) > 16:
+                entry_time = entry_time[11:16]  # Extract HH:MM only
+            
+            entry_prem = trade.get('entry_premium', 0)
+            current_prem = trade.get('current_premium', 0)
+            highest_prem = trade.get('highest_premium', 0)
+            qty = trade.get('quantity', 0)
+            unrealized_pnl = trade.get('unrealized_pnl', 0)
+            pnl_pct = (unrealized_pnl / (entry_prem * qty) * 100) if (entry_prem * qty) > 0 else 0
+            
+            # Duration from entry to now
+            try:
+                entry_dt = datetime.fromisoformat(trade.get('entry_time', ''))
+                duration_sec = (datetime.now() - entry_dt).total_seconds()
+                if duration_sec < 60:
+                    duration = f"{duration_sec:.0f}s"
+                elif duration_sec < 3600:
+                    duration = f"{duration_sec/60:.0f}m"
+                else:
+                    duration = f"{duration_sec/3600:.1f}h"
+            except:
+                duration = "N/A"
+            
+            # Entry and current greeks
+            entry_greeks = trade.get('entry_greeks', {})
+            current_greeks = trade.get('current_greeks', {})
+            entry_delta = entry_greeks.get('delta', 0)
+            entry_gamma = entry_greeks.get('gamma', 0)
+            entry_theta = entry_greeks.get('theta', 0)
+            cur_delta = current_greeks.get('delta', 0)
+            cur_gamma = current_greeks.get('gamma', 0)
+            cur_theta = current_greeks.get('theta', 0)
+            
+            # Format with fixed widths matching header
+            line = f"OPN | {underlying:<10} | {entry_time:>5} | {entry_prem:>6.2f} | {current_prem:>6.2f} | {highest_prem:>6.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {entry_delta:>6.3f} | {entry_gamma:>6.3f} | {entry_theta:>6.2f} | {cur_delta:>6.3f} | {cur_gamma:>6.3f} | {cur_theta:>6.2f}"
+            csv_lines.append(line)
+        
+        return "\n".join(csv_lines)
     
     # =========================================================================
     # ASCII TABLE (for console)

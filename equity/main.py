@@ -232,6 +232,17 @@ class EquityTradingBot:
 def main():
     """Entry point function"""
     
+    # DISABLED: Equity bot is disabled - to enable, remove this check or set env var
+    if os.getenv('EQUITY_BOT_ENABLED', '').lower() != 'true':
+        print("=" * 50)
+        print("    EQUITY TRADING BOT - DISABLED")
+        print("=" * 50)
+        print()
+        print("❌ Equity bot is currently disabled.")
+        print("   To enable, set environment variable: EQUITY_BOT_ENABLED=true")
+        print()
+        return 0
+    
     # Print startup banner
     print("=" * 50)
     print("    EQUITY TRADING BOT")

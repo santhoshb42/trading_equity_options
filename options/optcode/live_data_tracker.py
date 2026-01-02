@@ -72,6 +72,21 @@ class LiveDataTracker:
             'trades': []  # List of individual trade details
         }
         
+        # Load existing data from file if it exists
+        if self.live_data_file.exists():
+            try:
+                with open(self.live_data_file, 'r') as f:
+                    existing_data = json.load(f)
+                    # Preserve existing trades
+                    if 'trades' in existing_data:
+                        self.live_data['trades'] = existing_data['trades']
+                    # Preserve summary if available
+                    if 'summary' in existing_data:
+                        self.live_data['summary'] = existing_data['summary']
+                    logger.info(f"LIVE_DATA_TRACKER: Loaded {len(self.live_data['trades'])} existing trades from file")
+            except Exception as e:
+                logger.warning(f"LIVE_DATA_TRACKER: Failed to load existing data | {str(e)}")
+        
         logger.info("LIVE_DATA_TRACKER: INITIALIZED")
     
     def update_summary(self,
@@ -327,23 +342,89 @@ class LiveDataTracker:
     
     def save(self) -> bool:
         """
-        Save live data to JSON file
+        Generate live_data.json by scraping option_positions.json and option_pnl_history.json
         
         Returns:
             True if saved successfully
         """
         try:
-            # Create data directory if it doesn't exist
-            self.data_dir.mkdir(parents=True, exist_ok=True)
+            # Read option_positions.json for open trades
+            positions_file = self.data_dir / 'option_positions.json'
+            open_positions = []
+            if positions_file.exists():
+                with open(positions_file, 'r') as f:
+                    pos_data = json.load(f)
+                    positions_raw = pos_data.get('positions', [])
+                    # Handle both dict and list formats
+                    if isinstance(positions_raw, dict):
+                        open_positions = list(positions_raw.values())
+                    else:
+                        open_positions = positions_raw
             
-            # Update timestamp
-            self.live_data['timestamp'] = datetime.now().isoformat()
+            # Read option_pnl_history.json for closed trades
+            pnl_file = self.data_dir / 'option_pnl_history.json'
+            closed_trades = []
+            if pnl_file.exists():
+                with open(pnl_file, 'r') as f:
+                    pnl_data = json.load(f)
+                    # Handle both list and dict with 'trades' key
+                    if isinstance(pnl_data, list):
+                        closed_trades = pnl_data
+                    else:
+                        closed_trades = pnl_data.get('trades', [])
             
-            # Write to file
+            # Calculate summary
+            ongoing_count = len(open_positions)
+            ongoing_budget = sum(p.get('entry_premium', 0) * p.get('quantity', 0) for p in open_positions)
+            total_unrealized_pnl = sum(p.get('unrealized_pnl', 0) for p in open_positions)
+            
+            # Closed trades stats (today only)
+            today = datetime.now().date().isoformat()
+            # Check both 'closed_at' and 'exit_time' fields
+            today_closed = [t for t in closed_trades if (t.get('closed_at', '') or t.get('exit_time', '')).startswith(today)]
+            closed_count = len(today_closed)
+            winning_trades = len([t for t in today_closed if t.get('pnl', 0) > 0])
+            losing_trades = len([t for t in today_closed if t.get('pnl', 0) < 0])
+            total_realized_pnl = sum(t.get('pnl', 0) for t in today_closed)
+            
+            # Budget used: ongoing positions + closed trades (today)
+            closed_budget = sum(t.get('entry_premium_total', t.get('entry_premium', 0) * t.get('quantity', 0)) for t in today_closed)
+            budget_used = ongoing_budget + closed_budget
+            
+            # Win rate
+            win_rate = (winning_trades / closed_count * 100) if closed_count > 0 else 0.0
+            
+            # Create summary
+            output_data = {
+                'timestamp': datetime.now().isoformat(),
+                'trading_mode': self.trading_mode,
+                'market_status': 'OPEN',
+                'summary': {
+                    'total_budget': OptionsCapitalConfig.MAX_CAPITAL,
+                    'budget_used': round(budget_used, 2),
+                    'budget_remaining': round(OptionsCapitalConfig.MAX_CAPITAL - budget_used, 2),
+                    'budget_used_percent': round((budget_used / OptionsCapitalConfig.MAX_CAPITAL * 100) if OptionsCapitalConfig.MAX_CAPITAL > 0 else 0, 2),
+                    'max_positions_allowed': OptionsCapitalConfig.MAX_SLOTS,
+                    'total_trades_today': ongoing_count + closed_count,
+                    'ongoing_trades': ongoing_count,
+                    'closed_trades': closed_count,
+                    'winning_trades': winning_trades,
+                    'losing_trades': losing_trades,
+                    'win_rate_percent': round(win_rate, 2),
+                    'total_pnl': round(total_unrealized_pnl + total_realized_pnl, 2),
+                    'unrealized_pnl': round(total_unrealized_pnl, 2),
+                    'realized_pnl': round(total_realized_pnl, 2),
+                }
+            }
+            
+            logger.debug(f"LIVE_DATA_TRACKER: Scraped | ongoing={ongoing_count} | closed={closed_count} | pnl=₹{output_data['summary']['total_pnl']:.2f}")
+            
+            # Write JSON to file
             with open(self.live_data_file, 'w') as f:
-                json.dump(self.live_data, f, indent=2)
+                json.dump(output_data, f, indent=2)
             
             return True
+            
         except Exception as e:
             logger.error(f"LIVE_DATA_TRACKER: SAVE_ERROR | {str(e)}")
             return False

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import json
 import os
+import threading
 from .optlogging import logger
 
 # =============================================================================
@@ -30,6 +31,15 @@ class MarketSentiment:
             'sentiment': {}      # symbol -> {'entry_ok': bool, 'exit_signal': bool}
         }
         self.last_update = None
+        # CRITICAL: Cache entire PCR fetch result to prevent rate limiting
+        # Multiple components call fetch_pcr_ratio() independently
+        # By caching for 10 seconds, we reduce broker API calls from 5+ per cycle to 1
+        self.pcr_cache = {}  # Stores full PCR map
+        self.pcr_cache_timestamp = 0  # When was PCR last fetched
+        self.pcr_cache_ttl = 60  # Cache for 60 seconds (market moves slower than this, and we only need to avoid concurrent fetches)
+        # CRITICAL: Lock to prevent multiple threads from hitting broker API simultaneously
+        # Without this, 2 threads can both check cache (both see stale), both hit broker = rate limit
+        self.pcr_fetch_lock = threading.Lock()
     
     # =========================================================================
     # PCR Ratio Fetching
@@ -44,68 +54,128 @@ class MarketSentiment:
         
         Returns:
             {symbol: pcr_value, ...}
+            
+        Note: CACHED for 60 seconds to prevent rate limiting from multiple calls.
+              If broker API fails, uses neutral PCR (1.0) fallback.
         """
-        try:
-            import re
+        import time
+        import re
+        
+        # CRITICAL OPTIMIZATION: Check cache first WITHOUT LOCK (fast path)
+        # Most calls will hit this and return immediately
+        current_time = time.time()
+        cache_age = current_time - self.pcr_cache_timestamp
+        
+        if self.pcr_cache and cache_age < self.pcr_cache_ttl:
+            logger.debug(f"PCR_FETCH: Using cached PCR ({len(self.pcr_cache)} symbols, age={cache_age:.1f}s)")
+            return self.pcr_cache
+        
+        # CRITICAL: Only ONE thread should hit broker API at a time
+        # Prevents rate limiting: Thread A and B both see stale cache, both acquire lock
+        # Lock ensures Thread A fetches first, Thread B waits then uses A's fresh cache
+        with self.pcr_fetch_lock:
+            # RE-CHECK cache after acquiring lock (another thread may have just fetched)
+            current_time = time.time()
+            cache_age = current_time - self.pcr_cache_timestamp
             
-            pcr_map = {}
+            if self.pcr_cache and cache_age < self.pcr_cache_ttl:
+                logger.debug(f"PCR_FETCH: Using cached PCR (refreshed by other thread) ({len(self.pcr_cache)} symbols, age={cache_age:.1f}s)")
+                return self.pcr_cache
             
-            # Fetch from broker's putCallRatio API
             try:
-                if hasattr(self.broker, 'smart_api') and self.broker.smart_api:
-                    logger.debug("PCR_FETCH: Fetching from broker SmartAPI putCallRatio()...")
-                    broker_pcr_data = self.broker.smart_api.putCallRatio()
-                    
-                    if broker_pcr_data and isinstance(broker_pcr_data, dict):
-                        data_list = broker_pcr_data.get('data', [])
+                pcr_map = {}
+                
+                # Fetch from broker's putCallRatio API
+                try:
+                    if hasattr(self.broker, 'smart_api') and self.broker.smart_api:
+                        logger.debug("PCR_FETCH: Fetching fresh PCR from broker putCallRatio()...")
+                        broker_pcr_data = self.broker.smart_api.putCallRatio()
                         
-                        if data_list:
-                            logger.info(f"PCR_FETCH: ✅ Broker returned {len(data_list)} PCR entries")
+                        if broker_pcr_data and isinstance(broker_pcr_data, dict):
+                            data_list = broker_pcr_data.get('data', [])
                             
-                            for item in data_list:
-                                # Broker returns: {'pcr': 0.47, 'tradingSymbol': 'NIFTY30DEC25FUT'}
-                                # PCR is for OPTIONS (all strikes aggregated), mapped to FUT symbol
-                                trading_symbol = item.get('tradingSymbol', '')
-                                pcr_value = float(item.get('pcr', 0))
+                            if data_list:
+                                logger.info(f"PCR_FETCH: ✅ Broker returned {len(data_list)} PCR entries")
                                 
-                                if not trading_symbol or pcr_value <= 0:
-                                    continue
+                                for item in data_list:
+                                    # Broker returns: {'pcr': 0.47, 'tradingSymbol': 'NIFTY30DEC25FUT'}
+                                    # PCR is for OPTIONS (all strikes aggregated), mapped to FUT symbol
+                                    try:
+                                        trading_symbol = item.get('tradingSymbol', '')
+                                        pcr_raw = item.get('pcr', 0)
+                                        
+                                        # CRITICAL FIX: Validate PCR is numeric (prevent format string errors)
+                                        if isinstance(pcr_raw, (int, float)):
+                                            pcr_value = float(pcr_raw)
+                                        else:
+                                            # Try parsing string, catch non-numeric values early
+                                            try:
+                                                pcr_value = float(str(pcr_raw))
+                                            except (ValueError, TypeError):
+                                                logger.warning(f"PCR_FETCH: Invalid PCR value for {trading_symbol}: {type(pcr_raw)} = {str(pcr_raw)[:20]}")
+                                                continue
+                                        
+                                        if not trading_symbol or pcr_value <= 0:
+                                            continue
+                                        
+                                        # Extract underlying symbol from tradingSymbol
+                                        # Examples: 'NIFTY30DEC25FUT' -> 'NIFTY'
+                                        #           'BANKNIFTY27DEC25FUT' -> 'BANKNIFTY'
+                                        #           'RELIANCE26DEC25FUT' -> 'RELIANCE'
+                                        underlying = trading_symbol
+                                        
+                                        # Remove date patterns (e.g., '30DEC25') and FUT suffix
+                                        underlying = re.sub(r'\d{1,2}[A-Z]{3}\d{2}', '', underlying)
+                                        underlying = underlying.replace('FUT', '').strip().upper()
+                                        
+                                        if underlying and pcr_value > 0:
+                                            pcr_map[underlying] = pcr_value
+                                    except Exception as e:
+                                        logger.warning(f"PCR_FETCH: Exception parsing item {str(e)[:30]} - skipping")
+                                        continue
                                 
-                                # Extract underlying symbol from tradingSymbol
-                                # Examples: 'NIFTY30DEC25FUT' -> 'NIFTY'
-                                #           'BANKNIFTY27DEC25FUT' -> 'BANKNIFTY'
-                                #           'RELIANCE26DEC25FUT' -> 'RELIANCE'
-                                underlying = trading_symbol
-                                
-                                # Remove date patterns (e.g., '30DEC25') and FUT suffix
-                                underlying = re.sub(r'\d{1,2}[A-Z]{3}\d{2}', '', underlying)
-                                underlying = underlying.replace('FUT', '').strip().upper()
-                                
-                                if underlying and pcr_value > 0:
-                                    pcr_map[underlying] = pcr_value
-                            
-                            if pcr_map:
-                                logger.info(f"PCR_FETCH: ✅ SUCCESS from BROKER | {len(pcr_map)} symbols | Top 10: {list(pcr_map.keys())[:10]}")
-                                return pcr_map
+                                if pcr_map:
+                                    logger.info(f"PCR_FETCH: ✅ SUCCESS from BROKER | {len(pcr_map)} symbols | Top 10: {list(pcr_map.keys())[:10]}")
+                                    self.pcr_cache = pcr_map
+                                    self.pcr_cache_timestamp = current_time
+                                    return pcr_map
+                                else:
+                                    logger.warning(f"PCR_FETCH: Broker returned data but failed to parse PCR values - using neutral fallback")
+                                    fallback = {'NIFTY': 1.0, 'BANKNIFTY': 1.0, 'FINNIFTY': 1.0}
+                                    self.pcr_cache = fallback
+                                    self.pcr_cache_timestamp = current_time
+                                    return fallback
                             else:
-                                logger.error(f"PCR_FETCH: Broker returned data but failed to parse PCR values")
-                                raise Exception("Failed to parse broker PCR data")
+                                logger.warning(f"PCR_FETCH: Broker returned empty data list - using neutral fallback")
+                                fallback = {'NIFTY': 1.0, 'BANKNIFTY': 1.0, 'FINNIFTY': 1.0}
+                                self.pcr_cache = fallback
+                                self.pcr_cache_timestamp = current_time
+                                return fallback
                         else:
-                            logger.error(f"PCR_FETCH: Broker returned empty data list")
-                            raise Exception("Broker returned empty PCR data")
+                            logger.warning(f"PCR_FETCH: Broker returned unexpected format: {type(broker_pcr_data)} - using neutral fallback")
+                            fallback = {'NIFTY': 1.0, 'BANKNIFTY': 1.0, 'FINNIFTY': 1.0}
+                            self.pcr_cache = fallback
+                            self.pcr_cache_timestamp = current_time
+                            return fallback
                     else:
-                        logger.error(f"PCR_FETCH: Broker returned unexpected format: {type(broker_pcr_data)}")
-                        raise Exception(f"Unexpected broker response format")
-                else:
-                    logger.error(f"PCR_FETCH: Broker smart_api not available")
-                    raise Exception("Broker API not initialized")
+                        logger.warning(f"PCR_FETCH: Broker smart_api not available - using neutral fallback")
+                        fallback = {'NIFTY': 1.0, 'BANKNIFTY': 1.0, 'FINNIFTY': 1.0}
+                        self.pcr_cache = fallback
+                        self.pcr_cache_timestamp = current_time
+                        return fallback
+                except Exception as e:
+                    logger.warning(f"PCR_FETCH: Broker putCallRatio failed: {e} - using neutral fallback")
+                    fallback = {'NIFTY': 1.0, 'BANKNIFTY': 1.0, 'FINNIFTY': 1.0}
+                    self.pcr_cache = fallback
+                    self.pcr_cache_timestamp = current_time
+                    return fallback
+                
             except Exception as e:
-                logger.error(f"PCR_FETCH: Broker putCallRatio failed: {e}")
-                raise  # No fallback - broker must work
-            
-        except Exception as e:
-            logger.error(f"PCR_FETCH: CRITICAL ERROR | {str(e)}")
-            raise  # Re-raise - broker must be available
+                logger.warning(f"PCR_FETCH: Error in PCR fetch | {str(e)} - using neutral fallback")
+                fallback = {'NIFTY': 1.0, 'BANKNIFTY': 1.0, 'FINNIFTY': 1.0}
+                self.pcr_cache = fallback
+                self.pcr_cache_timestamp = current_time
+                return fallback
     
     # =========================================================================
     # OI Buildup Fetching
@@ -200,13 +270,16 @@ class MarketSentiment:
         """
         Classify PCR sentiment
         
-        PCR < 0.5: STRONG BULLISH (calls dominant)
+        PCR < 0.3: VERY STRONG BULLISH (extreme momentum)
+        PCR 0.3-0.5: STRONG BULLISH (calls dominant)
         PCR 0.5-0.8: BULLISH
         PCR 0.8-1.2: NEUTRAL
         PCR 1.2-1.5: BEARISH
         PCR > 1.5: STRONG BEARISH (puts dominant)
         """
-        if pcr < 0.5:
+        if pcr < 0.3:
+            return 'VERY_STRONG_BULLISH'
+        elif pcr < 0.5:
             return 'STRONG_BULLISH'
         elif pcr < 0.8:
             return 'BULLISH'

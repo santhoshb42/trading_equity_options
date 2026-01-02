@@ -51,6 +51,13 @@ class OptionsSignalValidator:
                 log_signal_validation(symbol, False, message, action=action)
                 return False, message, None
             
+            # Validation 1B: CE only - reject SELL actions (PE trades)
+            if action == 'SELL':
+                message = f"CE only strategy: SELL action (PE) rejected"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={action}")
+                log_signal_validation(symbol, False, message, action=action)
+                return False, message, None
+            
             # Validation 2: Signal quality thresholds - use combined confidence/score check
             # If confidence is above threshold, accept (can override low score from external tools)
             # If both are low, reject

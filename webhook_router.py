@@ -120,8 +120,30 @@ def handle_webhook():
             logger.warning("Request rejected: invalid or missing secret")
             return jsonify({"error": "Unauthorized"}), 401
         
-        # Parse payload
-        raw_payload = request.get_json() or {}
+        # Parse payload - handle both JSON and form-data from TradingView
+        raw_payload = {}
+        
+        # Try JSON first
+        if request.is_json:
+            raw_payload = request.get_json() or {}
+        # TradingView sometimes sends as form-data
+        elif request.form:
+            # Get the alert message from form data
+            alert_message = request.form.get('message', '{}')
+            try:
+                raw_payload = json.loads(alert_message) if alert_message else {}
+            except json.JSONDecodeError:
+                logger.warning(f"Could not parse alert message as JSON: {alert_message}")
+                raw_payload = {}
+        # Try raw data as JSON
+        else:
+            try:
+                raw_data = request.get_data(as_text=True)
+                if raw_data:
+                    raw_payload = json.loads(raw_data) or {}
+            except:
+                logger.warning(f"Could not parse request data as JSON")
+                raw_payload = {}
         
         # Extract from TradingView Alerts wrapper if present
         payload = raw_payload

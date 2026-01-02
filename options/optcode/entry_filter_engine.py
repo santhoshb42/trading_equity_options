@@ -37,24 +37,66 @@ class MarketStructureValidator:
     def __init__(self):
         self.name = "MarketStructureValidator"
         # PCR thresholds (configurable)
-        self.pcr_min_bullish = float(os.getenv("ENTRY_FILTER_PCR_MIN_BULLISH", "0.50"))  # For PE entries
-        self.pcr_max_bullish = float(os.getenv("ENTRY_FILTER_PCR_MAX_BULLISH", "0.90"))  # For PE entries
-        self.pcr_min_bearish = float(os.getenv("ENTRY_FILTER_PCR_MIN_BEARISH", "1.20"))  # For CE entries (tightened)
-        self.pcr_max_bearish = float(os.getenv("ENTRY_FILTER_PCR_MAX_BEARISH", "2.50"))  # For CE entries
+        self.pcr_min_bullish = float(os.getenv("ENTRY_FILTER_PCR_MIN_BULLISH", "0.15"))  # For CE entries - lowered to 0.15 to catch momentum rally
+        self.pcr_max_bullish = float(os.getenv("ENTRY_FILTER_PCR_MAX_BULLISH", "0.90"))  # For CE entries
+        self.pcr_min_bearish = float(os.getenv("ENTRY_FILTER_PCR_MIN_BEARISH", "1.20"))  # For PE entries (tightened)
+        self.pcr_max_bearish = float(os.getenv("ENTRY_FILTER_PCR_MAX_BEARISH", "2.50"))  # For PE entries
         
         # OI buildup thresholds
         self.oi_buildup_min = float(os.getenv("ENTRY_FILTER_OI_BUILDUP_MIN", "500000"))  # Min OI for confirmation
         self.require_oi_buildup = os.getenv("ENTRY_FILTER_REQUIRE_OI_BUILDUP", "True").lower() == "true"
         
-        logger.info(f"{self.name}: Initialized | PCR ranges: PE({self.pcr_min_bullish}-{self.pcr_max_bullish}), CE({self.pcr_min_bearish}-{self.pcr_max_bearish})")
+        # PCR adaptive thresholds
+        self.pcr_min_normal = float(os.getenv("ENTRY_FILTER_PCR_MIN_NORMAL", "0.15"))  # DTE > 1 day
+        self.pcr_max_normal = float(os.getenv("ENTRY_FILTER_PCR_MAX_NORMAL", "1.30"))  # DTE > 1 day
+        self.pcr_max_expiry = float(os.getenv("ENTRY_FILTER_PCR_MAX_EXPIRY", "1.20"))  # DTE = 0, ignore min
+        self.trend_strength_threshold = float(os.getenv("ENTRY_FILTER_TREND_STRENGTH", "0.70"))  # For PCR override
+        
+        logger.info(f"{self.name}: Initialized | PCR ranges: Normal({self.pcr_min_normal}-{self.pcr_max_normal}), Expiry(0.0-{self.pcr_max_expiry})")
+    
+    def _is_pcr_acceptable(self, pcr: float, dte: int, trend_strength: float = 0.5, volume_spike: bool = False) -> Tuple[bool, str]:
+        """
+        Adaptive PCR validation based on DTE and trend.
+        
+        Args:
+            pcr: Current put-call ratio
+            dte: Days to expiry
+            trend_strength: Normalized trend indicator 0-1 (e.g., from EMA+VWAP alignment)
+            volume_spike: Whether current volume > 1.2x average
+        
+        Returns:
+            (is_acceptable, reason)
+        """
+        # Step 1: DTE-based min/max thresholds
+        if dte > 1:
+            min_pcr = self.pcr_min_normal  # Relax for normal trades
+            max_pcr = self.pcr_max_normal
+        else:  # DTE = 0 or 1 (expiry/near-expiry)
+            min_pcr = 0.0  # Ignore minimum (ignore low PCR on expiry)
+            max_pcr = self.pcr_max_expiry  # Still reject extremely bearish
+        
+        # Step 2: Trend/momentum override
+        # If market is strongly bullish (trend + volume), ignore low PCR completely
+        strong_uptrend = trend_strength > self.trend_strength_threshold and volume_spike
+        if strong_uptrend:
+            min_pcr = 0.0  # Allow any PCR if trend is strong
+            logger.debug(f"PCR_ADAPTIVE: Strong uptrend detected (trend={trend_strength:.2f}, volume_spike={volume_spike}) - PCR filter relaxed")
+        
+        # Step 3: Final check
+        if min_pcr <= pcr <= max_pcr:
+            return True, f"PCR {pcr:.2f} acceptable (DTE={dte}, trend={trend_strength:.2f})"
+        else:
+            reason = f"PCR {pcr:.2f} out of range ({min_pcr:.2f}-{max_pcr:.2f}) | DTE={dte} days"
+            return False, reason
+
     
     def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
         """
-        Validate market structure (PCR + OI)
+        Validate market structure (PCR + OI) with adaptive logic.
         
         Args:
             signal: Alert signal with 'action' (BUY/SELL)
-            market_data: Market data with 'pcr' and 'oi_buildup'
+            market_data: Market data with 'pcr', 'oi_buildup', 'days_to_expiry', 'trend_strength', 'volume_spike'
         
         Returns:
             (is_valid, reason_message)
@@ -62,27 +104,26 @@ class MarketStructureValidator:
         action = signal.get('action', 'UNKNOWN')
         pcr = market_data.get('pcr')
         oi_buildup = market_data.get('oi_buildup', 0)
+        dte = market_data.get('days_to_expiry', 7)
+        trend_strength = market_data.get('trend_strength', 0.5)  # Default 0.5 (neutral)
+        volume_spike = market_data.get('volume_spike', False)
         
         if pcr is None:
             # PCR is critical - but if unavailable, don't block (log and continue)
             logger.debug(f"MarketStructureValidator: PCR not available for validation")
             return True, "PCR data not available - skipping validation"
         
-        # For BUY signal (PE entry) - need lower PCR (bullish)
-        if action == 'BUY':
-            if not (self.pcr_min_bullish < pcr < self.pcr_max_bullish):
-                return False, f"PE entry: PCR {pcr:.2f} not in range ({self.pcr_min_bullish}-{self.pcr_max_bullish})"
+        # Use adaptive PCR validation (applies to CE/BUY trades since we're CE-only)
+        pcr_acceptable, pcr_reason = self._is_pcr_acceptable(pcr, dte, trend_strength, volume_spike)
         
-        # For SELL signal (CE entry) - need higher PCR (bearish) 
-        elif action == 'SELL':
-            if not (self.pcr_min_bearish < pcr < self.pcr_max_bearish):
-                return False, f"CE entry: PCR {pcr:.2f} not in range ({self.pcr_min_bearish}-{self.pcr_max_bearish})"
+        if not pcr_acceptable:
+            return False, pcr_reason
         
         # Check OI buildup if required and available
         if self.require_oi_buildup and oi_buildup and oi_buildup < self.oi_buildup_min:
             return False, f"OI buildup {oi_buildup:,.0f} < minimum {self.oi_buildup_min:,.0f}"
         
-        return True, f"PCR {pcr:.2f} valid for {action}"
+        return True, f"Market structure OK | PCR {pcr:.2f} | DTE {dte} days"
 
 
 # =============================================================================
@@ -119,6 +160,11 @@ class MomentumValidator:
         rsi_15m = candle_data.get('rsi_15m')
         macd_15m = candle_data.get('macd_15m')
         
+        # Defensive: Convert dict rsi_15m to None (should not happen but fixing bug)
+        if isinstance(rsi_15m, dict):
+            logger.warning(f"MomentumValidator: rsi_15m is dict (error object), treating as None | {rsi_15m}")
+            rsi_15m = None
+        
         if rsi_15m is None:
             # RSI missing but continue if not required
             logger.debug(f"MomentumValidator: RSI not available for validation")
@@ -135,11 +181,13 @@ class MomentumValidator:
                 return False, f"CE entry: RSI {rsi_15m:.1f} < overbought threshold {self.rsi_overbought}"
         
         # MACD confirmation (if available and enabled)
-        if self.macd_confirmation and macd_15m is not None:
-            if action == 'BUY' and macd_15m > 0:  # Should be negative for downtrend
-                return False, f"PE entry: MACD {macd_15m:.4f} should be negative"
-            elif action == 'SELL' and macd_15m < 0:  # Should be positive for uptrend
-                return False, f"CE entry: MACD {macd_15m:.4f} should be positive"
+        # Defensive: MACD should be dict with keys, not a bare value
+        if self.macd_confirmation and isinstance(macd_15m, dict) and 'macd' in macd_15m:
+            macd_value = macd_15m.get('macd', 0)
+            if action == 'BUY' and macd_value > 0:  # Should be negative for downtrend
+                return False, f"PE entry: MACD {macd_value:.4f} should be negative"
+            elif action == 'SELL' and macd_value < 0:  # Should be positive for uptrend
+                return False, f"CE entry: MACD {macd_value:.4f} should be positive"
         
         return True, f"Momentum confirmed (RSI {rsi_15m:.1f})"
 
@@ -285,15 +333,16 @@ class MarketHoursValidator:
 # =============================================================================
 
 class ExpiryValidator:
-    """Validates expiry distance to avoid gamma risk"""
+    """Validates expiry distance - allows expiry day trading for NSE weekly options"""
     
     def __init__(self):
         self.name = "ExpiryValidator"
-        self.dte_min = int(os.getenv("ENTRY_FILTER_DTE_MIN", "3"))    # Skip if < 3 days
-        self.dte_max = int(os.getenv("ENTRY_FILTER_DTE_MAX", "14"))   # Skip if > 14 days
+        # NSE expiry Thursdays have peak liquidity at 0-1 DTE, so we allow trading through expiry
+        self.dte_min = int(os.getenv("ENTRY_FILTER_DTE_MIN", "0"))    # Allow 0 DTE (expiry day itself)
+        self.dte_max = int(os.getenv("ENTRY_FILTER_DTE_MAX", "30"))   # Max 30 days (monthly contracts, next month acceptable)
         self.require_dte_check = os.getenv("ENTRY_FILTER_REQUIRE_DTE_CHECK", "True").lower() == "true"
         
-        logger.info(f"{self.name}: Initialized | DTE range: {self.dte_min}-{self.dte_max} days")
+        logger.info(f"{self.name}: Initialized | DTE range: {self.dte_min}-{self.dte_max} days | NSE expiry day trading enabled")
     
     def validate(self, signal: Dict[str, Any], option_data: Dict[str, Any]) -> Tuple[bool, str]:
         """
@@ -314,13 +363,20 @@ class ExpiryValidator:
         if dte is None:
             return False, "Days to expiry data not available"
         
-        if dte < self.dte_min:
-            return False, f"DTE {dte} days < minimum {self.dte_min} days (gamma risk)"
+        # Allow 0 DTE (expiry day) for NSE expiry Thursday scalping with peak liquidity
+        if dte < self.dte_min and self.dte_min > 0:
+            return False, f"DTE {dte} days < minimum {self.dte_min} days (too close to expiry)"
         
         if dte > self.dte_max:
             return False, f"DTE {dte} days > maximum {self.dte_max} days (prefer weekly)"
         
-        return True, f"DTE {dte} days valid (sweet spot)"
+        # Special handling for expiry day and near-expiry trading
+        if dte == 0:
+            return True, "DTE 0 - EXPIRY DAY (peak liquidity for scalping)"
+        elif dte <= 3:
+            return True, f"DTE {dte} days - close to expiry (high theta decay)"
+        else:
+            return True, f"DTE {dte} days valid (sweet spot)"
 
 
 # =============================================================================

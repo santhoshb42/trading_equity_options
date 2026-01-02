@@ -1,25 +1,21 @@
 {
-  "timestamp": "2025-12-28T18:11:04.224647",
+  "timestamp": "2026-01-02T15:33:47.364872",
   "trading_mode": "PAPER",
-  "market_status": "CLOSED",
+  "market_status": "OPEN",
   "summary": {
-    "total_budget": 0,
-    "budget_used": 0,
-    "budget_remaining": 0,
+    "total_budget": 0.0,
+    "budget_used": 0.0,
+    "budget_remaining": 0.0,
     "budget_used_percent": 0.0,
-    "max_positions_allowed": 3,
+    "max_positions_allowed": 100,
     "total_trades_today": 0,
     "ongoing_trades": 0,
     "closed_trades": 0,
     "winning_trades": 0,
     "losing_trades": 0,
-    "total_pnl": 0,
-    "total_pnl_percent": 0.0,
     "win_rate_percent": 0.0,
-    "avg_win": 0.0,
-    "avg_loss": 0.0,
-    "largest_win": 0.0,
-    "largest_loss": 0.0
-  },
-  "trades": []
+    "total_pnl": 0.0,
+    "unrealized_pnl": 0.0,
+    "realized_pnl": 0.0
+  }
 }

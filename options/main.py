@@ -72,6 +72,11 @@ except ImportError:
     ALERT_SYSTEM_AVAILABLE = False
     print("⚠️  Alert system not available - alerts disabled")
 
+# Neural ML Integration - DISABLED
+# Disabled due to system constraints (2GB RAM) and candle fetching disabled
+# Keep neural_ml_integration.py for future use with proper caching
+HAS_NEURAL_ML = False
+
 # =============================================================================
 # Options Trading Bot
 # =============================================================================
@@ -91,6 +96,7 @@ class OptionsTradingBot:
         self.learning_engine = None  # ML learning for trade outcomes
         self.live_data_tracker = None  # Live data tracking
         self.live_data_formatter = None  # Table format generator
+        
         self.trading_stats = {
             'orders_placed': 0,
             'orders_filled': 0,
@@ -123,15 +129,16 @@ class OptionsTradingBot:
         
         log_state("Configuration loaded", **config)
         
-        print(f"\n🔐 Authenticating with broker...")
+        print(f"\n🔐 Broker authentication...")
         logger.debug(f"BOT_INIT: AUTHENTICATING")
         self.broker = get_options_broker()
-        if not self.broker.authenticate():
-            print("⚠️ Broker authentication failed - continuing in demo mode")
-            logger.warning(f"BOT_INIT: AUTH_FAILED | continuing in demo mode")
-        else:
+        # NOTE: Broker authenticates automatically in __init__, don't call again to avoid rate limiting
+        if self.broker.authenticated:
             print("✅ Broker authenticated")
             logger.info(f"BOT_INIT: AUTH_SUCCESS")
+        else:
+            print("⚠️ Broker authentication in progress or failed - continuing")
+            logger.warning(f"BOT_INIT: AUTH_WAITING | will retry on API calls")
         
         # Initialize monitor
         print(f"\n📊 Initializing position monitor...")
@@ -240,22 +247,22 @@ class OptionsTradingBot:
     def _start_eod_cleanup_scheduler(self):
         """Start EOD cleanup scheduler to prevent stale positions from accumulating"""
         def eod_cleanup_loop():
-            """Background thread to clean up stale positions at EOD"""
+            """Background thread to clean up stale positions and run learning aggregation at EOD"""
             import schedule
             
-            print("📍 EOD Cleanup Scheduler: Starting")
-            print("   ⏱️ Scheduled cleanup time: 15:15 PM (after square-off at 15:12)")
-            logger.info("EOD_CLEANUP: SCHEDULER_START | scheduled_time=15:15")
+            print("📍 EOD Scheduler: Starting (Cleanup + Learning Aggregation)")
+            print("   ⏱️ Scheduled time: 15:15 PM (after square-off at 15:12)")
+            logger.info("EOD_SCHEDULER: SCHEDULER_START | scheduled_time=15:15 | tasks=cleanup,learning")
             
-            # Schedule cleanup for 3:15 PM daily (after square-off at 3:12 PM)
-            schedule.every().day.at("15:15").do(self._cleanup_stale_positions)
+            # Schedule both cleanup and learning for 3:15 PM daily (after square-off at 3:12 PM)
+            schedule.every().day.at("15:15").do(self._eod_full_update)
             
             while self.running:
                 try:
                     schedule.run_pending()
                     time.sleep(5)  # Check every 5 seconds if a scheduled task should run
                 except Exception as e:
-                    logger.error(f"EOD_CLEANUP: SCHEDULER_ERROR | {str(e)}")
+                    logger.error(f"EOD_SCHEDULER: SCHEDULER_ERROR | {str(e)}")
                     time.sleep(60)
         
         eod_cleanup_thread = threading.Thread(
@@ -266,6 +273,26 @@ class OptionsTradingBot:
         eod_cleanup_thread.start()
         print("   ✅ EOD cleanup scheduler thread started")
         logger.debug("EOD_CLEANUP: THREAD_STARTED")
+    
+    def _eod_full_update(self):
+        """Execute full EOD update: cleanup stale positions + run learning aggregation (NON-BLOCKING)"""
+        logger.info(f"EOD_FULL_UPDATE: START (async) | timestamp={datetime.now().isoformat()}")
+        
+        # Run EOD tasks in a separate thread to NOT BLOCK the monitor
+        def eod_async_tasks():
+            try:
+                self._cleanup_stale_positions()
+            except Exception as e:
+                logger.error(f"EOD_FULL_UPDATE: CLEANUP_FAILED | {str(e)}")
+        
+        eod_thread = threading.Thread(
+            target=eod_async_tasks,
+            daemon=True,
+            name="OptionsEODAsyncTasks"
+        )
+        eod_thread.start()
+        logger.info(f"EOD_FULL_UPDATE: Spawned async thread for cleanup (non-blocking)")
+        # Return immediately - don't wait for EOD to complete
     
     def _cleanup_stale_positions(self):
         """Clean up stale paper trading positions to prevent daily accumulation"""
@@ -376,7 +403,32 @@ class OptionsTradingBot:
             logger.info("EOD_LEARNING: START | Analyzing daily trades for ML patterns")
             print(f"\n🤖 EOD Learning: Analyzing trades for ML pattern updates...")
             
-            # Import ML integration
+            # Step 1: Run the comprehensive EOD data aggregator
+            # This parses option_positions.json, option_pnl_history.json, and live_data
+            # to build rich ML training data per symbol (Greeks, PnL, movements, IV, etc.)
+            try:
+                from optcode.eod_learning_aggregator import run_eod_learning
+                
+                aggregator_result = run_eod_learning()
+                if aggregator_result.get('status') == 'success':
+                    logger.info(f"EOD_DATA_AGGREGATOR: SUCCESS | symbols={aggregator_result.get('symbols_processed')} | "
+                               f"closed_trades={aggregator_result.get('closed_trades_analyzed')} | "
+                               f"open_positions={aggregator_result.get('open_positions_analyzed')}")
+                    print(f"   ✅ Data aggregation completed")
+                    print(f"   📊 Processed {aggregator_result.get('symbols_processed')} symbols")
+                    print(f"   📈 Analyzed {aggregator_result.get('closed_trades_analyzed')} closed trades")
+                    print(f"   🔄 Processed {aggregator_result.get('open_positions_analyzed')} open positions")
+                else:
+                    logger.warning(f"EOD_DATA_AGGREGATOR: FAILED | {aggregator_result.get('error', 'Unknown error')}")
+                    print(f"   ⚠️ Data aggregation failed: {aggregator_result.get('error', 'Unknown error')}")
+            except ImportError:
+                logger.warning("EOD_DATA_AGGREGATOR: MODULE_NOT_FOUND | Skipping")
+                print("   ⚠️ Data aggregator module not found - skipping")
+            except Exception as e:
+                logger.error(f"EOD_DATA_AGGREGATOR: ERROR | {str(e)}")
+                print(f"   ⚠️ Data aggregation error: {str(e)}")
+            
+            # Step 2: Import ML integration modules (existing learning engines)
             try:
                 from optcode.opt_ml_integration import get_ml_integration
                 from optcode.ml_integration_engine import get_ml_integration_engine
@@ -385,7 +437,7 @@ class OptionsTradingBot:
                 ml_engine = get_ml_integration_engine()
             except ImportError:
                 logger.warning("EOD_LEARNING: ML_MODULES_NOT_AVAILABLE | Skipping")
-                print("   ⚠️ ML modules not available - skipping learning update")
+                print("   ⚠️ ML modules not available - skipping ML learning update")
                 return
             
             # Run EOD learning update with daily trades
@@ -421,27 +473,69 @@ class OptionsTradingBot:
     
     def _record_closed_positions_to_learning(self, closed_positions_list, exit_reason):
         """Record closed positions to learning engine for ML training"""
-        if not self.learning_engine or not closed_positions_list:
+        if not closed_positions_list:
             return
         
         try:
+            # Import underlying extraction function
+            from optcode.symbol_utils import extract_underlying_from_symbol
+            
             for pos in closed_positions_list:
                 symbol = pos.get('symbol', 'UNKNOWN')
                 pnl = pos.get('pnl', 0)
                 is_win = pnl > 0
                 
-                # Extract base symbol (remove -EQ if present)
-                base_symbol = symbol.split('-')[0] if '-' in symbol else symbol
+                # Extract underlying from option symbol (BANKNIFTY25DEC24000CE -> BANKNIFTY)
+                # This ensures learning persists across contract expirations
+                underlying = extract_underlying_from_symbol(symbol)
                 
-                # Record to learning engine
-                self.learning_engine.record_trade(
-                    symbol=base_symbol,
-                    won=is_win,
-                    profit=pnl,
-                    predicted_prob=0.5,
-                    trading_mode=OptionsTradingConfig.TRADING_MODE
-                )
-                logger.debug(f"LEARNING: TRADE_RECORDED | {base_symbol} | exit={exit_reason} | won={is_win} | pnl=₹{pnl:.2f}")
+                # Record to learning engine using underlying
+                if self.learning_engine:
+                    try:
+                        self.learning_engine.record_trade(
+                            symbol=underlying,  # Use underlying, not full contract symbol!
+                            won=is_win,
+                            profit=pnl,
+                            predicted_prob=0.5,
+                            trading_mode=OptionsTradingConfig.TRADING_MODE
+                        )
+                        logger.debug(f"LEARNING: TRADE_RECORDED | {underlying} | exit={exit_reason} | won={is_win} | pnl=₹{pnl:.2f}")
+                    except Exception as e:
+                        logger.warning(f"LEARNING: RECORD_ERROR | {str(e)}")
+                
+                # NEW: Record to Neural ML outcome recorder
+                if self.trade_outcome_recorder and HAS_NEURAL_ML:
+                    try:
+                        entry_premium = pos.get('entry_premium', 0)
+                        exit_premium = pos.get('exit_premium', pos.get('exit_price', 0))
+                        quantity = pos.get('quantity', 1)
+                        
+                        # Get neural ML metadata if available
+                        neural_ml_metadata = pos.get('neural_ml_metadata', {})
+                        ml_signal = neural_ml_metadata.get('ml_signal') if neural_ml_metadata else None
+                        ml_probability = neural_ml_metadata.get('ml_probability') if neural_ml_metadata else None
+                        ml_confidence = neural_ml_metadata.get('ml_confidence') if neural_ml_metadata else None
+                        
+                        # Determine if prediction was correct
+                        # Entry price < exit price means profit (price went up = BUY signal correct)
+                        # Entry price > exit price means loss (price went down = SELL signal correct)
+                        actual_direction = 'UP' if exit_premium > entry_premium else 'DOWN'
+                        predicted_direction = 'UP' if ml_signal == 'BUY' else 'DOWN' if ml_signal == 'SELL' else 'HOLD'
+                        prediction_correct = actual_direction == predicted_direction if ml_signal else None
+                        
+                        # Record outcome
+                        self.trade_outcome_recorder.record_outcome(
+                            symbol=underlying,
+                            entry_price=entry_premium,
+                            exit_price=exit_premium,
+                            pnl=pnl,
+                            quantity=quantity,
+                            predicted_prob=ml_probability if ml_probability else 0.50,
+                            signal_type=ml_signal if ml_signal else 'UNKNOWN'
+                        )
+                        logger.info(f"NEURAL_ML: OUTCOME_RECORDED | {underlying} | signal={ml_signal} | predicted={predicted_direction} | actual={actual_direction} | correct={prediction_correct} | pnl=₹{pnl:.2f}")
+                    except Exception as e:
+                        logger.warning(f"NEURAL_ML: OUTCOME_RECORD_ERROR | {str(e)}")
         except Exception as e:
             logger.warning(f"LEARNING: RECORD_ERROR | {str(e)}")
     
@@ -724,6 +818,22 @@ class OptionsTradingBot:
                     if time.time() - last_interval_log > 300:  # Log every 5 minutes
                         logger.info(f"POSITION_MONITOR: INTERVAL_ADAPTIVE | current={current_interval}s | normal={MonitoringConfig.MONITOR_INTERVAL_NORMAL}s | slow={MonitoringConfig.MONITOR_INTERVAL_SLOW}s")
                         last_interval_log = time.time()
+                    
+                    # Save live data summary at end of each monitoring cycle
+                    if HAS_LIVE_DATA and self.live_data_tracker:
+                        try:
+                            self.live_data_tracker.save()
+                            logger.debug("POSITION_MONITOR: LIVE_DATA_SAVED")
+                            
+                            # Also update CSV file (for Excel viewing)
+                            if self.live_data_formatter:
+                                csv_data = self.live_data_formatter.generate_csv()
+                                csv_file = Path('/root/santhosh/trading/options/data/live_data_trades.csv')
+                                with open(csv_file, 'w') as f:
+                                    f.write(csv_data)
+                                logger.debug("POSITION_MONITOR: CSV_UPDATED")
+                        except Exception as live_err:
+                            logger.debug(f"POSITION_MONITOR: LIVE_DATA_SAVE_FAILED | {str(live_err)}")
                     
                     time.sleep(current_interval)  # Adaptive monitoring interval (default 10s, can go to 8s or 20s)
                 

@@ -19,6 +19,7 @@ from .optlogging import logger, log_position, log_pnl, log_event
 from .fake_move_detector import get_fake_move_detector, get_decay_monitor
 from .trade_logger import get_trade_logger
 from .options_rate_limiter import get_options_rate_limiter
+from .live_data_tracker import get_live_data_tracker
 
 # =============================================================================
 # Utility: Timeout wrapper for monitoring functions
@@ -823,6 +824,8 @@ class OptionPositionMonitor:
         self.pnl_history_file = BASE_DIR / "data" / "option_pnl_history.json"
         
         # Bucket manager for bulk LTP fetching (optimization)
+        # Uses buckets to distribute API calls: don't fetch all 100 positions in one call
+        # bucket_size=5: optimal balance between API calls and update frequency
         self.ltp_bucket_manager = LTPBucketManager(bucket_size=5)
         
         # Active symbol pool - tracks only currently open positions for bulk fetch
@@ -956,6 +959,27 @@ class OptionPositionMonitor:
             logger.info(f"POSITION_ADD: SUCCESS | {symbol} | {contract_type} | {action} | qty={quantity} | premium=₹{entry_premium:.2f}")
             print(f"✅ Added option position: {symbol}")
             
+            # 🔴 UPDATE LIVE DATA: Add trade to live tracking
+            try:
+                live_tracker = get_live_data_tracker()
+                live_tracker.add_trade(
+                    symbol=symbol,
+                    underlying=underlying,
+                    strike=strike,
+                    contract_type=contract_type,
+                    action=action,
+                    quantity=quantity,
+                    entry_time=position.entry_time.isoformat() if isinstance(position.entry_time, datetime) else position.entry_time,
+                    entry_premium=entry_premium,
+                    entry_greeks=position.entry_greeks,
+                    entry_iv=position.entry_iv,
+                    underlying_alert_price=underlying_alert_price,
+                    trade_id=position.trade_id
+                )
+                live_tracker.save()
+            except Exception as e:
+                logger.warning(f"LIVE_DATA_TRACKING: ADD_TRADE_FAILED | {symbol} | {str(e)}")
+            
             log_position("opened", {
                 'symbol': symbol,
                 'contract_type': contract_type,
@@ -981,7 +1005,22 @@ class OptionPositionMonitor:
             if symbol not in self.positions:
                 return False
             
-            self.positions[symbol].update_market_data(current_premium, greeks, iv)
+            position = self.positions[symbol]
+            position.update_market_data(current_premium, greeks, iv)
+            
+            # 🔴 UPDATE LIVE DATA: Update trade market data
+            try:
+                live_tracker = get_live_data_tracker()
+                live_tracker.update_trade(
+                    symbol=symbol,
+                    current_premium=current_premium,
+                    current_greeks=greeks,
+                    current_iv=iv,
+                    highest_premium=position.highest_premium,
+                    quantity=position.quantity
+                )
+            except Exception as e:
+                logger.debug(f"LIVE_DATA_TRACKING: UPDATE_TRADE_FAILED | {symbol} | {str(e)}")
             
             # Check for false move reversion
             fake_move_detector = get_fake_move_detector()
@@ -1069,9 +1108,11 @@ class OptionPositionMonitor:
             try:
                 from .opt_ml_integration import get_ml_integration
                 from .ml_integration_engine import get_ml_integration_engine
+                from .options_learning_engine import get_symbol_tracker
                 
                 ml_integration = get_ml_integration()
                 ml_engine = get_ml_integration_engine()
+                symbol_tracker = get_symbol_tracker()
                 
                 # Record trade outcome: WIN if PnL > 0, LOSS otherwise
                 trade_outcome = {
@@ -1093,9 +1134,19 @@ class OptionPositionMonitor:
                     'exit_iv': position.current_iv          # Exit IV
                 }
                 
-                # Record to both systems
+                # Record to all systems (NEW: Added symbol_tracker.record_trade)
                 ml_integration.record_daily_trade(trade_outcome)
                 ml_engine.record_closed_trade(trade_outcome)
+                
+                # CRITICAL FIX: Also record to SymbolPerformanceTracker for symbol_stats.json
+                underlying = position.underlying
+                symbol_tracker.record_trade(
+                    symbol=underlying,  # Use underlying (BANKNIFTY, not BANKNIFTY26DEC24000CE)
+                    won=pnl_info['pnl'] > 0,
+                    profit=pnl_info['pnl'],
+                    predicted_prob=0.5,  # Default prob if not available
+                    trading_mode='LIVE'
+                )
                 
                 logger.info(f"ML_OUTCOME_RECORDED: {symbol} | {'WIN' if trade_outcome['won'] else 'LOSS'} | "
                            f"PnL=₹{pnl_info['pnl']:.2f} | {exit_reason}")
@@ -1114,6 +1165,24 @@ class OptionPositionMonitor:
             # Clear fake move monitoring
             fake_move_detector = get_fake_move_detector()
             fake_move_detector.close_position_monitoring(symbol)
+            
+            # 🔴 UPDATE LIVE DATA: Close trade in live tracking
+            try:
+                live_tracker = get_live_data_tracker()
+                live_tracker.close_trade(
+                    symbol=symbol,
+                    exit_time=datetime.now().isoformat(),
+                    exit_premium=pnl_info['exit_premium'],
+                    exit_reason=exit_reason,
+                    exit_greeks=position.exit_greeks,
+                    exit_iv=position.current_iv,
+                    quantity=position.quantity,
+                    entry_premium=pnl_info['entry_premium'],
+                    entry_time=pnl_info.get('entry_time', '')
+                )
+                live_tracker.save()
+            except Exception as e:
+                logger.warning(f"LIVE_DATA_TRACKING: CLOSE_TRADE_FAILED | {symbol} | {str(e)}")
             
             self._save_positions()
             self._save_pnl_history(pnl_info)
@@ -1344,9 +1413,18 @@ class OptionPositionMonitor:
             return False
     
     def check_expiry_close(self) -> List[Dict[str, Any]]:
-        """Check and close positions near expiry (configured days)"""
+        """Check and close positions near expiry (configured days)
+        
+        Set EXPIRY_DAYS_TO_CLOSE = -1 to disable auto-close and allow trading through expiry day
+        This enables NSE expiry Thursday scalping with peak liquidity
+        """
         closed = []
         days_to_close = OptionsTradingConfig.EXPIRY_DAYS_TO_CLOSE
+        
+        # -1 = disabled (allow trading through expiry)
+        if days_to_close < 0:
+            logger.debug(f"POSITION_MONITOR: Expiry auto-close disabled | allowing positions to run through expiry")
+            return closed
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
@@ -1507,6 +1585,9 @@ class OptionPositionMonitor:
                 
                 logger.info(f"TRIAL_SL_ACTIVATED: {symbol} | Peak Gain: {peak_gain_percent:.2f}% | Current Gain: {gain_percent:.2f}% | "
                            f"Peak: ₹{position.highest_premium:.2f} | TRIAL SL: ₹{position.trial_sl_price:.2f}")
+                
+                # 🔴 CRITICAL: Save positions to disk so state persists across bot restarts
+                self._save_positions()
             
             # ============================================================
             # PHASE 3: Update TRIAL SL as price moves up
@@ -1538,6 +1619,9 @@ class OptionPositionMonitor:
                         
                         logger.debug(f"TRIAL_SL_UPDATED: {symbol} | TRIAL SL: ₹{old_trial_sl:.2f} → ₹{new_trial_sl:.2f} | "
                                    f"Increase: ₹{sl_increase}")
+                        
+                        # 🔴 CRITICAL: Save positions to disk so updated SL persists across bot restarts
+                        self._save_positions()
             
             # ============================================================
             # CHECK SL HIT: Determine effective SL and check if hit
@@ -1926,7 +2010,9 @@ class OptionPositionMonitor:
         logger.info(f"REFRESH_LTP: Starting | active_positions={len(all_symbols)} | broker={self.broker is not None}")
         refresh_stats['active_symbol_pool'] = self.symbol_pool.get_pool_status()
         
-        # BULK FETCH: Get LTP for all active positions at once
+        # BULK FETCH: Get LTP for all active positions using TRUE bulk API
+        # With 60s cache, only ~10% uncached per cycle = ONE getMarketData() call for all
+        # For 56 positions with 10% uncached = ~6 positions/cycle = 1 bulk call
         ltps = self.broker.get_ltp_bulk(all_symbols, exchange="NFO")
         logger.info(f"REFRESH_LTP: Bulk fetch complete | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
         
@@ -1998,10 +2084,27 @@ class OptionPositionMonitor:
                         logger.debug(f"REFRESH_LTP: Monthly expiry {monthly_expiry_broker} not available, using {closest}")
                         monthly_expiry_iso = broker_to_iso(closest)
                     
-                    # Fetch option chain using the corrected monthly expiry (ISO format)
+                    # 🔴 FIX: Fetch UNDERLYING LTP to pass as current_price to Greeks estimation
+                    # Without this, Greeks are estimated with spot=strike (always same value)
+                    # This makes delta≈0.5 for all positions, theta same, etc. (NEVER CHANGES)
+                    # Fetch underlying LTP and option chain with 60-second cache
+                    # Option chains are cached, so this won't hammer the API
+                    underlying_ltp = None
+                    try:
+                        underlying_ltps = self.broker.get_ltp_bulk([position.underlying], exchange="NSE")
+                        underlying_ltp = underlying_ltps.get(position.underlying) if underlying_ltps else None
+                        if underlying_ltp and underlying_ltp > 0:
+                            logger.debug(f"REFRESH_LTP: Got underlying LTP | {position.underlying} | ltp=₹{underlying_ltp:.2f}")
+                        else:
+                            logger.debug(f"REFRESH_LTP: Could not fetch underlying LTP | {position.underlying}")
+                    except Exception as e:
+                        logger.debug(f"REFRESH_LTP: Underlying LTP fetch failed | {position.underlying} | {str(e)}")
+                    
+                    # Fetch option chain (with 60s cache enabled)
                     option_chain = self.broker.fetch_option_chain(
                         position.underlying,
-                        monthly_expiry_iso
+                        monthly_expiry_iso,
+                        current_price=underlying_ltp
                     )
                     
                     if option_chain:
@@ -2049,12 +2152,26 @@ class OptionPositionMonitor:
                     # Continue with fallback greeks
                 
                 # STEP 3: Update position with market data
+                # Log Greeks before and after to verify they're changing
+                old_greeks = position.current_greeks.copy() if position.current_greeks else {}
+                
                 self.update_position_market_data(
                     symbol=symbol,
                     current_premium=current_ltp,
                     greeks=real_greeks,
                     iv=real_iv
                 )
+                
+                # Log if Greeks changed
+                new_greeks = position.current_greeks.copy() if position.current_greeks else {}
+                if old_greeks and new_greeks:
+                    delta_change = new_greeks.get('delta', 0) - old_greeks.get('delta', 0)
+                    theta_change = new_greeks.get('theta', 0) - old_greeks.get('theta', 0)
+                    if abs(delta_change) > 0.0001 or abs(theta_change) > 0.0001:
+                        logger.info(f"REFRESH_LTP: GREEKS_CHANGED | {symbol} | D: {old_greeks.get('delta', 0):.4f}→{new_greeks.get('delta', 0):.4f} (Δ={delta_change:+.4f}) | T: {old_greeks.get('theta', 0):.4f}→{new_greeks.get('theta', 0):.4f} (Δ={theta_change:+.4f})")
+                    else:
+                        logger.debug(f"REFRESH_LTP: GREEKS_UNCHANGED | {symbol} | D={new_greeks.get('delta', 0):.4f} | T={new_greeks.get('theta', 0):.4f}")
+                
                 
                 refresh_stats['ltps_updated'] += 1
                 
@@ -2487,9 +2604,25 @@ class OptionPositionMonitor:
             trailing_closes = self.check_trailing_stop_losses()
             monitoring_result['closed_by_trailing'] = [p['symbol'] for p in trailing_closes]
             
-            # ⭐ NEW: Check and close positions by momentum reversal (TIER 1 early exit)
+            # ⭐ PRIORITY 1: Greeks-based exit (catches reversal BEFORE momentum loss)
+            # Delta reversal happens first → exit before 10% premium loss occurs
+            logger.info(f"MONITORING: Starting Greeks-based exit checks (PRIORITY 1 - catch early reversals)")
+            
+            greeks_delta_closes = self.check_greeks_delta_reversal()
+            monitoring_result['closed_by_greeks_delta'] = [p['symbol'] for p in greeks_delta_closes]
+            
+            # Track which positions were closed by Greeks to avoid duplicate momentum check
+            greeks_closed_symbols = set(p['symbol'] for p in greeks_delta_closes)
+            
+            # ⭐ PRIORITY 2: Momentum reversal (TIER 1 early exit - backup if Greeks missed it)
+            # Only check positions NOT already closed by Greeks delta
             momentum_closes = self.check_momentum_reversal()
+            # Filter out any that were already closed by Greeks
+            momentum_closes = [p for p in momentum_closes if p['symbol'] not in greeks_closed_symbols]
             monitoring_result['closed_by_momentum'] = [p['symbol'] for p in momentum_closes]
+            
+            if greeks_delta_closes:
+                logger.info(f"MONITORING: Greeks delta caught {len(greeks_delta_closes)} reversals BEFORE momentum loss | Avoided {len(greeks_delta_closes)} × 10% loss")
             
             # Check and close positions by stop loss (hard SL if loss exceeds 20%)
             sl_closes = self.check_stop_losses()
@@ -2499,27 +2632,28 @@ class OptionPositionMonitor:
             sentiment_closes = self.check_sentiment_exit()
             monitoring_result['closed_by_sentiment'] = [p['symbol'] for p in sentiment_closes]
             
-            # ⭐ NEW: Greeks-based smart exit checks (FRAMEWORK)
-            logger.info(f"MONITORING: Starting Greeks-based exit checks")
-            
-            greeks_delta_closes = self.check_greeks_delta_reversal()
-            monitoring_result['closed_by_greeks_delta'] = [p['symbol'] for p in greeks_delta_closes]
+            # ⭐ Check other Greeks-based signals (Gamma, Theta, Vega)
             
             greeks_gamma_closes = self.check_greeks_gamma_explosion()
-            monitoring_result['closed_by_greeks_gamma'] = [p['symbol'] for p in greeks_gamma_closes]
+            monitoring_result['closed_by_greeks_gamma'] = [p['symbol'] for p in greeks_gamma_closes if p['symbol'] not in greeks_closed_symbols]
+            greeks_gamma_closes = [p for p in greeks_gamma_closes if p['symbol'] not in greeks_closed_symbols]
             
             greeks_theta_closes = self.check_greeks_theta_acceleration()
-            monitoring_result['closed_by_greeks_theta'] = [p['symbol'] for p in greeks_theta_closes]
+            monitoring_result['closed_by_greeks_theta'] = [p['symbol'] for p in greeks_theta_closes if p['symbol'] not in greeks_closed_symbols]
+            greeks_theta_closes = [p for p in greeks_theta_closes if p['symbol'] not in greeks_closed_symbols]
             
             greeks_vega_closes = self.check_greeks_vega_crush()
-            monitoring_result['closed_by_greeks_vega'] = [p['symbol'] for p in greeks_vega_closes]
+            monitoring_result['closed_by_greeks_vega'] = [p['symbol'] for p in greeks_vega_closes if p['symbol'] not in greeks_closed_symbols]
+            greeks_vega_closes = [p for p in greeks_vega_closes if p['symbol'] not in greeks_closed_symbols]
             
             greeks_health_closes = self.check_greeks_health_score()
-            monitoring_result['closed_by_greeks_health'] = [p['symbol'] for p in greeks_health_closes]
+            monitoring_result['closed_by_greeks_health'] = [p['symbol'] for p in greeks_health_closes if p['symbol'] not in greeks_closed_symbols]
+            greeks_health_closes = [p for p in greeks_health_closes if p['symbol'] not in greeks_closed_symbols]
             
             # ⭐ NEW: ML-guided Greeks quality exit (uses ML learning to exit early)
             ml_quality_closes = self.check_ml_greeks_quality()
-            monitoring_result['closed_by_ml_quality'] = [p['symbol'] for p in ml_quality_closes]
+            monitoring_result['closed_by_ml_quality'] = [p['symbol'] for p in ml_quality_closes if p['symbol'] not in greeks_closed_symbols]
+            ml_quality_closes = [p for p in ml_quality_closes if p['symbol'] not in greeks_closed_symbols]
             
             # Get rate limiter statistics
             if self.broker:
@@ -2545,6 +2679,13 @@ class OptionPositionMonitor:
             monitoring_result['error'] = str(e)
             logger.error(f"MONITORING: ERROR | {str(e)}")
             print(f"❌ Error during monitoring: {str(e)}")
+        
+        # 🔴 SAVE LIVE DATA: Scrape from existing files and save summary
+        try:
+            live_tracker = get_live_data_tracker()
+            live_tracker.save()
+        except Exception as e:
+            logger.debug(f"LIVE_DATA_TRACKING: SAVE_FAILED | {str(e)}")
         
         return monitoring_result
     
@@ -2663,6 +2804,9 @@ class OptionPositionMonitor:
                     except Exception:
                         pass
                 self.positions[symbol] = position
+                
+            logger.info(f"POSITION_LOAD: Loaded {len(self.positions)} positions")
+                
         except Exception as e:
             print(f"⚠️ Error loading positions: {str(e)}")
     

@@ -208,9 +208,17 @@ class InstrumentManager:
         if not ce_pe_strikes:
             return None
         
-        # Find nearest by strike price
-        nearest = min(ce_pe_strikes, 
-                     key=lambda s: abs(float(s.get('strike', 0)) - strike_price))
+        # Find immediate next strike ABOVE the alert price (never below)
+        # For CE: always pick strike >= alert price (next higher)
+        # For PE: always pick strike >= alert price (next higher)
+        strikes_above = [s for s in ce_pe_strikes if float(s.get('strike', 0)) >= strike_price]
+        
+        if strikes_above:
+            # Pick the lowest strike that is >= alert price (immediate next)
+            nearest = min(strikes_above, key=lambda s: float(s.get('strike', 0)))
+        else:
+            # Fallback: if no strikes above, pick the highest available
+            nearest = max(ce_pe_strikes, key=lambda s: float(s.get('strike', 0)))
         
         return nearest
     

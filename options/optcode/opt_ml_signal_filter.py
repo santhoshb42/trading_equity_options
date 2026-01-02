@@ -40,7 +40,8 @@ class GreeksQualityValidator:
     
     def validate_greeks_alignment(self, greeks: Dict[str, float],
                                   contract_type: str,
-                                  action: str) -> Tuple[bool, str]:
+                                  action: str,
+                                  market_data: Dict[str, Any] = None) -> Tuple[bool, str]:
         """
         Validate Greeks alignment with strategy using configurable ranges
         
@@ -80,13 +81,49 @@ class GreeksQualityValidator:
             self.filter_stats['failed_delta'] += 1
             return False, f"{ct_upper} {action_upper}: Delta {delta:.2f} not in range ({delta_min}-{delta_max})"
         
-        # Validate Theta (time decay direction) - configurable thresholds
+        # Validate Theta (time decay direction) - DTE-ADAPTIVE
+        # Theta is only "bad" if DTE is long. As DTE shrinks, acceptable theta loss increases.
+        # BUT: Must be coupled with gamma validation (theta can't be extreme without gamma compensation)
+        
         if action_upper == 'BUY':
-            # Buyers lose to time decay - should be minimal
-            theta_threshold = float(os.getenv("ML_BUY_THETA_MIN", "-0.15"))  # Default: losing too much if < -0.15
+            # Get DTE from market data if available, default to 7 days if not
+            if market_data is None:
+                market_data = {}
+            dte = market_data.get('days_to_expiry', 7)
+            
+            # DTE-ADAPTIVE THETA THRESHOLDS (CE/PE BUY)
+            if dte >= 7:
+                # Swing/positional: theta loss must be minimal
+                theta_threshold = -0.08
+            elif dte >= 3:
+                # Normal directional: moderate theta acceptable
+                theta_threshold = -0.15
+            elif dte >= 1:
+                # Short-term/gamma-sensitive: higher theta acceptable if gamma compensates
+                theta_threshold = -0.25
+                # BUT: require gamma >= 0.08 if theta is aggressive
+                if theta < -0.15 and gamma < 0.08:
+                    self.filter_stats['failed_theta'] += 1
+                    return False, f"{ct_upper} BUY: DTE {dte} days | Theta {theta:.3f} too aggressive without gamma compensation (gamma={gamma:.4f} < 0.08)"
+            else:  # dte == 0 (expiry day)
+                # Expiry day: pure gamma scalp only
+                # Ignore theta, require high gamma (>=0.15)
+                if gamma >= 0.15:
+                    return True, f"DTE 0 - Pure gamma scalp (gamma={gamma:.4f})"
+                else:
+                    self.filter_stats['failed_gamma'] += 1
+                    return False, f"{ct_upper} BUY: Expiry day DTE 0 requires gamma >= 0.15 (got {gamma:.4f})"
+            
+            # HARD SAFETY REJECT: Theta < -1.0 is always bad (extreme decay)
+            if theta < -1.0:
+                self.filter_stats['failed_theta'] += 1
+                return False, f"{ct_upper} BUY: Theta {theta:.3f} too extreme (> -1.0) - pure bleed, no recovery possible"
+            
+            # Apply DTE-appropriate theta threshold
             if theta < theta_threshold:
                 self.filter_stats['failed_theta'] += 1
-                return False, f"{ct_upper} BUY: Theta {theta:.3f} too negative (buyer loses to decay)"
+                return False, f"{ct_upper} BUY: DTE {dte} days | Theta {theta:.3f} < threshold {theta_threshold} (unacceptable decay for this timeframe)"
+        
         else:  # SELL
             # Sellers benefit from time decay
             theta_threshold = float(os.getenv("ML_SELL_THETA_MIN", "0.02"))  # Default: need > 0.02 theta benefit
@@ -356,6 +393,7 @@ class OptionsSignalQualityFilter:
         underlying_price = signal.get('underlying_price', 0.0)
         strike = signal.get('strike', 0.0)
         current_iv = signal.get('iv', 0.0)
+        market_data = signal.get('market_data', {})  # Include DTE and other market info
         
         details = {
             'greeks_valid': False,
@@ -369,9 +407,9 @@ class OptionsSignalQualityFilter:
             'final_pop': 0.0,
         }
         
-        # Check 1: Greeks alignment
+        # Check 1: Greeks alignment (with market_data for DTE-adaptive theta)
         greeks_valid, greeks_msg = self.greeks_validator.validate_greeks_alignment(
-            greeks, contract_type, action
+            greeks, contract_type, action, market_data
         )
         details['greeks_valid'] = greeks_valid
         details['greeks_message'] = greeks_msg

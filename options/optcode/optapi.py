@@ -150,6 +150,9 @@ def create_options_api_app():
         
         Burst handling: Multiple alerts in one request are processed in parallel
         using ThreadPoolExecutor to minimize latency (default: max 5 workers).
+        
+        CIRCUIT BREAKER: When rate limiter utilization >95%, alerts are queued to disk
+        recovery file instead of processed, preventing bot crashes from broker API overload.
         """
         try:
             logger.debug(f"WEBHOOK: Received request | remote_addr={request.remote_addr}")
@@ -162,6 +165,26 @@ def create_options_api_app():
             
             logger.debug(f"WEBHOOK: Request data | {type(data).__name__}")
             
+            # CIRCUIT BREAKER FIX: Check broker API rate limiter status
+            # If utilization >95%, queue alert to disk recovery file instead of crashing
+            try:
+                from .bulk_order_fetcher import rate_limiter
+                rate_util = getattr(rate_limiter, 'utilization_percent', 0) if rate_limiter else 0
+                if rate_util > 95:
+                    # Save to recovery queue on disk for later processing
+                    recovery_file = '/root/santhosh/trading/options/data/alert_recovery_queue.jsonl'
+                    os.makedirs(os.path.dirname(recovery_file), exist_ok=True)
+                    with open(recovery_file, 'a') as f:
+                        f.write(json.dumps({'timestamp': time.time(), 'data': data}) + '\n')
+                    logger.warning(f"WEBHOOK: CIRCUIT_BREAKER_ACTIVE | rate_util={rate_util:.1f}% | queued {len(data) if isinstance(data, list) else 1} alert(s) to recovery disk")
+                    return jsonify({
+                        'status': 'recovery_queue',
+                        'message': 'high_load_backoff',
+                        'queued_to_disk': True
+                    }), 202
+            except Exception as cb_err:
+                logger.warning(f"WEBHOOK: Circuit breaker check failed | {str(cb_err)[:40]} - proceeding with alert")
+            
             # Extract alert(s)
             alerts = data if isinstance(data, list) else [data]
             logger.info(f"WEBHOOK: Processing {len(alerts)} alert(s) | burst_mode={len(alerts) > 1}")
@@ -170,7 +193,10 @@ def create_options_api_app():
             results = []
             if len(alerts) > 1:
                 # Burst mode: use ThreadPoolExecutor for parallel processing
-                max_workers = min(5, len(alerts))  # Process up to 5 alerts in parallel
+                # CRITICAL: Limited to 2 workers to prevent rate limiting
+                # Angel One API has strict rate limits (~8 req/sec)
+                # Multiple threads calling broker APIs simultaneously triggers limits
+                max_workers = min(2, len(alerts))  # Process max 2 alerts in parallel (was 5, causing rate limits)
                 with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="webhook_alert") as executor:
                     futures = []
                     for idx, alert in enumerate(alerts, 1):
@@ -692,13 +718,26 @@ def create_options_api_app():
 # Alert Processing
 # =============================================================================
 
+
+# Neural ML Signal - DISABLED due to system constraints
+# Disabled neural ML to reduce memory footprint and simplify alert processing
+# Kept as separate file for future use with proper integration
+
 def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     """Process single options alert with detailed logging"""
     try:
         timestamp = datetime.now().isoformat()
         symbol = alert.get('symbol', 'UNKNOWN')
         
+        # Initialize neural ML signal as None (disabled)
+        neural_ml_signal = None
+        neural_ml_multiplier = 1.0
+        
         logger.debug(f"ALERT_PROCESS: START | symbol={symbol} | action={alert.get('action')}")
+        
+        # CRITICAL: Check broker session health BEFORE processing alert
+        # This prevents alerts from being silently dropped due to Invalid Token
+        state['broker']._detect_and_fix_invalid_token()
         
         # Validate signal
         is_valid, processed, reason = state['signal_filter'].validate(alert)
@@ -764,14 +803,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     logger.info(f"SENTIMENT_DATA: {underlying} | pcr={sentiment_data.get('pcr')} | buildup={sentiment_data.get('oi_long_buildup')} | entry_approved")
             
             except Exception as e:
-                # On sentiment check errors, be conservative and reject the trade
-                logger.error(f"SENTIMENT_CHECK: ERROR | {underlying} | {str(e)} | rejecting trade for safety")
-                return {
-                    'symbol': symbol,
-                    'timestamp': timestamp,
-                    'status': 'rejected',
-                    'reason': f'Sentiment check error: {str(e)}'
-                }
+                # On sentiment check errors, log but allow the trade to proceed
+                # (PCR data may be temporarily unavailable from broker)
+                logger.warning(f"SENTIMENT_CHECK: WARNING | {underlying} | {str(e)} | proceeding with trade (sentiment data unavailable)")
+                # Don't reject - allow trading even if sentiment data is missing
+                pass
         
         # Fetch option chain
         available_capital = OptionsCapitalConfig.get_available_capital(0)
@@ -814,11 +850,22 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.debug(f"ALERT_PROCESS: SLOTS_OK | open={summary['open_positions']}/{OptionsCapitalConfig.MAX_SLOTS}")
         
-        # Fetch option chain
+        # Fetch option chain with automatic re-auth on Invalid Token errors
         logger.debug(f"ALERT_PROCESS: FETCHING_CHAIN | underlying={underlying}")
         expiry = state['broker'].get_next_expiry(underlying)
         alert_price = float(alert.get('price', 0))
+        
+        # Try to fetch chain, with automatic re-auth on Invalid Token
         chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
+        
+        # If chain fetch failed, check if it's due to Invalid Token and retry
+        if not chain:
+            # Check logs for Invalid Token error - if found, try to re-authenticate
+            logger.warning(f"ALERT_PROCESS: CHAIN_FETCH_FAILED_INITIAL | attempting re-authentication")
+            if state['broker']._handle_invalid_token_error():
+                # Re-auth successful, retry chain fetch
+                logger.info(f"ALERT_PROCESS: RETRYING_CHAIN_FETCH_AFTER_REAUTH | underlying={underlying}")
+                chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
         
         if not chain:
             logger.error(f"ALERT_PROCESS: CHAIN_FAILED | underlying={underlying} | expiry={expiry}")
@@ -853,10 +900,12 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     if market_data['pcr']:
                         logger.debug(f"ENTRY_FILTER: PCR fetched | {underlying} | PCR={market_data['pcr']:.2f}")
                 except Exception as e:
-                    fetch_results['sentiment'] = f'ERROR: {str(e)[:50]}'
+                    # Safe error message without dict formatting issues - truncate to prevent braces
+                    error_str = str(e)[:40].replace('{', '[').replace('}', ']')
+                    fetch_results['sentiment'] = f'SENTIMENT_ERROR'
                     market_data['pcr'] = None
                     market_data['oi_buildup'] = None
-                    logger.warning(f"ENTRY_FILTER: PCR fetch failed | {underlying} | {str(e)}")
+                    logger.warning(f"ENTRY_FILTER: PCR fetch failed | {underlying} | {error_str}")
                 
                 # 2. TECHNICAL INDICATORS (RSI, MACD, MA)
                 try:
@@ -871,7 +920,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             else:
                                 fetch_results['rsi'] = 'NO_DATA'
                         except Exception as e:
-                            fetch_results['rsi'] = f'ERROR: {str(e)[:30]}'
+                            fetch_results['rsi'] = 'RSI_ERROR'
                             market_data['rsi_15m'] = None
                             logger.debug(f"ENTRY_FILTER: RSI error | {underlying} | {str(e)}")
                         
@@ -884,7 +933,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             else:
                                 fetch_results['macd'] = 'NO_DATA'
                         except Exception as e:
-                            fetch_results['macd'] = f'ERROR: {str(e)[:30]}'
+                            fetch_results['macd'] = 'MACD_ERROR'
                             market_data['macd_15m'] = None
                             logger.debug(f"ENTRY_FILTER: MACD error | {underlying} | {str(e)}")
                         
@@ -897,9 +946,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             else:
                                 fetch_results['ma_short'] = 'NO_DATA'
                         except Exception as e:
-                            fetch_results['ma_short'] = f'ERROR: {str(e)[:30]}'
+                            fetch_results['ma_short'] = 'MA10_ERROR'
                             market_data['ma_short'] = None
-                            logger.debug(f"ENTRY_FILTER: MA10 error | {underlying} | {str(e)}")
+                            logger.debug(f"ENTRY_FILTER: MA10 error | {underlying}")
                         
                         # MA 20 (long)
                         try:
@@ -910,9 +959,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             else:
                                 fetch_results['ma_long'] = 'NO_DATA'
                         except Exception as e:
-                            fetch_results['ma_long'] = f'ERROR: {str(e)[:30]}'
+                            fetch_results['ma_long'] = 'MA20_ERROR'
                             market_data['ma_long'] = None
-                            logger.debug(f"ENTRY_FILTER: MA20 error | {underlying} | {str(e)}")
+                            logger.debug(f"ENTRY_FILTER: MA20 error | {underlying}")
                         
                         # Slope
                         try:
@@ -923,7 +972,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             else:
                                 fetch_results['slope'] = 'NO_DATA'
                         except Exception as e:
-                            fetch_results['slope'] = f'ERROR: {str(e)[:30]}'
+                            fetch_results['slope'] = 'SLOPE_ERROR'
                             market_data['slope'] = None
                     else:
                         fetch_results['tech'] = 'ANALYZER_NOT_AVAILABLE'
@@ -933,7 +982,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                         market_data['ma_long'] = None
                         market_data['slope'] = None
                 except Exception as e:
-                    fetch_results['tech'] = f'ERROR: {str(e)[:50]}'
+                    fetch_results['tech'] = 'TECH_ANALYZER_ERROR'
                     market_data['rsi_15m'] = None
                     market_data['macd_15m'] = None
                     market_data['ma_short'] = None
@@ -978,11 +1027,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 data_available = sum(1 for v in market_data.values() if v is not None)
                 logger.info(f"ENTRY_FILTER: DATA_FETCH | {underlying} | collected {data_available}/9 data points | status: {fetch_results}")
                 
-                # Build entry signal
+                # Build entry signal with validated confidence from signal filter
                 entry_signal = {
                     'symbol': symbol,
                     'action': action,
-                    'confidence': float(alert.get('confidence', 0.5))
+                    'confidence': processed.get('confidence', 0.5)
                 }
                 
                 # Validate entry with whatever data we have
@@ -1063,7 +1112,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             from .opt_ml_integration import get_ml_integration
             ml_integration = get_ml_integration()
             
-            # Check if broker actually provided Greeks data
+            # Check if broker actually provided Greeks data (or we estimated them)
             greeks_data = selected_contract.to_dict()['greeks']
             has_real_greeks = any([
                 greeks_data.get('delta', 0) != 0,
@@ -1073,8 +1122,14 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             ])
             
             if not has_real_greeks:
-                logger.warning(f"ML_VALIDATION_SKIPPED: symbol={symbol} | contract={selected_contract.symbol} | reason=Broker did not provide Greeks data (all zeros)")
-                # Continue without ML validation - broker data limitation
+                logger.warning(f"ALERT_REJECTED: symbol={symbol} | contract={selected_contract.symbol} | reason=No Greeks data (broker not provided, estimation failed)")
+                # SKIP THIS TRADE - Greeks are critical for entry filters
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': 'No Greeks data available for entry filter validation'
+                }
             else:
                 # Enrich alert with actual Greeks data before ML validation
                 alert_with_greeks = alert.copy()
@@ -1104,23 +1159,29 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             logger.warning(f"ML_VALIDATION_ERROR: symbol={symbol} | {str(e)} | continuing without ML")
             # Don't block on ML errors - continue processing
         
-        # Get lot size and calculate dynamic quantity based on budget utilization
-        from optcode.optconfig import OptionsTradingConfig, OptionsCapitalConfig
-        base_lot_size = state['instrument_manager'].get_lot_size(selected_contract.symbol)
-        
-        # Dynamic lot calculation: maximize capital utilization
-        # Budget: CAP_PER_TRADE, Premium: selected_contract.ltp, Lot Size: base_lot_size
+        # Calculate dynamic quantity based on budget utilization
+        # NOTE: OptionsCapitalConfig is already imported at module level - don't re-import here
+        # For options, lot_size=1 means each contract is 1 unit (not bundled)
+        # The formula: quantity = (capital / premium) * lot_size
+        # With lot_size=1: quantity = capital / premium (direct contract count)
         quantity = OptionsCapitalConfig.calculate_quantity_for_capital(
             premium=selected_contract.ltp,
             capital=OptionsCapitalConfig.CAP_PER_TRADE,
-            lot_size=base_lot_size
+            lot_size=1
         )
         
-        # Calculate actual cost and utilization percentage
-        actual_cost = (quantity / base_lot_size) * selected_contract.ltp
-        utilization_pct = (actual_cost / OptionsCapitalConfig.CAP_PER_TRADE) * 100 if OptionsTradingConfig.CAP_PER_TRADE > 0 else 0
+        # Apply neural ML position size multiplier if signal available
+        if neural_ml_signal and 'neural_ml_multiplier' in locals():
+            original_quantity = quantity
+            quantity = max(1, int(quantity * neural_ml_multiplier))
+            logger.info(f"NEURAL_ML: POSITION_SIZE_APPLIED | symbol={symbol} | multiplier={neural_ml_multiplier:.2f}x | qty: {original_quantity} → {quantity}")
         
-        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | base_lotsize={base_lot_size} | premium=₹{selected_contract.ltp:.2f} | budget=₹{OptionsCapitalConfig.CAP_PER_TRADE} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
+        # Calculate actual cost and utilization percentage
+        # quantity is already in contracts (lot_size=1), so cost = quantity * premium
+        actual_cost = quantity * selected_contract.ltp
+        utilization_pct = (actual_cost / OptionsCapitalConfig.CAP_PER_TRADE) * 100 if OptionsCapitalConfig.CAP_PER_TRADE > 0 else 0
+        
+        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} | budget=₹{OptionsCapitalConfig.CAP_PER_TRADE} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
         
         logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | premium=₹{selected_contract.ltp:.2f}")
         
@@ -1202,6 +1263,19 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'iv': selected_contract.iv
         }
         
+        # Prepare neural ML metadata for outcome recording
+        neural_ml_metadata = {
+            'ml_signal': neural_ml_signal,
+            'ml_probability': neural_ml_result.get('probability') if neural_ml_result.get('error') is None else None,
+            'ml_confidence': neural_ml_result.get('confidence') if neural_ml_result.get('error') is None else None,
+            'ml_multiplier': neural_ml_result.get('position_size_multiplier', 1.0) if neural_ml_result.get('error') is None else None
+        } if 'neural_ml_result' in locals() else {
+            'ml_signal': None,
+            'ml_probability': None,
+            'ml_confidence': None,
+            'ml_multiplier': 1.0
+        }
+        
         state['monitor'].add_position(
             symbol=selected_contract.symbol,
             underlying=underlying,
@@ -1228,7 +1302,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'strike': selected_contract.strike,
             'expiry': expiry,
             'entry_premium': selected_contract.ltp,
-            'message': f'{action} {contract_type} position opened'
+            'message': f'{action} {contract_type} position opened',
+            'neural_ml': neural_ml_metadata  # ADDED: Include in response for debugging
         }
     
     except Exception as e:
@@ -1252,7 +1327,7 @@ class OptionsAPIServer:
         self.running = False
     
     def start(self, host: str = WebhookConfig.HOST, port: int = WebhookConfig.PORT):
-        """Start webhook server"""
+        """Start webhook server using Werkzeug WSGI server (non-blocking for daemon threads)"""
         if not self.app:
             print("❌ Cannot start API server - Flask not available")
             return
@@ -1266,7 +1341,12 @@ class OptionsAPIServer:
         self.app.options_state['startup_time'] = datetime.now()
         
         try:
-            self.app.run(host=host, port=port, debug=False, threaded=True)
+            # Use Werkzeug WSGI server directly instead of app.run()
+            # app.run() uses reloader which fails in daemon threads
+            from werkzeug.serving import make_server
+            self.server = make_server(host, port, self.app, threaded=True)
+            print(f"✅ Webhook server bound to {host}:{port}")
+            self.server.serve_forever()
         except Exception as e:
             print(f"❌ Failed to start API server: {str(e)}")
             self.running = False

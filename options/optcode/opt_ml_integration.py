@@ -255,6 +255,11 @@ class MLIntegration:
         Returns:
             (is_valid, reason, details)
         """
+        # OPTION A: LEARNING MODE - Disable all Greeks validation to maximize trade execution
+        # This is intentionally permissive to collect data for 1 month of learning
+        logger.debug(f"ML_FILTER: LEARNING MODE ACTIVE - bypassing validation for {alert.get('symbol')}")
+        return True, "Learning mode - all alerts approved", {'learning_mode': True}
+        
         if not HAS_ML or not self.signal_filter:
             return True, "ML filter disabled", {}
         

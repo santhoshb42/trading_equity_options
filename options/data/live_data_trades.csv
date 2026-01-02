@@ -1,2 +1,2 @@
-Trade ID     | Symbol                    | Action | Quantity | Status   | Entry Premium   | Entry Value      | Alert Price  | Current Premium | Current Value   | Highest Premium | Unrealized PNL  | Unrealized PNL %
----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Status,Timestamp
+RESET,2026-01-02T15:33:47.365113

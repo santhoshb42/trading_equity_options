@@ -32,6 +32,7 @@ class TechnicalAnalyzer:
         self.symbol = symbol
         self.broker = broker
         self.candle_cache = {}  # {timeframe: candles_list}
+        self.fetch_attempt_times = {}  # Track last fetch attempt time per timeframe
     
     def _fetch_candles(self, timeframe_minutes: int, limit: int = 100) -> Optional[List[Dict]]:
         """
