@@ -1,0 +1,97 @@
+//@version=6
+indicator("Sniper 10:30–11:15 Late Bloomers Paper Trade", overlay=true)
+
+//──────── INPUTS ────────
+emaShort = input.int(9, "EMA Short")
+emaLong  = input.int(20, "EMA Long")
+rsiLen   = input.int(14)
+atrLen   = input.int(14)
+volLen   = input.int(20)
+
+// Liberal parameters (intentional for late bloomers)
+minRsi   = input.float(50.0, "Min RSI")
+maxRsi   = input.float(80.0, "Max RSI")
+minAtrPc = input.float(0.05, "Min ATR %")
+minBody  = input.float(0.40, "Min Body Ratio")
+
+//──────── CORE ────────
+ema9  = ta.ema(close, emaShort)
+ema20 = ta.ema(close, emaLong)
+vwap  = ta.vwap(hlc3)
+
+rsi   = ta.rsi(close, rsiLen)
+atr   = ta.atr(atrLen)
+atrPc = atr / close * 100.0
+
+body = math.abs(close - open)
+range = math.max(high - low, 0.0001)
+bodyRatio = body / range
+
+volAvg = ta.sma(volume, volLen)
+
+//──────── TIME CONTROL (10:30-11:15 WINDOW) ────────
+// IST = GMT+5:30, so 10:30 IST = 05:00 GMT
+barCloseTime = time + timeframe.multiplier * 60000
+tradeStart = timestamp("GMT+5:30", year, month, dayofmonth, 10, 30)
+tradeEnd   = timestamp("GMT+5:30", year, month, dayofmonth, 11, 15)
+inTradeWindow = barCloseTime >= tradeStart and barCloseTime <= tradeEnd
+
+//──────── DAILY CONTEXT (PDC = Previous Day Close) ────────
+pdc = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+pdcConfirm = close > pdc
+
+//──────── FILTERS (LIBERAL FOR LATE BLOOMERS) ────────
+fTrend  = close > vwap and close > ema9    // Price above trend
+fRSI    = rsi >= minRsi and rsi <= maxRsi  // Momentum (50-80)
+fATR    = atrPc >= minAtrPc                // Volatility present
+fVolume = volume > volAvg * 1.10 or volume > volume[1]  // Volume confirmation
+fBody   = bodyRatio >= minBody              // Real body (not wick)
+
+//──────── FINAL CONDITION ────────
+allFilters =
+     fTrend and
+     fRSI and
+     fATR and
+     fVolume and
+     fBody and
+     pdcConfirm and
+     inTradeWindow
+
+// Edge trigger (single alert per move)
+edgeTrigger = allFilters and not allFilters[1]
+
+//──────── SCORE (FOR PAYLOAD) ────────
+score = 0.0
+score += fTrend  ? 20 : 0
+score += fRSI    ? 20 : 0
+score += fATR    ? 20 : 0
+score += fVolume ? 20 : 0
+score += fBody   ? 20 : 0
+
+confidence = edgeTrigger ? math.min(95, 60 + score * 0.35) : 0
+
+//──────── PAYLOAD WEBHOOK (JSON FORMAT FOR BOT) ────────
+// Send structured JSON that webhook router and bot can parse
+alertMessage = "{\"symbol\": \"" + syminfo.ticker + "\", \"action\": \"BUY\", \"price\": " + str.tostring(close) + ", \"confidence\": " + str.tostring(confidence) + ", \"score\": " + str.tostring(score) + ", \"rsi\": " + str.tostring(rsi) + ", \"atr_percent\": " + str.tostring(atrPc) + ", \"volume\": " + str.tostring(volume) + ", \"ema9\": " + str.tostring(ema9) + ", \"ema20\": " + str.tostring(ema20) + ", \"vwap\": " + str.tostring(vwap) + ", \"time_window\": \"10:30-11:15\", \"alert_type\": \"LATE_BLOOMER_TRIGGER\"}"
+
+//──────── ALERT (ONCE PER BAR, OPTIMIZED FOR 10:30-11:15) ────────
+// Send JSON payload that webhook router expects
+if edgeTrigger and inTradeWindow
+    alert(alertMessage, alert.freq_once_per_bar_close)
+
+//──────── VISUALS ────────
+plot(ema9, color=color.yellow, linewidth=2, title="EMA 9")
+plot(ema20, color=color.orange, linewidth=2, title="EMA 20")
+plot(vwap, color=color.blue, linewidth=2, title="VWAP")
+
+plotshape(edgeTrigger, title="Late Bloomer Trigger",
+     style=shape.labelup,
+     location=location.belowbar,
+     color=color.new(color.lime, 0),
+     text="BLOOM",
+     textcolor=color.black,
+     size=size.small)
+
+//──────── DEBUG INFO (COMMENT OUT FOR LIVE) ────────
+// plot(score, title="Score", color=color.purple, linewidth=1)
+// plotchar(inTradeWindow ? 1 : 0, title="In Window", char="W", location=location.top, color=color.white)
