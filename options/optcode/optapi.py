@@ -567,7 +567,29 @@ def create_options_api_app():
                     contract = pos.get('contract', '')
                     quantity = pos.get('quantity', 0)
                     entry_premium = pos.get('entry_premium', 0)
-                    current_ltp = pos.get('current_ltp', entry_premium)
+                    
+                    # 🔴 CRITICAL FIX: Use current_premium from position dict (updated by monitor)
+                    # This ensures EOD squareoff uses LIVE market price, not stale data
+                    # Fallback hierarchy: current_premium > current_ltp > broker LTP > entry_premium
+                    current_ltp = pos.get('current_premium')  # Primary source - updated by monitor
+                    
+                    if not current_ltp:
+                        # Try alternate field names
+                        current_ltp = pos.get('current_ltp')
+                    
+                    if not current_ltp:
+                        # Try to fetch live from broker
+                        try:
+                            live_ltp = state['broker'].get_ltp(symbol, 'NFO')
+                            current_ltp = float(live_ltp) if live_ltp else None
+                        except:
+                            pass
+                    
+                    # Last resort: use entry_premium (means no update available)
+                    if not current_ltp:
+                        current_ltp = entry_premium
+                        logger.warning(f"EOD_SQUAREOFF: {symbol} | No LTP available, using entry_premium={entry_premium}")
+                    
                     entry_time_str = pos.get('entry_time')
                     
                     # Calculate gain percentage
