@@ -53,9 +53,11 @@ except ImportError:
 try:
     from optcode.live_data_tracker import get_live_data_tracker
     from optcode.live_data_table_formatter import get_table_formatter
+    from optcode.live_data_updater import start_live_data_updater_service
     HAS_LIVE_DATA = True
 except ImportError:
     HAS_LIVE_DATA = False
+    start_live_data_updater_service = None
 
 # EOD Backup handler
 try:
@@ -238,6 +240,13 @@ class OptionsTradingBot:
         # Start instrument refresh thread
         self._start_instrument_refresh()
         
+        # Start live data updater service (keeps live_data.json fresh every 10s)
+        if HAS_LIVE_DATA and start_live_data_updater_service:
+            start_live_data_updater_service()
+        
+        # Start CSV updater service (keeps live_data_trades.csv fresh every 30s)
+        self._start_csv_updater_service()
+        
         # Start EOD cleanup scheduler (to prevent stale positions)
         self._start_eod_cleanup_scheduler()
         
@@ -275,8 +284,26 @@ class OptionsTradingBot:
         logger.debug("EOD_CLEANUP: THREAD_STARTED")
     
     def _eod_full_update(self):
-        """Execute full EOD update: cleanup stale positions + run learning aggregation (NON-BLOCKING)"""
-        logger.info(f"EOD_FULL_UPDATE: START (async) | timestamp={datetime.now().isoformat()}")
+        """Execute full EOD update: cleanup stale positions + run learning aggregation (NON-BLOCKING)
+        
+        GUARD: Only runs after market hours (09:15-15:15 is blocked to prevent interference with live trading)
+        Scheduled for 15:15 PM after square-off at 15:12 PM
+        """
+        from datetime import time as dt_time
+        
+        current_time = datetime.now().time()
+        market_open = dt_time(9, 15)  # 9:15 AM
+        market_close = dt_time(15, 15)  # 3:15 PM
+        
+        # GUARD: Prevent EOD aggregation during market hours
+        if market_open <= current_time < market_close:
+            logger.warning(f"EOD_FULL_UPDATE: BLOCKED | time={current_time.strftime('%H:%M:%S')} is within trading hours (09:15-15:15)")
+            print(f"⚠️  EOD Update blocked: Cannot run during market hours (09:15-15:15)")
+            print(f"   Current time: {current_time.strftime('%H:%M:%S')}")
+            print(f"   EOD will run at: 15:15 (3:15 PM) after square-off at 15:12")
+            return
+        
+        logger.info(f"EOD_FULL_UPDATE: START (async) | timestamp={datetime.now().isoformat()} | market_hours_guard=PASSED")
         
         # Run EOD tasks in a separate thread to NOT BLOCK the monitor
         def eod_async_tasks():
@@ -548,6 +575,7 @@ class OptionsTradingBot:
             
             last_interval_log = 0
             current_interval = MonitoringConfig.MONITOR_INTERVAL_NORMAL
+            last_greeks_refresh = time.time()  # Track when Greeks were last refreshed
             
             while self.running:
                 try:
@@ -558,15 +586,16 @@ class OptionsTradingBot:
                         time.sleep(60)
                         continue
                     
-                    # CRITICAL: Refresh LTP for all positions from broker
+                    # FAST LTP REFRESH: Every 10 seconds (only bulk API calls)
+                    # Separated from Greeks refresh to keep main loop responsive
                     ltps_refreshed = False
                     if len(self.monitor.positions) > 0:
                         try:
                             # CRITICAL FIX: Add timeout to prevent monitoring thread from hanging
-                            # If refresh_position_ltps takes > 60 seconds, skip this cycle and continue
+                            # If refresh_position_ltps takes > 120 seconds, skip this cycle and continue
                             refresh_stats = call_with_timeout(
                                 self.monitor.refresh_position_ltps,
-                                timeout_seconds=60.0  # 60-second timeout for entire LTP refresh (37 positions * ~1.5s per position)
+                                timeout_seconds=120.0  # 120-second timeout for entire LTP refresh (bulk API calls only)
                             )
                             
                             if refresh_stats and refresh_stats.get('ltps_updated', 0) > 0:
@@ -586,6 +615,18 @@ class OptionsTradingBot:
                             # If LTP refresh fails, likely market is closed - skip exit checks
                             time.sleep(current_interval)
                             continue
+                    
+                    # GREEKS REFRESH: Every 60 seconds (expensive chain fetches)
+                    # Separate from LTP refresh to keep main loop fast
+                    current_time = time.time()
+                    if current_time - last_greeks_refresh >= 60.0:
+                        try:
+                            greeks_stats = self.monitor.refresh_position_greeks()
+                            if greeks_stats and greeks_stats.get('greeks_updated', 0) > 0:
+                                logger.debug(f"POSITION_MONITOR: GREEKS_REFRESH | updated={greeks_stats['greeks_updated']}/{len(self.monitor.positions)}")
+                            last_greeks_refresh = current_time
+                        except Exception as e:
+                            logger.warning(f"POSITION_MONITOR: GREEKS_REFRESH_ERROR | {str(e)}")
                     
                     # Only check exits if we successfully refreshed at least some LTPs
                     if not ltps_refreshed:
@@ -666,6 +707,44 @@ class OptionsTradingBot:
                                     )
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: MOMENTUM_ALERT_FAILED | {str(e)}")
+                    
+                    # ⭐ NEW: Check IV crash (EARLY EXIT when premium dies)
+                    # This is complementary to momentum reversal - catches IV collapse signal
+                    iv_crash_exits = self.monitor.check_iv_crash()
+                    if iv_crash_exits:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(iv_crash_exits, "IV_CRASH")
+                        
+                        for pos in iv_crash_exits:
+                            entry_iv = pos.get('entry_iv', 'N/A')
+                            exit_iv = pos.get('exit_iv', 'N/A')
+                            iv_drop = ((entry_iv - exit_iv) / entry_iv * 100) if isinstance(entry_iv, (int, float)) and isinstance(exit_iv, (int, float)) and entry_iv > 0 else 'N/A'
+                            
+                            print(f"   💥 IV crash exit: {pos['symbol']} | Entry IV: {entry_iv} → Exit IV: {exit_iv} | Drop: {iv_drop}% | PnL: ₹{pos['pnl']:.2f}")
+                            logger.warning(
+                                f"IV_CRASH_EXIT_LOGGED: {pos['symbol']} | "
+                                f"Entry IV: {entry_iv} | Exit IV: {exit_iv} | IV Drop: {iv_drop}% | "
+                                f"Premium: ₹{pos.get('entry_premium', 0):.2f} → ₹{pos.get('exit_premium', 0):.2f} | "
+                                f"PnL: ₹{pos['pnl']:.2f} ({pos.get('pnl_percent', 0):.1f}%) | "
+                                f"Exit Reason: {pos.get('exit_reason', 'IV_CRASH')} | "
+                                f"Duration: {pos.get('duration', 0):.1f}s"
+                            )
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_premium', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': f'IV crash (Drop: {iv_drop}%)'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: IV_CRASH_ALERT_FAILED | {str(e)}")
+
                     
                     # Check stop losses
                     stopped = self.monitor.check_stop_losses()
@@ -865,6 +944,17 @@ class OptionsTradingBot:
             print("   ✅ Instrument refresh scheduler activated (daily at 09:00 AM)")
         else:
             logger.warning("INSTRUMENT_REFRESH: MANAGER_NOT_READY")
+    
+    def _start_csv_updater_service(self):
+        """Start background service to keep live_data_trades.csv fresh"""
+        try:
+            from optcode.csv_updater import start_csv_update_service
+            start_csv_update_service()
+            print("   ✅ CSV updater service started (updates every 30 seconds)")
+            logger.info("CSV_UPDATER: SERVICE_STARTED")
+        except Exception as e:
+            logger.warning(f"CSV_UPDATER: FAILED_TO_START | {str(e)}")
+            print(f"   ⚠️  CSV updater service failed to start: {str(e)}")
     
     def _refresh_instruments_now(self):
         """Refresh instruments from broker immediately (legacy, not used)"""
