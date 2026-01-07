@@ -62,6 +62,10 @@ class LiveDataTracker:
                 'win_rate_percent': 0.0,
                 'total_pnl': 0.0,
                 'total_pnl_percent': 0.0,
+                'unrealized_pnl': 0.0,
+                'unrealized_pnl_percent': 0.0,
+                'realized_pnl': 0.0,
+                'realized_pnl_percent': 0.0,
                 'avg_win': 0.0,
                 'avg_loss': 0.0,
                 'largest_win': 0.0,
@@ -394,16 +398,22 @@ class LiveDataTracker:
             # Win rate
             win_rate = (winning_trades / closed_count * 100) if closed_count > 0 else 0.0
             
+            # Calculate PnL percentages
+            total_budget = OptionsCapitalConfig.MAX_CAPITAL
+            unrealized_pnl_percent = (total_unrealized_pnl / total_budget * 100) if total_budget > 0 else 0.0
+            realized_pnl_percent = (total_realized_pnl / total_budget * 100) if total_budget > 0 else 0.0
+            total_pnl_percent = (((total_unrealized_pnl + total_realized_pnl) / total_budget) * 100) if total_budget > 0 else 0.0
+            
             # Create summary
             output_data = {
                 'timestamp': datetime.now().isoformat(),
                 'trading_mode': self.trading_mode,
                 'market_status': 'OPEN',
                 'summary': {
-                    'total_budget': OptionsCapitalConfig.MAX_CAPITAL,
+                    'total_budget': total_budget,
                     'budget_used': round(budget_used, 2),
-                    'budget_remaining': round(OptionsCapitalConfig.MAX_CAPITAL - budget_used, 2),
-                    'budget_used_percent': round((budget_used / OptionsCapitalConfig.MAX_CAPITAL * 100) if OptionsCapitalConfig.MAX_CAPITAL > 0 else 0, 2),
+                    'budget_remaining': round(total_budget - budget_used, 2),
+                    'budget_used_percent': round((budget_used / total_budget * 100) if total_budget > 0 else 0, 2),
                     'max_positions_allowed': OptionsCapitalConfig.MAX_SLOTS,
                     'total_trades_today': ongoing_count + closed_count,
                     'ongoing_trades': ongoing_count,
@@ -412,8 +422,11 @@ class LiveDataTracker:
                     'losing_trades': losing_trades,
                     'win_rate_percent': round(win_rate, 2),
                     'total_pnl': round(total_unrealized_pnl + total_realized_pnl, 2),
+                    'total_pnl_percent': round(total_pnl_percent, 2),
                     'unrealized_pnl': round(total_unrealized_pnl, 2),
+                    'unrealized_pnl_percent': round(unrealized_pnl_percent, 2),
                     'realized_pnl': round(total_realized_pnl, 2),
+                    'realized_pnl_percent': round(realized_pnl_percent, 2),
                 }
             }
             

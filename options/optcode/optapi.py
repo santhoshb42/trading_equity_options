@@ -645,17 +645,14 @@ def create_options_api_app():
                                 exit_greeks = pos.get('exit_greeks', {})
                                 contract_type = pos.get('contract_type', 'CE')
                                 action = pos.get('action', 'BUY')
-                                # Record to learning engine with full Greeks data
+                                # Record to learning engine
+                                # Note: entry_greeks, exit_greeks stored separately in position data
                                 state['learning_engine'].record_trade(
                                     symbol=base_symbol,
                                     won=is_win,
                                     profit=pnl,
                                     predicted_prob=0.5,  # Default if ML prediction not available
-                                    trading_mode=OptionsTradingConfig.TRADING_MODE,
-                                    entry_greeks=entry_greeks,  # ADDED: Full entry Greeks
-                                    exit_greeks=exit_greeks,    # ADDED: Full exit Greeks
-                                    contract_type=contract_type,  # ADDED: CE or PE
-                                    action=action                 # ADDED: BUY or SELL
+                                    trading_mode=OptionsTradingConfig.TRADING_MODE
                                 )
                                 logger.debug(f"LEARNING_ENGINE: TRADE_RECORDED | {base_symbol} | won={is_win} | pnl=₹{pnl:.2f} | Greeks: {bool(entry_greeks)}")
                             except Exception as learn_err:
@@ -1081,6 +1078,31 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # Get ATM contracts with offset
         # Use alert's price as current price for ATM calculation (already extracted above)
         contract_type = processed['recommended_contract']
+        
+        # VALIDATION: Check if fetched chain has strikes to cover alert price
+        # If alert price is outside available strikes, refresh chain with expanded range
+        if chain and hasattr(chain, 'contracts') and chain.contracts:
+            # Extract available CE strikes
+            ce_strikes = []
+            for contract in chain.contracts.values():
+                if contract.contract_type == 'CE':
+                    ce_strikes.append(contract.strike)
+            
+            if ce_strikes and alert_price > 0:
+                min_strike = min(ce_strikes)
+                max_strike = max(ce_strikes)
+                
+                # If alert price is outside the available range, fetch fresh chain
+                if alert_price < min_strike or alert_price > max_strike:
+                    gap = max(alert_price - max_strike, min_strike - alert_price) if alert_price > max_strike else min_strike - alert_price
+                    logger.warning(f"ALERT_PROCESS: STALE_CHAIN | {underlying} | alert_price=₹{alert_price} | available_strikes=[₹{min_strike}-₹{max_strike}] | gap=₹{abs(gap)} | re-fetching with expanded range")
+                    
+                    # Fetch fresh chain to ensure we have the right strikes
+                    fresh_chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price, force_refresh=True)
+                    if fresh_chain:
+                        chain = fresh_chain
+                        logger.info(f"ALERT_PROCESS: CHAIN_REFRESHED | {underlying} | using fresh data for alert_price=₹{alert_price}")
+        
         ce, pe = chain.get_atm_contracts(alert_price, processed['strike_offset']) or (None, None)
         
         if not ce or not pe:

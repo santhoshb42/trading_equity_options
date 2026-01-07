@@ -201,19 +201,19 @@ class OptionsTradingConfig:
         "PEL", "AARTIIND", "ABB", "ABCAPITAL", "ABFRL", "ACC", "ADANIENSOL", "ADANIENT", 
         "ADANIGREEN", "ADANIPORTS", "ALKEM", "AMBER", "AMBUJACEM", "ANGELONE", "APLAPOLLO", 
         "APOLLOHOSP", "ASHOKLEY", "ASIANPAINT", "ASTRAL", "ATGL", "AUBANK", "AUROPHARMA", 
-        "AXISBANK", "BAJAJFINSV", "BAJAJ_AUTO", "BAJFINANCE", "BALKRISIND", "BANDHANBNK", "BANKBARODA", 
+        "AXISBANK", "BAJAJFINSV", "BAJAJ_AUTO", "BAJAJHLDNG", "BAJFINANCE", "BALKRISIND", "BANDHANBNK", "BANKBARODA", 
         "BDL", "BEL", "BHARATFORG", "BHARTIARTL", "BHEL", "BIOCON", "BLUESTARCO", "BOSCHLTD", 
         "BPCL", "BRITANNIA", "BSE", "BSOFT", "CAMS", "CANBK", "CESC", "CGPOWER", "CHAMBLFERT", 
         "CHOLAFIN", "CIPLA", "COALINDIA", "COFORGE", "COLPAL", "CONCOR", "CROMPTON", 
-        "CUMMINSIND", "CYIENT", "DABUR", "DALBHARAT", "DELHIVERY", "DIVISLAB", "DIXON", "DLF", 
-        "DRREDDY", "EICHERMOT", "ESCORTS", "ETERNAL", "EXIDEIND", "FORTIS", "GAIL", "GLENMARK", 
+        "CUMMINSIND", "CYIENT", "DABUR", "DALBHARAT", "DELHIVERY", "DIVISLAB", "DMART", "DIXON", "DLF", 
+        "DRREDDY", "EICHERMOT", "ESCORTS", "ETERNAL", "EXIDEIND", "FEDERALBNK", "FORTIS", "GAIL", "GLENMARK", 
         "GMRAIRPORT", "GODREJCP", "GODREJPROP", "GRANULES", "GRASIM", "HAL", "HAVELLS", 
         "HCLTECH", "HDFCAMC", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HFCL", "HINDALCO", 
         "HINDCOPPER", "HINDPETRO", "HINDUNILVR", "HINDZINC", "HUDCO", "ICICIBANK", "ICICIGI", 
         "ICICIPRULI", "IDEA", "IDFCFIRSTB", "IEX", "IGL", "IIFL", "INDHOTEL", "INDIANB", 
         "INDIGO", "INDUSINDBK", "INDUSTOWER", "INFY", "INOXWIND", "IOC", "IRB", "IRCTC", 
         "IREDA", "IRFC", "ITC", "JINDALSTEL", "JIOFIN", "JSWENERGY", "JSWSTEEL", "JUBLFOOD", 
-        "KALYANKJIL", "KAYNES", "KFINTECH", "KOTAKBANK", "KPITTECH", "LAURUSLABS", "LICHSGFIN", 
+        "KALYANKJIL", "KAYNES", "KEI", "KFINTECH", "KOTAKBANK", "KPITTECH", "LAURUSLABS", "LICHSGFIN", 
         "LODHA", "LT", "LTF", "LTIM", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", "MANKIND", "MARICO", 
         "MARUTI", "MAXHEALTH", "MAZDOCK", "MCX", "MFSL", "MGL", "MOTHERSON", "MPHASIS", 
         "MUTHOOTFIN", "NATIONALUM", "NAUKRI", "NBCC", "NCC", "NESTLEIND", "NHPC", "NMDC", "NTPC", 
@@ -222,10 +222,10 @@ class OptionsTradingConfig:
         "POLICYBZR", "POLYCAB", "POONAWALLA", "POWERGRID", "POWERINDIA", "PRESTIGE", "PPLPHARMA", "RECLTD", 
         "RELIANCE", "RVNL", "SAIL", "SAMMAANCAP", "SBICARD", "SBILIFE", "SBIN", "SHREECEM", 
         "SHRIRAMFIN", "SIEMENS", "SJVN", "SOLARINDS", "SONACOMS", "SRF", "SUNPHARMA", "SUPREMEIND", 
-        "SYNGENE", "TATACHEM", "TATACOMM", "TATACONSUM", "TATAELXSI", "TATAPOWER", "TATASTEEL", 
+        "SYNGENE", "SWIGGY", "TATACHEM", "TATACOMM", "TATACONSUM", "TATAELXSI", "TATAPOWER", "TATASTEEL", 
         "TATATECH", "TCS", "TECHM", "TIINDIA", "TITAGARH", "TITAN", "TMPV", "TORNTPHARM", 
         "TORNTPOWER", "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO", "UNIONBANK", "UNITDSPR", 
-        "UNOMINDA", "UPL", "VBL", "VEDL", "VOLTAS", "WIPRO", "ZYDUSLIFE"
+        "UNOMINDA", "UPL", "VBL", "VEDL", "VOLTAS", "WAAREEENER", "WIPRO", "YESBANK", "ZYDUSLIFE"
     ]
     
     # Strike selection strategy
@@ -732,6 +732,17 @@ class SentimentConfig:
     # Example: Entry ₹100 → Peak ₹104 → Current ₹93.6 (10% below peak) → EXIT
     # Impact: Saves 69% of losses vs waiting for hard SL (-20%)
     # False positive rate: ~3-5% on winners (acceptable)
+    
+    # =========================================================================
+    # Early Exit - IV Crash Detection (Premium Collapse Protection)
+    # =========================================================================
+    
+    ENABLE_EARLY_EXIT_IV_CRASH = True        # Exit early if IV collapses (premium dies)
+    EARLY_EXIT_IV_CRASH_THRESHOLD = 10.0     # Exit if IV drops >10% from entry (no recovery potential)
+    # Rationale: IV crash = premium is dying = no point staying
+    # This catches the root cause that triggers MOMENTUM_REVERSAL
+    # Earlier signal than momentum (IV crashes before big reversals)
+    # Expected impact: Save ₹20-30k on choppy/reversal days
     
     # =========================================================================
     # PCR Data Retry Logic (for brief market data lags)

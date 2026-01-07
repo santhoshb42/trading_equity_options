@@ -1,21 +1,24 @@
 {
-  "timestamp": "2026-01-02T15:33:47.364872",
+  "timestamp": "2026-01-07T19:58:05.799747",
   "trading_mode": "PAPER",
   "market_status": "OPEN",
   "summary": {
-    "total_budget": 0.0,
-    "budget_used": 0.0,
-    "budget_remaining": 0.0,
-    "budget_used_percent": 0.0,
+    "total_budget": 3000000.0,
+    "budget_used": 2217183.25,
+    "budget_remaining": 782816.75,
+    "budget_used_percent": 73.91,
     "max_positions_allowed": 100,
-    "total_trades_today": 0,
+    "total_trades_today": 74,
     "ongoing_trades": 0,
-    "closed_trades": 0,
-    "winning_trades": 0,
-    "losing_trades": 0,
-    "win_rate_percent": 0.0,
-    "total_pnl": 0.0,
-    "unrealized_pnl": 0.0,
-    "realized_pnl": 0.0
+    "closed_trades": 74,
+    "winning_trades": 39,
+    "losing_trades": 35,
+    "win_rate_percent": 52.7,
+    "total_pnl": 129745.57,
+    "total_pnl_percent": 4.32,
+    "unrealized_pnl": 0,
+    "unrealized_pnl_percent": 0.0,
+    "realized_pnl": 129745.57,
+    "realized_pnl_percent": 4.32
   }
 }

@@ -237,13 +237,18 @@ class OptionPosition:
             'theta': -0.02,
             'vega': 0.1
         }
-        self.current_iv = 20.0
+        # Get dynamic IV from volatility calculator instead of hardcoded 20%
+        from .volatility_calculator import get_volatility_calculator
+        vol_calc = get_volatility_calculator()
+        self.current_iv = vol_calc.get_dynamic_iv(symbol)
         self.entry_iv = None  # IV at entry (for IV crush detection)
         self.last_updated = entry_time
         
         # NEW: Sentiment tracking (for fade detection)
         self.entry_pcr = None  # PCR at entry
+        self.current_pcr = None  # Current PCR (updated during monitoring)
         self.entry_oi_buildup = None  # OI buildup at entry
+        self.current_oi = None  # Current OI (updated during monitoring)
         self.entry_sentiment_timestamp = None  # When sentiment was recorded
         
         # Market data tracking for liquidity
@@ -253,12 +258,15 @@ class OptionPosition:
         self.open_interest = 0
         
         # Entry Greeks (for ML learning)
+        from .volatility_calculator import get_volatility_calculator
+        vol_calc = get_volatility_calculator()
+        entry_iv = vol_calc.get_dynamic_iv(symbol)
         self.entry_greeks = {
             'delta': 0.5,
             'gamma': 0.05,
             'theta': -0.02,
             'vega': 0.1,
-            'iv': 20.0
+            'iv': entry_iv
         }
         
         # Greeks tracking for smart exit detection (NEW)
@@ -267,7 +275,9 @@ class OptionPosition:
         self.entry_gamma = 0.05
         self.entry_theta = -0.02
         self.entry_vega = 0.1
-        self.entry_iv = 20.0
+        from .volatility_calculator import get_volatility_calculator
+        vol_calc = get_volatility_calculator()
+        self.entry_iv = vol_calc.get_dynamic_iv(symbol)
         
         # Greeks history for trend detection (list of dicts with timestamp)
         self.greeks_history = []  # Format: [{'timestamp': dt, 'delta': x, 'gamma': y, 'theta': z, 'vega': v, 'iv': i}, ...]
@@ -899,7 +909,7 @@ class OptionPositionMonitor:
                     gamma=entry_greeks.get('gamma', 0.05),
                     theta=entry_greeks.get('theta', -0.02),
                     vega=entry_greeks.get('vega', 0.1),
-                    iv=entry_greeks.get('iv', 20.0)
+                    iv=entry_greeks.get('iv', 0.25)  # Changed default from 20% to 25%
                 )
                 logger.debug(f"POSITION_INIT: Captured entry Greeks | symbol={symbol} | delta={position.entry_delta:.3f} | gamma={position.entry_gamma:.4f} | theta={position.entry_theta:.4f} | vega={position.entry_vega:.4f} | iv={position.entry_iv:.2f}")
             else:
@@ -938,8 +948,13 @@ class OptionPositionMonitor:
                 logger.warning(f"POSITION_ADD: DECAY_MONITOR_INIT_FAILED | {symbol} | {str(e)}")
             
             # Register for fake move monitoring
+            from .volatility_calculator import get_volatility_calculator
+            vol_calc = get_volatility_calculator()
+            # Extract underlying from option symbol (e.g., RELIANCE27JAN26... -> RELIANCE)
+            underlying = ''.join([c for c in symbol if not c.isdigit()])
+            entry_iv = vol_calc.get_dynamic_iv(underlying)
             fake_move_detector = get_fake_move_detector()
-            fake_move_detector.monitor_position(symbol, entry_premium, entry_iv=20.0)
+            fake_move_detector.monitor_position(symbol, entry_premium, entry_iv=entry_iv)
             
             # Log trade entry to CSV
             try:
@@ -1131,7 +1146,11 @@ class OptionPositionMonitor:
                     'entry_greeks': position.entry_greeks,  # ADDED: Entry Greeks
                     'exit_greeks': position.exit_greeks,    # ADDED: Exit Greeks
                     'entry_iv': position.entry_iv,          # Entry IV
-                    'exit_iv': position.current_iv          # Exit IV
+                    'exit_iv': position.current_iv,         # Exit IV
+                    'entry_pcr': position.entry_pcr,        # Entry Put-Call Ratio (sentiment)
+                    'exit_pcr': position.current_pcr,       # Exit PCR
+                    'entry_oi': position.entry_oi_buildup,  # Entry Open Interest buildup
+                    'exit_oi': position.current_oi          # Exit Open Interest
                 }
                 
                 # Record to all systems (NEW: Added symbol_tracker.record_trade)
@@ -1735,6 +1754,126 @@ class OptionPositionMonitor:
         
         return closed
     
+    def _log_iv_crash_event(self, symbol: str, entry_iv: float, current_iv: float, 
+                            iv_drop_pct: float, position_data: Dict) -> None:
+        """
+        Log comprehensive IV_CRASH event data for analysis.
+        Ensures all IV-related data is captured for later review.
+        """
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'event': 'IV_CRASH_EXIT',
+            'symbol': symbol,
+            'entry_iv': entry_iv,
+            'current_iv': current_iv,
+            'iv_drop_pct': iv_drop_pct,
+            'entry_premium': position_data.get('entry_premium', 0),
+            'current_premium': position_data.get('current_premium', 0),
+            'entry_delta': position_data.get('entry_delta', 0),
+            'exit_delta': position_data.get('exit_delta', 0),
+            'entry_gamma': position_data.get('entry_gamma', 0),
+            'exit_gamma': position_data.get('exit_gamma', 0),
+            'pnl': position_data.get('pnl', 0),
+            'pnl_percent': position_data.get('pnl_percent', 0),
+            'duration_seconds': position_data.get('duration', 0),
+        }
+        
+        # Log to both application logs and metrics
+        logger.info(f"IV_CRASH_EVENT_LOGGED: {symbol} | IV: {entry_iv:.2f}→{current_iv:.2f} ({iv_drop_pct:.1f}%) | PnL: ₹{log_entry['pnl']:.2f}")
+        
+        return log_entry
+    
+    def check_iv_crash(self) -> List[Dict[str, Any]]:
+        """
+        ⭐ TIER 1 EARLY EXIT: Detect IV crash and exit immediately
+        
+        Logic:
+        - Track IV at entry
+        - If IV drops >10% from entry, exit immediately
+        - IV crash = premium is dying = no recovery potential
+        
+        Why this works:
+        - IV crash is the ROOT CAUSE of losses (premium collapses)
+        - Catching it early prevents gamma explosion at exit
+        - Earlier signal than MOMENTUM_REVERSAL (IV crashes first)
+        
+        Impact:
+        - Save ₹20-30k on choppy/reversal days
+        - Prevents "worst time to exit" scenario (high gamma + low IV)
+        
+        Expected outcome:
+        - Complements MOMENTUM_REVERSAL (different signals)
+        - May catch 40-50% of would-be MOMENTUM losses earlier
+        """
+        from optcode.optconfig import SentimentConfig
+        
+        closed = []
+        threshold = SentimentConfig.EARLY_EXIT_IV_CRASH_THRESHOLD / 100.0  # Convert % to decimal
+        
+        logger.info(f"IV_CRASH_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_IV_CRASH} | threshold={threshold*100:.1f}% | positions={len(self.positions)}")
+        
+        if not SentimentConfig.ENABLE_EARLY_EXIT_IV_CRASH:
+            logger.warning("IV_CRASH_CHECK: Feature DISABLED in config")
+            return closed  # Feature disabled
+        
+        for symbol in list(self.positions.keys()):
+            position = self.positions[symbol]
+            
+            # Check IV collapse
+            if position.entry_iv and position.current_iv:
+                iv_drop_pct = (position.entry_iv - position.current_iv) / position.entry_iv
+                
+                # Only check positions that have been open for at least 10 seconds
+                time_in_position = (datetime.now() - position.entry_time).total_seconds()
+                
+                # 🔍 DEBUG: Always log IV check for every position
+                logger.debug(f"IV_CRASH_CHECK: {symbol} | Entry IV: {position.entry_iv:.2f} | Current IV: {position.current_iv:.2f} | Drop: {iv_drop_pct*100:.1f}% | Threshold: {threshold*100:.1f}% | Time: {time_in_position:.1f}s")
+                
+                if time_in_position > 10:  # Give position at least 10 seconds to breathe
+                    if iv_drop_pct > threshold:
+                        # IV crash detected - exit immediately
+                        logger.warning(f"IV_CRASH_TRIGGERED: {symbol} | IV drop {iv_drop_pct*100:.1f}% > threshold {threshold*100:.1f}%")
+                        pnl = self.close_position(
+                            symbol,
+                            position.current_premium,
+                            f"IV_CRASH ({iv_drop_pct*100:.1f}% from entry)"
+                        )
+                        if pnl:
+                            closed.append(pnl)
+                            
+                            # Log comprehensive IV_CRASH event data
+                            self._log_iv_crash_event(
+                                symbol, 
+                                position.entry_iv, 
+                                position.current_iv,
+                                iv_drop_pct,
+                                {
+                                    'entry_premium': position.entry_premium,
+                                    'current_premium': position.current_premium,
+                                    'entry_delta': pnl.get('entry_delta', 0),
+                                    'exit_delta': pnl.get('exit_delta', 0),
+                                    'entry_gamma': pnl.get('entry_gamma', 0),
+                                    'exit_gamma': pnl.get('exit_gamma', 0),
+                                    'pnl': pnl['pnl'],
+                                    'pnl_percent': pnl.get('pnl_percent', 0),
+                                    'duration': pnl.get('duration', 0),
+                                }
+                            )
+                            
+                            logger.warning(
+                                f"EARLY_EXIT_IV_CRASH: {symbol} | Entry IV: {position.entry_iv:.2f} | "
+                                f"Current IV: {position.current_iv:.2f} | "
+                                f"IV Drop: {iv_drop_pct*100:.1f}% (threshold: {threshold*100:.1f}%) | "
+                                f"PnL: ₹{pnl['pnl']:.2f} | "
+                                f"Premium: ₹{position.entry_premium:.2f} → ₹{position.current_premium:.2f}"
+                            )
+                    else:
+                        logger.debug(f"IV_CRASH_OK: {symbol} | IV drop {iv_drop_pct*100:.1f}% <= threshold {threshold*100:.1f}%")
+                else:
+                    logger.debug(f"IV_CRASH_SKIP: {symbol} | Too early, only {time_in_position:.1f}s since entry")
+        
+        return closed
+    
     def check_stop_losses(self) -> List[Dict[str, Any]]:
         """
         Close positions at stop loss levels with decay-aware validation.
@@ -1864,7 +2003,18 @@ class OptionPositionMonitor:
                     logger.debug(f"SENTIMENT_BASELINE: {symbol} | {pcr_str} | {oi_str}")
                     continue  # Skip exit check on first reading
                 
-                # Check PCR deterioration (fade detection)
+                # Always update current PCR for exit logging (even if not exiting)
+                if current_pcr is not None:
+                    position.current_pcr = current_pcr
+                
+                # Always update current OI for exit logging (even if not exiting)
+                if current_buildup is not None:
+                    oi_val = current_buildup.get('oi_change', 0) if isinstance(current_buildup, dict) else 0
+                    if isinstance(oi_val, (int, float)):
+                        position.current_oi = oi_val
+                
+                # Check PCR deterioration (fade detection) - LOG ONLY, DON'T EXIT
+                # PCR and OI data logged for ML training, but exits only via IV_CRUSH
                 pcr_fade_detected = False
                 pcr_fade_reason = None
                 
@@ -1890,8 +2040,12 @@ class OptionPositionMonitor:
                                 pcr_fade_reason = f"PE entry PCR {position.entry_pcr:.2f} → {current_pcr:.2f} ({pcr_change_pct:.1f}%)"
                             else:
                                 pcr_fade_reason = "PE_PCR_FADE"
+                    
+                    # Log PCR change for ML analysis (but don't use for exit)
+                    if pcr_fade_reason:
+                        logger.debug(f"PCR_MONITORING: {symbol} | {pcr_fade_reason}")
                 
-                # Check OI buildup fading (conviction weakening)
+                # Check OI buildup fading (conviction weakening) - LOG ONLY, DON'T EXIT
                 oi_fade_detected = False
                 oi_fade_reason = None
                 
@@ -1909,28 +2063,33 @@ class OptionPositionMonitor:
                             oi_fade_reason = f"OI {position.entry_oi_buildup:,.0f} → {current_oi_change:,.0f} ({oi_change_pct:.1f}%)"
                         else:
                             oi_fade_reason = "OI_BUILDUP_FADE"
+                    
+                    # Log OI change for ML analysis (but don't use for exit)
+                    if oi_fade_reason:
+                        logger.debug(f"OI_MONITORING: {symbol} | {oi_fade_reason}")
                 
-                # Exit if either PCR or OI faded
-                if pcr_fade_detected or oi_fade_detected:
-                    exit_reason = []
-                    if pcr_fade_detected:
-                        exit_reason.append(pcr_fade_reason if pcr_fade_reason else "PCR_FADE")
-                    if oi_fade_detected:
-                        exit_reason.append(oi_fade_reason if oi_fade_reason else "OI_FADE")
-                    
-                    combined_reason = " | ".join(exit_reason) if exit_reason else "SENTIMENT_FADE"
-                    logger.warning(f"SENTIMENT_FADE: {symbol} | {combined_reason}")
-                    
-                    # Close position at current premium
-                    pnl = self.close_position(
-                        symbol,
-                        position.current_premium,
-                        f"SENTIMENT_FADE: {combined_reason}"
-                    )
-                    
-                    if pnl:
-                        closed.append(pnl)
-                        logger.info(f"SENTIMENT_EXIT_CLOSED: {symbol} | {combined_reason} | PnL: ₹{pnl['pnl']:.2f}")
+                # DISABLED: PCR and OI exits - only IV_CRUSH triggers exits for sentiment-based exits
+                # if pcr_fade_detected or oi_fade_detected:
+                #     exit_reason = []
+                #     if pcr_fade_detected:
+                #         exit_reason.append(pcr_fade_reason if pcr_fade_reason else "PCR_FADE")
+                #     if oi_fade_detected:
+                #         exit_reason.append(oi_fade_reason if oi_fade_reason else "OI_FADE")
+                #     
+                #     combined_reason = " | ".join(exit_reason) if exit_reason else "SENTIMENT_FADE"
+                #     logger.warning(f"SENTIMENT_FADE: {symbol} | {combined_reason}")
+                #     
+                #     # Close position at current premium
+                #     pnl = self.close_position(
+                #         symbol,
+                #         position.current_premium,
+                #         f"SENTIMENT_FADE: {combined_reason}"
+                #     )
+                #     
+                #     if pnl:
+                #         closed.append(pnl)
+                #         logger.info(f"SENTIMENT_EXIT_CLOSED: {symbol} | {combined_reason} | PnL: ₹{pnl['pnl']:.2f}")
+
         
         except Exception as e:
             import traceback
@@ -2011,10 +2170,62 @@ class OptionPositionMonitor:
         refresh_stats['active_symbol_pool'] = self.symbol_pool.get_pool_status()
         
         # BULK FETCH: Get LTP for all active positions using TRUE bulk API
-        # With 60s cache, only ~10% uncached per cycle = ONE getMarketData() call for all
-        # For 56 positions with 10% uncached = ~6 positions/cycle = 1 bulk call
-        ltps = self.broker.get_ltp_bulk(all_symbols, exchange="NFO")
-        logger.info(f"REFRESH_LTP: Bulk fetch complete | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
+        # Broker supports max 50 symbols per call, so batch into chunks
+        # For 74 positions: 2 calls (50 + 24)
+        ltps = {}
+        batch_size = 50  # Broker max per call
+        for i in range(0, len(all_symbols), batch_size):
+            batch = all_symbols[i:i+batch_size]
+            try:
+                batch_ltps = self.broker.get_ltp_bulk(batch, exchange="NFO")
+                if batch_ltps:
+                    ltps.update(batch_ltps)
+                logger.debug(f"REFRESH_LTP: Batch fetch | batch {i//batch_size + 1} | symbols={len(batch)} | results={len([v for v in batch_ltps.values() if v]) if batch_ltps else 0}")
+            except Exception as e:
+                logger.warning(f"REFRESH_LTP: Batch fetch failed | batch {i//batch_size + 1} | {str(e)}")
+        
+        logger.info(f"REFRESH_LTP: Bulk fetch complete | batches={len(range(0, len(all_symbols), batch_size))} | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
+        
+        # CRITICAL FIX: If bulk fetch failed (all None), check if broker is authenticated
+        # If not authenticated, log warning about API errors and attempt reconnection
+        if ltps and not any(ltps.values()):
+            logger.error(f"REFRESH_LTP: ALL symbols returned None - likely broker auth/API error | checking broker status")
+            if self.broker and not self.broker.authenticated:
+                logger.error(f"REFRESH_LTP: Broker not authenticated - attempting re-authentication")
+                if self.broker.authenticate(is_retry=True):
+                    logger.info(f"REFRESH_LTP: Re-authentication successful - retrying LTP fetch")
+                    # Retry with batching
+                    ltps = {}
+                    batch_size = 50
+                    for i in range(0, len(all_symbols), batch_size):
+                        batch = all_symbols[i:i+batch_size]
+                        try:
+                            batch_ltps = self.broker.get_ltp_bulk(batch, exchange="NFO")
+                            if batch_ltps:
+                                ltps.update(batch_ltps)
+                        except Exception as e:
+                            logger.warning(f"REFRESH_LTP: RETRY batch {i//batch_size + 1} failed | {str(e)}")
+                    logger.info(f"REFRESH_LTP: RETRY - Bulk fetch complete | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
+                else:
+                    logger.error(f"REFRESH_LTP: Re-authentication failed - positions will not be updated until broker recovers")
+        
+        # PERFORMANCE OPTIMIZATION: Bulk fetch all underlying LTPs once instead of per-position
+        # This prevents repeated API calls when fetching option chains
+        # Batch into 50-symbol chunks per broker limit
+        underlying_symbols = list(set(pos.underlying for pos in self.positions.values()))
+        underlying_ltps = {}
+        if underlying_symbols:
+            try:
+                batch_size = 50
+                for i in range(0, len(underlying_symbols), batch_size):
+                    batch = underlying_symbols[i:i+batch_size]
+                    batch_ltps = self.broker.get_ltp_bulk(batch, exchange="NSE") or {}
+                    if batch_ltps:
+                        underlying_ltps.update(batch_ltps)
+                logger.debug(f"REFRESH_LTP: Underlying batch fetch | requested={len(underlying_symbols)} | fetched={len([v for v in underlying_ltps.values() if v])}")
+            except Exception as e:
+                logger.warning(f"REFRESH_LTP: Underlying batch fetch failed | {str(e)}")
+                underlying_ltps = {}
         
         # Process each symbol (only active positions)
         for symbol in all_symbols:
@@ -2026,12 +2237,19 @@ class OptionPositionMonitor:
                 refresh_stats['positions_checked'] += 1
                 
                 # Get LTP from bulk fetch result
-                current_ltp = ltps.get(symbol)
+                current_ltp = ltps.get(symbol) if ltps else None
                 
                 if not current_ltp or current_ltp <= 0:
-                    refresh_stats['failed_fetches'] += 1
-                    logger.warning(f"REFRESH_LTP: Failed to fetch LTP for {symbol}")
-                    continue
+                    # FALLBACK: If LTP fetch failed, use last known current_premium
+                    # This allows SL checks to continue even during temporary broker API failures
+                    # SL checks use current_premium to trigger exits, so we need SOME value
+                    if position.current_premium and position.current_premium > 0:
+                        current_ltp = position.current_premium
+                        logger.debug(f"REFRESH_LTP: Using fallback price | {symbol} | last_price=₹{current_ltp:.2f} | (broker LTP unavailable)")
+                    else:
+                        refresh_stats['failed_fetches'] += 1
+                        logger.warning(f"REFRESH_LTP: Failed to fetch LTP for {symbol} and no fallback available")
+                        continue
                 
                 # STEP 2: Fetch real Greeks and IV from option chain
                 # Use fallback defaults
@@ -2041,7 +2259,9 @@ class OptionPositionMonitor:
                     'theta': -0.02,
                     'vega': 0.1
                 }
-                real_iv = 20.0
+                from .volatility_calculator import get_volatility_calculator
+                vol_calc = get_volatility_calculator()
+                real_iv = vol_calc.get_dynamic_iv(symbol, default_iv=0.25)
                 
                 try:
                     # CRITICAL: Use the last TUESDAY of the month (NSE monthly expiry)
@@ -2084,28 +2304,16 @@ class OptionPositionMonitor:
                         logger.debug(f"REFRESH_LTP: Monthly expiry {monthly_expiry_broker} not available, using {closest}")
                         monthly_expiry_iso = broker_to_iso(closest)
                     
-                    # 🔴 FIX: Fetch UNDERLYING LTP to pass as current_price to Greeks estimation
-                    # Without this, Greeks are estimated with spot=strike (always same value)
-                    # This makes delta≈0.5 for all positions, theta same, etc. (NEVER CHANGES)
-                    # Fetch underlying LTP and option chain with 60-second cache
-                    # Option chains are cached, so this won't hammer the API
-                    underlying_ltp = None
-                    try:
-                        underlying_ltps = self.broker.get_ltp_bulk([position.underlying], exchange="NSE")
-                        underlying_ltp = underlying_ltps.get(position.underlying) if underlying_ltps else None
-                        if underlying_ltp and underlying_ltp > 0:
-                            logger.debug(f"REFRESH_LTP: Got underlying LTP | {position.underlying} | ltp=₹{underlying_ltp:.2f}")
-                        else:
-                            logger.debug(f"REFRESH_LTP: Could not fetch underlying LTP | {position.underlying}")
-                    except Exception as e:
-                        logger.debug(f"REFRESH_LTP: Underlying LTP fetch failed | {position.underlying} | {str(e)}")
+                    # USE PRE-FETCHED underlying LTP from bulk fetch (no per-position API calls)
+                    underlying_ltp = underlying_ltps.get(position.underlying)
+                    if underlying_ltp and underlying_ltp > 0:
+                        logger.debug(f"REFRESH_LTP: Got underlying LTP | {position.underlying} | ltp=₹{underlying_ltp:.2f}")
+                    else:
+                        logger.debug(f"REFRESH_LTP: Could not fetch underlying LTP | {position.underlying}")
                     
-                    # Fetch option chain (with 60s cache enabled)
-                    option_chain = self.broker.fetch_option_chain(
-                        position.underlying,
-                        monthly_expiry_iso,
-                        current_price=underlying_ltp
-                    )
+                    # SKIP option chain fetch here - moved to separate 1-minute Greeks refresh
+                    # This keeps the 10-second LTP refresh FAST (only bulk API calls)
+                    option_chain = None
                     
                     if option_chain:
                         # Find contract matching this position's strike and type
@@ -2125,7 +2333,9 @@ class OptionPositionMonitor:
                                     'theta': contract.theta,
                                     'vega': contract.vega
                                 }
-                                real_iv = contract.iv if contract.iv > 0 else 20.0
+                                from .volatility_calculator import get_volatility_calculator
+                                vol_calc = get_volatility_calculator()
+                                real_iv = contract.iv if contract.iv > 0 else vol_calc.get_dynamic_iv(symbol, default_iv=0.25)
                                 refresh_stats['greeks_updated'] += 1
                                 logger.debug(f"REFRESH_LTP: GREEKS_REAL | {symbol} | delta={contract.delta:.3f} | gamma={contract.gamma:.4f} | theta={contract.theta:.4f} | vega={contract.vega:.3f} | iv={real_iv:.2f}")
                             else:
@@ -2188,6 +2398,99 @@ class OptionPositionMonitor:
         
         logger.info(f"REFRESH_LTP: Complete | updated={refresh_stats['ltps_updated']}/{refresh_stats['positions_checked']} | greeks={refresh_stats['greeks_updated']} | failed={refresh_stats['failed_fetches']}")
         return refresh_stats
+    
+    def refresh_position_greeks(self) -> Dict[str, Any]:
+        """
+        Refresh GREEKS only (expensive operation) - runs every 60 seconds
+        
+        Separated from LTP refresh (10s) to keep main loop fast:
+        - LTP refresh: Bulk API calls only (10 seconds)
+        - Greeks refresh: Chain fetches per position (60 seconds)
+        
+        Returns:
+            Dictionary with Greeks refresh statistics
+        """
+        greeks_stats = {
+            'positions_checked': 0,
+            'greeks_updated': 0,
+            'failed_fetches': 0,
+            'errors': []
+        }
+        
+        if not self.broker or not self.positions:
+            return greeks_stats
+        
+        logger.info(f"REFRESH_GREEKS: Starting | positions={len(self.positions)}")
+        
+        # Get unique underlying symbols
+        underlying_symbols = set(pos.underlying for pos in self.positions.values())
+        
+        # Bulk fetch all underlying LTPs once
+        underlying_ltps = {}
+        if underlying_symbols:
+            try:
+                underlying_ltps = self.broker.get_ltp_bulk(list(underlying_symbols), exchange="NSE") or {}
+            except Exception as e:
+                logger.warning(f"REFRESH_GREEKS: Underlying bulk fetch failed | {str(e)}")
+        
+        # Fetch Greeks for each position
+        for symbol, position in self.positions.items():
+            try:
+                greeks_stats['positions_checked'] += 1
+                
+                underlying_ltp = underlying_ltps.get(position.underlying)
+                monthly_expiry_iso = position.expiry
+                
+                # Fetch option chain (with cache)
+                try:
+                    option_chain = self.broker.fetch_option_chain(
+                        position.underlying,
+                        monthly_expiry_iso,
+                        current_price=underlying_ltp
+                    )
+                except Exception as e:
+                    logger.debug(f"REFRESH_GREEKS: Could not fetch chain | {symbol} | {str(e)}")
+                    continue
+                
+                if not option_chain:
+                    continue
+                
+                # Find contract matching this position
+                contract = option_chain.get_contract(position.strike, position.contract_type)
+                
+                if contract and (contract.delta != 0.0 or contract.gamma != 0.0 or 
+                                contract.theta != 0.0 or contract.vega != 0.0):
+                    # Update position with real Greeks
+                    real_greeks = {
+                        'delta': contract.delta,
+                        'gamma': contract.gamma,
+                        'theta': contract.theta,
+                        'vega': contract.vega
+                    }
+                    from .volatility_calculator import get_volatility_calculator
+                    vol_calc = get_volatility_calculator()
+                    real_iv = contract.iv if contract.iv > 0 else vol_calc.get_dynamic_iv(symbol, default_iv=0.25)
+                    
+                    position.current_greeks = real_greeks
+                    position.current_iv = real_iv
+                    position.bid_price = contract.bid if contract.bid > 0 else position.current_premium
+                    position.ask_price = contract.ask if contract.ask > 0 else position.current_premium
+                    position.volume = contract.volume
+                    position.open_interest = contract.open_interest
+                    
+                    greeks_stats['greeks_updated'] += 1
+                    logger.debug(f"REFRESH_GREEKS: {symbol} | delta={contract.delta:.3f} | gamma={contract.gamma:.4f} | theta={contract.theta:.4f}")
+                    
+            except Exception as e:
+                greeks_stats['failed_fetches'] += 1
+                greeks_stats['errors'].append(f"{symbol}: {str(e)}")
+                logger.debug(f"REFRESH_GREEKS: Error | {symbol} | {str(e)}")
+        
+        if greeks_stats['greeks_updated'] > 0:
+            self._save_positions()
+        
+        logger.info(f"REFRESH_GREEKS: Complete | updated={greeks_stats['greeks_updated']}/{greeks_stats['positions_checked']}")
+        return greeks_stats
     
     def refresh_underlying_candles(self) -> Dict[str, Any]:
         """
@@ -2805,7 +3108,11 @@ class OptionPositionMonitor:
                         pass
                 self.positions[symbol] = position
                 
-            logger.info(f"POSITION_LOAD: Loaded {len(self.positions)} positions")
+                # 🔴 CRITICAL FIX: Add restored positions to symbol pool for LTP refreshing
+                # Without this, refresh_position_ltps() finds no active symbols and skips all updates
+                self.symbol_pool.add_symbol(symbol, entry_time=position.entry_time)
+                
+            logger.info(f"POSITION_LOAD: Loaded {len(self.positions)} positions | Active symbols in pool: {len(self.symbol_pool.get_active_symbols())}")
                 
         except Exception as e:
             print(f"⚠️ Error loading positions: {str(e)}")

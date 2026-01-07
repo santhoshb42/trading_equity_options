@@ -170,24 +170,25 @@ class MomentumValidator:
             logger.debug(f"MomentumValidator: RSI not available for validation")
             return True, "RSI data not available - skipping validation"
         
-        # For BUY signal - need extreme negative momentum (oversold)
+        # For BUY signal (CE/CALL entry) - need strong positive momentum (RSI >= 55)
         if action == 'BUY':
-            if rsi_15m > self.rsi_oversold:
-                return False, f"PE entry: RSI {rsi_15m:.1f} > oversold threshold {self.rsi_oversold}"
+            rsi_min_call = float(os.getenv("ENTRY_FILTER_RSI_MIN_CALL", "55"))  # Minimum RSI for CALL entry
+            if rsi_15m < rsi_min_call:
+                return False, f"CE entry: RSI {rsi_15m:.1f} < momentum threshold {rsi_min_call} (need strong uptrend)"
         
         # For SELL signal - need extreme positive momentum (overbought)
         elif action == 'SELL':
             if rsi_15m < self.rsi_overbought:
-                return False, f"CE entry: RSI {rsi_15m:.1f} < overbought threshold {self.rsi_overbought}"
+                return False, f"PE entry: RSI {rsi_15m:.1f} < overbought threshold {self.rsi_overbought}"
         
         # MACD confirmation (if available and enabled)
         # Defensive: MACD should be dict with keys, not a bare value
         if self.macd_confirmation and isinstance(macd_15m, dict) and 'macd' in macd_15m:
             macd_value = macd_15m.get('macd', 0)
-            if action == 'BUY' and macd_value > 0:  # Should be negative for downtrend
-                return False, f"PE entry: MACD {macd_value:.4f} should be negative"
+            if action == 'BUY' and macd_value < 0:  # Should be positive for CALL entry (uptrend)
+                return False, f"CE entry: MACD {macd_value:.4f} should be positive (uptrend)"
             elif action == 'SELL' and macd_value < 0:  # Should be positive for uptrend
-                return False, f"CE entry: MACD {macd_value:.4f} should be positive"
+                return False, f"PE entry: MACD {macd_value:.4f} should be positive"
         
         return True, f"Momentum confirmed (RSI {rsi_15m:.1f})"
 
@@ -235,15 +236,15 @@ class TrendValidator:
             logger.debug(f"{self.name}: MA data not available (ma_short={ma_short}, ma_long={ma_long}), allowing entry")
             return True, "MA data unavailable - skipping trend check (allowing entry)"
         
-        # For BUY signal (downtrend) - short MA should be below long MA
+        # For BUY signal (CALL entry / uptrend) - short MA should be above long MA
         if action == 'BUY':
+            if ma_short < ma_long:
+                return False, f"CE entry: Short MA {ma_short:.2f} < Long MA {ma_long:.2f} (should be uptrend for CALL entry)"
+        
+        # For SELL signal (downtrend) - short MA should be below long MA
+        elif action == 'SELL':
             if ma_short > ma_long:
                 return False, f"PE entry: Short MA {ma_short:.2f} > Long MA {ma_long:.2f} (should be downtrend)"
-        
-        # For SELL signal (uptrend) - short MA should be above long MA
-        elif action == 'SELL':
-            if ma_short < ma_long:
-                return False, f"CE entry: Short MA {ma_short:.2f} < Long MA {ma_long:.2f} (should be uptrend)"
         
         return True, f"Trend confirmed (MA crossover valid)"
 

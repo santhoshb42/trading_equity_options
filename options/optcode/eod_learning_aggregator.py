@@ -24,7 +24,7 @@ ML Features captured per symbol:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
@@ -78,28 +78,41 @@ class EODLearningAggregator:
                 return option_symbol[:i]
         return option_symbol
     
-    def analyze_closed_trades(self) -> Dict[str, Any]:
-        """Analyze closed trades from TODAY ONLY from option_pnl_history.json"""
-        from datetime import datetime, timedelta
+    def analyze_closed_trades(self, filter_date: Optional[date] = None) -> Dict[str, Any]:
+        """Analyze closed trades from option_pnl_history.json
+        
+        Args:
+            filter_date: If provided, only include trades from this date (YYYY-MM-DD)
+                        If None, includes ALL trades from history
+        
+        Usage:
+            - Daily EOD: analyze_closed_trades(filter_date=datetime.now().date())
+            - Manual restore: analyze_closed_trades(filter_date=None)  # All history
+        """
+        from datetime import datetime, date, timedelta
         
         pnl_history = self.load_json_file(self.pnl_history_file) or []
         
-        # Only count trades from today (since market open)
-        today = datetime.now().date()
+        # Filter trades by date if specified
         trades_by_symbol = defaultdict(list)
-        today_trade_count = 0
+        total_trade_count = 0
+        filtered_trade_count = 0
         
         for trade in pnl_history:
             symbol = trade.get('symbol', '')
             base_symbol = self.extract_base_symbol(symbol)
             closed_at_str = trade.get('closed_at', '')
             
-            # Filter to only today's trades
             try:
                 closed_at = datetime.fromisoformat(closed_at_str).date()
-                if closed_at != today:
-                    continue  # Skip trades from previous days
-                today_trade_count += 1
+                total_trade_count += 1
+                
+                # If filter_date specified, only include trades from that date
+                # If filter_date is None, include ALL trades (for historical restore)
+                if filter_date is not None and closed_at != filter_date:
+                    continue  # Skip trades from other dates
+                    
+                filtered_trade_count += 1
             except Exception:
                 # If we can't parse date, skip this trade
                 logger.debug(f"EOD_LEARNING_AGGREGATOR: Could not parse date for trade: {closed_at_str}")
@@ -120,9 +133,14 @@ class EODLearningAggregator:
             
             trades_by_symbol[base_symbol].append(trade_data)
         
-        logger.info(f"EOD_LEARNING_AGGREGATOR: Analyzed closed trades | "
-                   f"total_history={len(pnl_history)} | today_only={today_trade_count} | "
-                   f"unique_symbols_today={len(trades_by_symbol)}")
+        if filter_date:
+            logger.info(f"EOD_LEARNING_AGGREGATOR: Analyzed closed trades for {filter_date} | "
+                       f"total_available={total_trade_count} | today_only={filtered_trade_count} | "
+                       f"unique_symbols={len(trades_by_symbol)}")
+        else:
+            logger.info(f"EOD_LEARNING_AGGREGATOR: Analyzed ALL closed trades from history | "
+                       f"total_trades={total_trade_count} | "
+                       f"unique_symbols={len(trades_by_symbol)}")
         
         return dict(trades_by_symbol)
     
@@ -188,11 +206,11 @@ class EODLearningAggregator:
     def build_symbol_stats(self, closed_trades: Dict[str, List[Any]], 
                           open_positions: Dict[str, List[Any]]) -> Dict[str, Any]:
         """Build comprehensive symbol statistics for ML training"""
-        from optcode.optconfig import OptionsTradingConfig
+        from optcode import optconfig
         
         # Get all symbols from FO_UNIVERSE (217 symbols)
         # Ensure every symbol is present, even if no trades today
-        all_fo_symbols = set(OptionsTradingConfig.FO_UNIVERSE)
+        all_fo_symbols = set(optconfig.OptionsTradingConfig.FO_UNIVERSE)
         
         # Also include any open positions or trades (shouldn't add new symbols, but be safe)
         all_symbols = all_fo_symbols | set(closed_trades.keys()) | set(open_positions.keys())
@@ -436,8 +454,11 @@ class EODLearningAggregator:
                     'losing_trades': 0,
                     'win_rate_percent': 0.0,
                     'total_pnl': 0.0,
+                    'total_pnl_percent': 0.0,
                     'unrealized_pnl': 0.0,
+                    'unrealized_pnl_percent': 0.0,
                     'realized_pnl': 0.0,
+                    'realized_pnl_percent': 0.0,
                 }
             }
             
@@ -473,12 +494,20 @@ No trades yet.
             return False
     
     def aggregate(self) -> Dict[str, Any]:
-        """Main aggregation function - runs the complete EOD learning update"""
+        """Main aggregation function - runs the complete EOD learning update
+        
+        Daily learning processes TODAY's trades only (since market open at 9:15 AM).
+        This ensures symbol_stats reflect current day's performance and learning,
+        while preserving accumulated knowledge across trading days.
+        """
+        from datetime import date
         logger.info("EOD_LEARNING_AGGREGATOR: Starting end-of-day aggregation")
         
         try:
-            # Step 1: Analyze closed trades
-            closed_trades = self.analyze_closed_trades()
+            # Step 1: Analyze closed trades - TODAY ONLY (filter to current market date)
+            # This ensures we train only on today's verified trades, not historical data
+            today = date.today()
+            closed_trades = self.analyze_closed_trades(filter_date=today)
             
             # Step 2: Analyze open positions
             open_positions = self.analyze_open_positions()

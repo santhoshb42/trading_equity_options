@@ -42,8 +42,8 @@ class LearningConfig:
     MAX_CONFIDENCE_BOOST = 1.3  # Max 30% confidence boost
     MIN_CONFIDENCE_REDUCTION = 0.7  # Min 30% confidence reduction
     
-    # Data persistence
-    SYMBOL_STATS_FILE = "data/symbol_stats.json"
+    # Data persistence - use learning directory as canonical location
+    SYMBOL_STATS_FILE = "data/learning/symbol_stats.json"  # Canonical location: learning directory
     TRADE_HISTORY_FILE = "data/trade_history.jsonl"
     MODEL_PERFORMANCE_FILE = "data/model_performance.json"
 

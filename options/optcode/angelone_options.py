@@ -568,8 +568,14 @@ class AngelOneOptionsBroker:
         self.authenticated = False  # Mark session as invalid
         self.auth_retry_count = 0   # Reset retry counter for new authentication
         
-        # Attempt immediate re-authentication
-        success = self.authenticate(is_retry=False)
+        # CRITICAL: Reset the last auth time to force bypass the 2-second check
+        # This ensures we immediately attempt auth instead of skipping due to rate limit
+        import time
+        broker_id = id(self)
+        _LAST_AUTH_ATTEMPT_TIME[broker_id] = 0  # Force re-auth attempt
+        
+        # Attempt immediate re-authentication (is_retry=True to skip backoff check)
+        success = self.authenticate(is_retry=True)
         if success:
             logger.info("BROKER_SESSION: Re-authentication successful after Invalid Token error")
         else:
@@ -868,7 +874,7 @@ class AngelOneOptionsBroker:
             logger.error(f"PCR_CHAIN: ERROR for {underlying} {expiry} | {str(e)}")
             return None
     
-    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
+    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None, force_refresh: bool = False) -> Optional[OptionChain]:
         """
         Fetch complete option chain for underlying and expiry.
         With rate limiting to prevent AngelOne API throttling.
@@ -876,6 +882,7 @@ class AngelOneOptionsBroker:
         Underlying: BANKNIFTY, NIFTY, FINNIFTY
         Expiry: YYYY-MM-DD
         Current_price: Optional current spot price to center strikes around (for PAPER mode)
+        force_refresh: If True, bypass cache and fetch fresh chain (for stale chain detection)
         """
         # Get rate limiter instance
         rate_limiter = get_options_rate_limiter()
@@ -893,7 +900,7 @@ class AngelOneOptionsBroker:
             # Greeks: Also refresh every 10s (no lagging data in position_positions.json)
             # Use case: Catch bad delta swings, high theta decay, IV spikes → exit early
             # In PAPER mode with dynamic prices: don't cache (each alert price needs fresh chain)
-            should_use_cache = OptionsTradingConfig.TRADING_MODE == "LIVE" or current_price is None
+            should_use_cache = (OptionsTradingConfig.TRADING_MODE == "LIVE" or current_price is None) and not force_refresh
             
             # Check cache (valid for 10 seconds in LIVE mode - matches monitoring cycle)
             if should_use_cache and key in self.option_chains:
@@ -906,6 +913,8 @@ class AngelOneOptionsBroker:
                     # Cache expired - need fresh Greeks for monitoring decisions
                     cache_age = (datetime.now() - last_update).total_seconds() if last_update else 0
                     logger.info(f"CHAIN_FETCH: Cache expired | {underlying} | age={cache_age:.0f}s > 10s, fetching fresh Greeks (matches 10s monitoring cycle)")
+            elif force_refresh:
+                logger.info(f"CHAIN_FETCH: Force refresh requested | {underlying} {expiry} | bypassing cache")
             
             logger.info(f"CHAIN_FETCH: Fetching fresh Greeks | {underlying} {expiry} | cache_enabled={should_use_cache} | mode={OptionsTradingConfig.TRADING_MODE}")
             
@@ -933,7 +942,18 @@ class AngelOneOptionsBroker:
             
             # Always fetch real market data from AngelOne (even in PAPER mode)
             # PAPER mode only affects order placement, not market data
-            chain = self._fetch_from_angel(underlying, expiry, current_price=current_price)
+            try:
+                chain = self._fetch_from_angel(underlying, expiry, current_price=current_price)
+            except Exception as chain_error:
+                # Check if it's an auth error
+                error_str = str(chain_error).lower()
+                if 'invalid token' in error_str or 'ag8001' in error_str or 'unauthorized' in error_str:
+                    logger.error(f"CHAIN_FETCH: INVALID_TOKEN detected | {underlying} | {str(chain_error)} | triggering re-authentication")
+                    self._handle_invalid_token_error()
+                else:
+                    logger.error(f"CHAIN_FETCH: Fetch from Angel failed | {underlying} | {str(chain_error)}")
+                raise  # Re-raise the exception
+                
             logger.debug(f"CHAIN_FETCH: Fetched from Angel One | contracts={len(chain.contracts) if chain else 0} | mode={OptionsTradingConfig.TRADING_MODE}")
             
             if chain:
@@ -1016,9 +1036,18 @@ class AngelOneOptionsBroker:
         atm_contracts_data = [cd for cd in contracts_data 
                              if cd['contract_type'] in ['CE', 'PE']]
         
-        # Filter to ATM ± 2 strikes (so we have options for strike selection)
+        # Filter to ATM ± range (so we have options for strike selection)
+        # For CALL options, we need at least 1-2 strikes above ATM for OTM selection
+        # Use dynamic range based on symbol's strike step
         atm_contracts_data_filtered = []
         strikes_set = set()
+        
+        # Determine strike step for this symbol (50 for indices, 100 for most stocks)
+        strike_range = 100  # Default: covers ±1 strike for 100-point symbols
+        if underlying in ['NIFTY', 'BANKNIFTY']:
+            strike_range = 150  # ±150 covers 3 strikes for 50-point symbols
+        else:
+            strike_range = 150  # ±150 covers 1-2 strikes safely
         
         for cd in atm_contracts_data:
             symbol = cd['symbol']
@@ -1029,8 +1058,8 @@ class AngelOneOptionsBroker:
                 strike_str = match.group(5)
                 try:
                     strike = int(strike_str)
-                    # Include ATM ± 2 strikes (gives CE a choice of higher strikes)
-                    if abs(strike - atm_strike) <= 20:  # ±20 points around ATM
+                    # Include ATM ± range (gives CE a choice of higher strikes for OTM)
+                    if abs(strike - atm_strike) <= strike_range:
                         atm_contracts_data_filtered.append(cd)
                         strikes_set.add(strike)
                 except ValueError:
@@ -1110,12 +1139,15 @@ class AngelOneOptionsBroker:
                     spot=current_price if current_price else strike,  # Use current_price if available
                     contract_type=contract_data['contract_type'],
                     time_to_expiry_days=max(1, time_to_expiry),  # At least 1 day
-                    iv=0.25  # Default 25% IV
+                    iv=0.25  # Default 25% IV (will be overridden by dynamic IV below)
                 )
                 
-                # Set default IV if not already set
-                if contract.iv == 0:
-                    contract.iv = 20.0  # Default 20% IV
+                # Set dynamic IV based on market conditions (not hardcoded 20%)
+                from .volatility_calculator import get_volatility_calculator
+                vol_calc = get_volatility_calculator()
+                # Get market ADX if available (default None = use market condition multiplier only)
+                dynamic_iv = vol_calc.get_dynamic_iv(underlying, adx=None, rsi=None)
+                contract.iv = dynamic_iv
                 
                 # Update Greeks
                 contract.delta = estimated_greeks.get('delta', 0.5 if contract_data['contract_type'] == 'CE' else -0.5)
@@ -1138,7 +1170,7 @@ class AngelOneOptionsBroker:
                     contract.gamma = 0.05
                     contract.theta = -0.02
                     contract.vega = 0.1
-                    contract.iv = 20.0
+                    # Already set dynamic IV above, don't override
             
             # Set reasonable OI for LIVE mode
             # ATM contracts typically have > 200K OI, OTM have less
@@ -1245,7 +1277,10 @@ class AngelOneOptionsBroker:
             # Mock market data (simplified - not using strike for calcs)
             base_premium = spot * 0.02
             contract.ltp = base_premium
-            contract.iv = 20
+            # Use dynamic IV instead of hardcoded 20
+            from .volatility_calculator import get_volatility_calculator
+            vol_calc = get_volatility_calculator()
+            contract.iv = vol_calc.get_dynamic_iv(contract_data['underlying'])
             contract.open_interest = 10000
             contract.volume = 1000
             contract.bid = base_premium * 0.98
@@ -2004,8 +2039,13 @@ class AngelOneOptionsBroker:
         logger.info(f"BULK_MARKET_DATA: STARTING | symbols={len(symbols)} | authenticated={self.authenticated}")
         
         if not self.authenticated:
-            logger.warning(f"BULK_MARKET_DATA: Not authenticated, cannot fetch live data for {len(symbols)} symbols")
-            return {sym: None for sym in symbols}
+            logger.warning(f"BULK_MARKET_DATA: Not authenticated, attempting re-authentication before fetching {len(symbols)} symbols")
+            # Try to re-authenticate if session lost
+            success = self.authenticate(is_retry=True)
+            if not success:
+                logger.error(f"BULK_MARKET_DATA: Re-authentication FAILED - cannot fetch live data for {len(symbols)} symbols")
+                return {sym: None for sym in symbols}
+            logger.info(f"BULK_MARKET_DATA: Re-authentication successful, retrying LTP fetch")
         
         result = {sym: None for sym in symbols}
         
@@ -2107,12 +2147,111 @@ class AngelOneOptionsBroker:
                                                 break
                                     logger.debug(f"BULK_MARKET_DATA: Batch {batch_idx//batch_size} | fetched={len(fetched)}/{len(batch_tokens)}")
                                 else:
-                                    logger.warning(f"BULK_MARKET_DATA: API error | {data.get('message')} | {data.get('errorcode', '')}")
-                                    failed_symbols.extend(batch_symbols)
+                                    error_msg = data.get('message', 'Unknown error')
+                                    error_code = data.get('errorcode', '')
+                                    # Check for Invalid Token error
+                                    if 'Invalid Token' in error_msg or error_code == 'AG8001':
+                                        logger.error(f"BULK_MARKET_DATA: INVALID_TOKEN detected | {error_msg} | triggering re-authentication and retry")
+                                        auth_success = self._handle_invalid_token_error()  # Re-authenticate
+                                        if auth_success:
+                                            # Auth succeeded - retry this batch
+                                            logger.info(f"BULK_MARKET_DATA: Re-authentication successful - RETRYING batch {batch_idx//batch_size}")
+                                            try:
+                                                # Update auth header with new session token
+                                                headers['Authorization'] = self.session_token
+                                                
+                                                # Retry the request with new token
+                                                response_retry = requests.post(
+                                                    'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/',
+                                                    json=request_data,
+                                                    headers=headers,
+                                                    timeout=5.0
+                                                )
+                                                
+                                                if response_retry.status_code == 200:
+                                                    data_retry = response_retry.json()
+                                                    if data_retry.get('status') or data_retry.get('success'):
+                                                        fetched_retry = data_retry.get('data', {}).get('fetched', [])
+                                                        for item in fetched_retry:
+                                                            token = item.get('symbolToken')
+                                                            ltp = float(item.get('ltp', 0))
+                                                            for sym, tok in symbol_to_token.items():
+                                                                if tok == token and ltp > 0:
+                                                                    result[sym] = ltp
+                                                                    self.ltp_cache.set(sym, ltp)
+                                                                    fetched_count += 1
+                                                                    if sym in failed_symbols:
+                                                                        failed_symbols.remove(sym)  # Mark as recovered
+                                                                    break
+                                                        logger.info(f"BULK_MARKET_DATA: RETRY batch {batch_idx//batch_size} SUCCESS | fetched={len(fetched_retry)}/{len(batch_tokens)}")
+                                                    else:
+                                                        logger.warning(f"BULK_MARKET_DATA: RETRY failed with error | {data_retry.get('message')}")
+                                                        failed_symbols.extend([s for s in batch_symbols if s not in result or result[s] is None])
+                                                else:
+                                                    logger.warning(f"BULK_MARKET_DATA: RETRY HTTP {response_retry.status_code}")
+                                                    failed_symbols.extend([s for s in batch_symbols if s not in result or result[s] is None])
+                                            except Exception as retry_error:
+                                                logger.warning(f"BULK_MARKET_DATA: RETRY exception | {type(retry_error).__name__}: {str(retry_error)}")
+                                                failed_symbols.extend([s for s in batch_symbols if s not in result or result[s] is None])
+                                        else:
+                                            logger.error(f"BULK_MARKET_DATA: Re-authentication FAILED - cannot retry batch")
+                                            failed_symbols.extend(batch_symbols)
+                                    logger.warning(f"BULK_MARKET_DATA: API error | {error_msg} | {error_code}")
+                                    if error_code != 'AG8001':  # Don't double-log for Invalid Token
+                                        failed_symbols.extend(batch_symbols)
                                     rate_limiter.record_call("bulk_ltp_quote", False)
                             else:
-                                logger.warning(f"BULK_MARKET_DATA: HTTP {response.status_code} | {response.text[:100]}")
-                                failed_symbols.extend(batch_symbols)
+                                response_text = response.text[:100] if response.text else "No response"
+                                logger.warning(f"BULK_MARKET_DATA: HTTP {response.status_code} | {response_text}")
+                                # Check if response contains Invalid Token error
+                                if 'Invalid Token' in response.text or response.status_code == 401:
+                                    logger.error(f"BULK_MARKET_DATA: INVALID_TOKEN (HTTP {response.status_code}) | triggering re-authentication and retry")
+                                    auth_success = self._handle_invalid_token_error()  # Re-authenticate
+                                    if auth_success:
+                                        # Auth succeeded - retry this batch
+                                        logger.info(f"BULK_MARKET_DATA: Re-authentication successful - RETRYING batch {batch_idx//batch_size}")
+                                        try:
+                                            # Update auth header with new session token
+                                            headers['Authorization'] = self.session_token
+                                            
+                                            # Retry the request with new token
+                                            response_retry = requests.post(
+                                                'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/',
+                                                json=request_data,
+                                                headers=headers,
+                                                timeout=5.0
+                                            )
+                                            
+                                            if response_retry.status_code == 200:
+                                                data_retry = response_retry.json()
+                                                if data_retry.get('status') or data_retry.get('success'):
+                                                    fetched_retry = data_retry.get('data', {}).get('fetched', [])
+                                                    for item in fetched_retry:
+                                                        token = item.get('symbolToken')
+                                                        ltp = float(item.get('ltp', 0))
+                                                        for sym, tok in symbol_to_token.items():
+                                                            if tok == token and ltp > 0:
+                                                                result[sym] = ltp
+                                                                self.ltp_cache.set(sym, ltp)
+                                                                fetched_count += 1
+                                                                if sym in failed_symbols:
+                                                                    failed_symbols.remove(sym)
+                                                                break
+                                                    logger.info(f"BULK_MARKET_DATA: RETRY batch {batch_idx//batch_size} SUCCESS | fetched={len(fetched_retry)}/{len(batch_tokens)}")
+                                                else:
+                                                    logger.warning(f"BULK_MARKET_DATA: RETRY failed with error | {data_retry.get('message')}")
+                                                    failed_symbols.extend([s for s in batch_symbols if s not in result or result[s] is None])
+                                            else:
+                                                logger.warning(f"BULK_MARKET_DATA: RETRY HTTP {response_retry.status_code}")
+                                                failed_symbols.extend([s for s in batch_symbols if s not in result or result[s] is None])
+                                        except Exception as retry_error:
+                                            logger.warning(f"BULK_MARKET_DATA: RETRY exception | {type(retry_error).__name__}: {str(retry_error)}")
+                                            failed_symbols.extend([s for s in batch_symbols if s not in result or result[s] is None])
+                                    else:
+                                        logger.error(f"BULK_MARKET_DATA: Re-authentication FAILED - cannot retry batch")
+                                        failed_symbols.extend(batch_symbols)
+                                else:
+                                    failed_symbols.extend(batch_symbols)
                                 rate_limiter.record_call("bulk_ltp_quote", False)
                                 
                         except Exception as e:
@@ -2156,7 +2295,7 @@ class AngelOneOptionsBroker:
             'oi': 50000,  # Open Interest for options
             'bid': ltp * 0.995,
             'ask': ltp * 1.005,
-            'iv': 20.0,  # Mock IV of 20%
+            'iv': 0.25,  # Dynamic IV (default 25%, will be overridden by volatility calculator)
             'timestamp': datetime.now().isoformat()
         }
     
