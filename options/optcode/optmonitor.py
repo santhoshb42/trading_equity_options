@@ -1783,6 +1783,36 @@ class OptionPositionMonitor:
         
         return log_entry
     
+    def _log_iv_spike_event(self, symbol: str, entry_iv: float, current_iv: float, 
+                            iv_rise_pct: float, position_data: Dict) -> None:
+        """
+        Log comprehensive IV_SPIKE event data for analysis.
+        IV spike = panic signal during market crashes.
+        Ensures all IV-related data is captured for later review.
+        """
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'event': 'IV_SPIKE_EXIT',
+            'symbol': symbol,
+            'entry_iv': entry_iv,
+            'current_iv': current_iv,
+            'iv_rise_pct': iv_rise_pct,
+            'entry_premium': position_data.get('entry_premium', 0),
+            'current_premium': position_data.get('current_premium', 0),
+            'entry_delta': position_data.get('entry_delta', 0),
+            'exit_delta': position_data.get('exit_delta', 0),
+            'entry_gamma': position_data.get('entry_gamma', 0),
+            'exit_gamma': position_data.get('exit_gamma', 0),
+            'pnl': position_data.get('pnl', 0),
+            'pnl_percent': position_data.get('pnl_percent', 0),
+            'duration_seconds': position_data.get('duration', 0),
+        }
+        
+        # Log to both application logs and metrics
+        logger.info(f"IV_SPIKE_EVENT_LOGGED: {symbol} | IV: {entry_iv:.2f}→{current_iv:.2f} (+{iv_rise_pct:.1f}%) | PnL: ₹{log_entry['pnl']:.2f}")
+        
+        return log_entry
+    
     def check_iv_crash(self) -> List[Dict[str, Any]]:
         """
         ⭐ TIER 1 EARLY EXIT: Detect IV crash and exit immediately
@@ -1871,6 +1901,83 @@ class OptionPositionMonitor:
                         logger.debug(f"IV_CRASH_OK: {symbol} | IV drop {iv_drop_pct*100:.1f}% <= threshold {threshold*100:.1f}%")
                 else:
                     logger.debug(f"IV_CRASH_SKIP: {symbol} | Too early, only {time_in_position:.1f}s since entry")
+        
+        return closed
+    
+    def check_iv_spike(self) -> List[Dict[str, Any]]:
+        """
+        Close positions if IV spikes significantly (panic/crash signal).
+        IV spike = opposite of IV crash. On crash days, IV rises BEFORE price drops.
+        This catches market crashes 1-2 minutes earlier than MOMENTUM_REVERSAL.
+        
+        Returns:
+            List of closed position stats (PnL, symbol, reason, etc)
+        """
+        closed = []
+        threshold = SentimentConfig.EARLY_EXIT_IV_SPIKE_THRESHOLD / 100.0  # Convert % to decimal
+        min_time = SentimentConfig.EARLY_EXIT_IV_SPIKE_MIN_TIME
+        
+        logger.info(f"IV_SPIKE_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_IV_SPIKE} | threshold={threshold*100:.1f}% | min_time={min_time}s | positions={len(self.positions)}")
+        
+        if not SentimentConfig.ENABLE_EARLY_EXIT_IV_SPIKE:
+            logger.warning("IV_SPIKE_CHECK: Feature DISABLED in config")
+            return closed  # Feature disabled
+        
+        for symbol in list(self.positions.keys()):
+            position = self.positions[symbol]
+            
+            # Check IV spike (opposite of crash)
+            if position.entry_iv and position.current_iv:
+                iv_rise_pct = (position.current_iv - position.entry_iv) / position.entry_iv
+                
+                # Only check positions that have been open for minimum time
+                time_in_position = (datetime.now() - position.entry_time).total_seconds()
+                
+                # 🔍 DEBUG: Always log IV spike check for every position
+                logger.debug(f"IV_SPIKE_CHECK: {symbol} | Entry IV: {position.entry_iv:.2f} | Current IV: {position.current_iv:.2f} | Rise: {iv_rise_pct*100:.1f}% | Threshold: {threshold*100:.1f}% | Time: {time_in_position:.1f}s")
+                
+                if time_in_position > min_time:  # Give position minimum time to breathe
+                    if iv_rise_pct > threshold:
+                        # IV spike detected - panic signal - exit immediately
+                        logger.warning(f"IV_SPIKE_TRIGGERED: {symbol} | IV rise {iv_rise_pct*100:.1f}% > threshold {threshold*100:.1f}%")
+                        pnl = self.close_position(
+                            symbol,
+                            position.current_premium,
+                            f"IV_SPIKE ({iv_rise_pct*100:.1f}% from entry)"
+                        )
+                        if pnl:
+                            closed.append(pnl)
+                            
+                            # Log comprehensive IV_SPIKE event data
+                            self._log_iv_spike_event(
+                                symbol, 
+                                position.entry_iv, 
+                                position.current_iv,
+                                iv_rise_pct,
+                                {
+                                    'entry_premium': position.entry_premium,
+                                    'current_premium': position.current_premium,
+                                    'entry_delta': pnl.get('entry_delta', 0),
+                                    'exit_delta': pnl.get('exit_delta', 0),
+                                    'entry_gamma': pnl.get('entry_gamma', 0),
+                                    'exit_gamma': pnl.get('exit_gamma', 0),
+                                    'pnl': pnl['pnl'],
+                                    'pnl_percent': pnl.get('pnl_percent', 0),
+                                    'duration': pnl.get('duration', 0),
+                                }
+                            )
+                            
+                            logger.warning(
+                                f"EARLY_EXIT_IV_SPIKE: {symbol} | Entry IV: {position.entry_iv:.2f} | "
+                                f"Current IV: {position.current_iv:.2f} | "
+                                f"IV Rise: {iv_rise_pct*100:.1f}% (threshold: {threshold*100:.1f}%) | "
+                                f"PnL: ₹{pnl['pnl']:.2f} | "
+                                f"Premium: ₹{position.entry_premium:.2f} → ₹{position.current_premium:.2f}"
+                            )
+                    else:
+                        logger.debug(f"IV_SPIKE_OK: {symbol} | IV rise {iv_rise_pct*100:.1f}% <= threshold {threshold*100:.1f}%")
+                else:
+                    logger.debug(f"IV_SPIKE_SKIP: {symbol} | Too early, only {time_in_position:.1f}s since entry")
         
         return closed
     
@@ -2935,6 +3042,14 @@ class OptionPositionMonitor:
             sentiment_closes = self.check_sentiment_exit()
             monitoring_result['closed_by_sentiment'] = [p['symbol'] for p in sentiment_closes]
             
+            # ⭐ NEW: Check and close positions by IV crash (premium decay)
+            iv_crash_closes = self.check_iv_crash()
+            monitoring_result['closed_by_iv_crash'] = [p['symbol'] for p in iv_crash_closes]
+            
+            # ⭐ NEW: Check and close positions by IV spike (panic/crash signal)
+            iv_spike_closes = self.check_iv_spike()
+            monitoring_result['closed_by_iv_spike'] = [p['symbol'] for p in iv_spike_closes]
+            
             # ⭐ Check other Greeks-based signals (Gamma, Theta, Vega)
             
             greeks_gamma_closes = self.check_greeks_gamma_explosion()
@@ -2962,10 +3077,11 @@ class OptionPositionMonitor:
             if self.broker:
                 monitoring_result['rate_limiter_stats'] = self.broker.get_rate_limiter_stats()
             
-            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(momentum_closes) + len(sl_closes) + len(sentiment_closes) + len(greeks_delta_closes) + len(greeks_gamma_closes) + len(greeks_theta_closes) + len(greeks_vega_closes) + len(greeks_health_closes) + len(ml_quality_closes)
+            total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(momentum_closes) + len(sl_closes) + len(sentiment_closes) + len(iv_crash_closes) + len(iv_spike_closes) + len(greeks_delta_closes) + len(greeks_gamma_closes) + len(greeks_theta_closes) + len(greeks_vega_closes) + len(greeks_health_closes) + len(ml_quality_closes)
             logger.info(f"MONITORING: Checked {len(self.positions)} positions | Closed {total_closed} "
                        f"(expiry={len(expired)}, profit={len(profit_closes)}, trailing={len(trailing_closes)}, "
                        f"momentum={len(momentum_closes)}, stoploss={len(sl_closes)}, sentiment={len(sentiment_closes)}, "
+                       f"iv_crash={len(iv_crash_closes)}, iv_spike={len(iv_spike_closes)}, "
                        f"greeks_delta={len(greeks_delta_closes)}, greeks_gamma={len(greeks_gamma_closes)}, "
                        f"greeks_theta={len(greeks_theta_closes)}, greeks_vega={len(greeks_vega_closes)}, "
                        f"greeks_health={len(greeks_health_closes)}, ml_quality={len(ml_quality_closes)})")

@@ -744,6 +744,15 @@ class SentimentConfig:
     # Earlier signal than momentum (IV crashes before big reversals)
     # Expected impact: Save ₹20-30k on choppy/reversal days
     
+    ENABLE_EARLY_EXIT_IV_SPIKE = True        # Exit early if IV spikes (fear spike = market crash)
+    EARLY_EXIT_IV_SPIKE_THRESHOLD = 15.0     # Exit if IV rises >15% from entry (market panic)
+    EARLY_EXIT_IV_SPIKE_MIN_TIME = 5         # Minimum seconds in position before checking IV spike
+    # Rationale: IV spike (opposite of crash) signals market panic/crash in progress
+    # On crash days: IV spikes BEFORE price drops (fear before selling)
+    # Catches crashes 1-2 minutes earlier than MOMENTUM_REVERSAL
+    # Jan 8 example: IV spiked during -1.04% crash; momentum caught after -10% loss
+    # Expected impact: Exit with 1-2min earlier signal on crash days
+    
     # =========================================================================
     # PCR Data Retry Logic (for brief market data lags)
     # =========================================================================
