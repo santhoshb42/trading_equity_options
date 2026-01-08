@@ -205,8 +205,14 @@ class EODLearningAggregator:
     
     def build_symbol_stats(self, closed_trades: Dict[str, List[Any]], 
                           open_positions: Dict[str, List[Any]]) -> Dict[str, Any]:
-        """Build comprehensive symbol statistics for ML training"""
+        """Build comprehensive symbol statistics for ML training
+        
+        IMPORTANT: Merges with historical data, preserves trade_history across days
+        """
         from optcode import optconfig
+        
+        # Load existing symbol stats to preserve historical data
+        existing_stats = self.load_json_file(self.symbol_stats_file) or {}
         
         # Get all symbols from FO_UNIVERSE (217 symbols)
         # Ensure every symbol is present, even if no trades today
@@ -279,7 +285,34 @@ class EODLearningAggregator:
             else:
                 reliability_score = 0.5  # Default for new symbols
             
-            # Build symbol record
+            # Build new trade history from today
+            new_trade_history = [
+                {
+                    'date': t['closed_at'],
+                    'won': t['pnl'] > 0,
+                    'pnl': t['pnl'],
+                    'pnl_percent': t['pnl_percent'],
+                    'entry_premium': t['entry_premium'],
+                    'exit_premium': t['exit_premium'],
+                    'highest_premium': t.get('highest_premium', t['exit_premium']),
+                    'exit_reason': t['exit_reason'],
+                    'duration_seconds': t['duration_seconds'],
+                    'entry_greeks': t.get('entry_greeks', {}),
+                    'quantity': t['quantity'],
+                }
+                for t in trades
+            ]
+            
+            # Get historical trade history from existing stats
+            existing_trade_history = []
+            if symbol in existing_stats:
+                existing_trade_history = existing_stats[symbol].get('trade_history', [])
+            
+            # Merge: prepend new trades, keep last 100 total
+            merged_trade_history = new_trade_history + existing_trade_history
+            merged_trade_history = merged_trade_history[:100]  # Keep last 100 trades
+            
+            # Build symbol record with merged history
             symbol_record = {
                 'symbol': symbol,
                 'last_updated': datetime.now().isoformat(),
@@ -344,29 +377,16 @@ class EODLearningAggregator:
                 # Exit reasons distribution
                 'exit_reasons': self._count_exit_reasons(trades),
                 
-                # Trade history for training data
-                'trade_history': [
-                    {
-                        'date': t['closed_at'],
-                        'won': t['pnl'] > 0,
-                        'pnl': t['pnl'],
-                        'pnl_percent': t['pnl_percent'],
-                        'entry_premium': t['entry_premium'],
-                        'exit_premium': t['exit_premium'],
-                        'highest_premium': t.get('highest_premium', t['exit_premium']),
-                        'exit_reason': t['exit_reason'],
-                        'duration_seconds': t['duration_seconds'],
-                        'entry_greeks': t.get('entry_greeks', {}),
-                        'quantity': t['quantity'],
-                    }
-                    for t in trades[-100:]  # Keep last 100 trades for training
-                ],
+                # Trade history with merged data (IMPORTANT: preserves historical data)
+                'trade_history': merged_trade_history,
             }
             
             symbol_stats[symbol] = symbol_record
         
-        logger.info(f"EOD_LEARNING_AGGREGATOR: Built stats for {len(symbol_stats)} symbols")
+        logger.info(f"EOD_LEARNING_AGGREGATOR: Built stats for {len(symbol_stats)} symbols | "
+                   f"Merged with {len(existing_stats)} existing symbol records")
         return symbol_stats
+    
     
     def _count_exit_reasons(self, trades: List[Any]) -> Dict[str, int]:
         """Count exit reasons distribution"""
