@@ -874,20 +874,33 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         expiry = state['broker'].get_next_expiry(underlying)
         alert_price = float(alert.get('price', 0))
         
-        # Try to fetch chain, with automatic re-auth on Invalid Token
-        chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
+        # Try to fetch chain with exponential backoff retry logic
+        import time
+        chain = None
+        max_retries = 3
+        retry_delays = [1, 2, 4]  # exponential backoff: 1s, 2s, 4s
         
-        # If chain fetch failed, check if it's due to Invalid Token and retry
-        if not chain:
-            # Check logs for Invalid Token error - if found, try to re-authenticate
-            logger.warning(f"ALERT_PROCESS: CHAIN_FETCH_FAILED_INITIAL | attempting re-authentication")
-            if state['broker']._handle_invalid_token_error():
-                # Re-auth successful, retry chain fetch
-                logger.info(f"ALERT_PROCESS: RETRYING_CHAIN_FETCH_AFTER_REAUTH | underlying={underlying}")
-                chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
+        for attempt in range(max_retries):
+            chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
+            
+            if chain:
+                if attempt > 0:
+                    logger.info(f"ALERT_PROCESS: CHAIN_FETCH_SUCCESS_AFTER_RETRY | underlying={underlying} | attempts={attempt+1}")
+                break
+            
+            # Chain fetch failed, attempt retry with exponential backoff
+            if attempt < max_retries - 1:
+                delay = retry_delays[attempt]
+                logger.warning(f"ALERT_PROCESS: CHAIN_FETCH_FAILED | underlying={underlying} | attempt={attempt+1}/{max_retries} | retrying in {delay}s")
+                time.sleep(delay)
+            
+            # On last attempt, try re-authentication
+            if attempt == max_retries - 2:  # Second-to-last attempt
+                if state['broker']._handle_invalid_token_error():
+                    logger.info(f"ALERT_PROCESS: RE_AUTHENTICATED | attempting final chain fetch")
         
         if not chain:
-            logger.error(f"ALERT_PROCESS: CHAIN_FAILED | underlying={underlying} | expiry={expiry}")
+            logger.error(f"ALERT_PROCESS: CHAIN_FAILED | underlying={underlying} | expiry={expiry} | all_retries_exhausted")
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
