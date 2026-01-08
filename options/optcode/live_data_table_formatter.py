@@ -335,7 +335,11 @@ No closed trades.
             
             exit_reason = trade.get('exit_reason', 'N/A')
             # Shorten exit reason
-            if 'TRIAL_SL_HIT' in exit_reason:
+            if 'IV_SPIKE' in exit_reason:
+                exit_reason = 'IV_SPIKE'
+            elif 'IV_CRASH' in exit_reason:
+                exit_reason = 'IV_CRASH'
+            elif 'TRIAL_SL_HIT' in exit_reason:
                 exit_reason = 'TRIAL_SL'
             elif 'MOMENTUM_REVERSAL' in exit_reason:
                 exit_reason = 'MOMENTUM'
