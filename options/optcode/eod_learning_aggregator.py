@@ -227,20 +227,45 @@ class EODLearningAggregator:
             trades = closed_trades.get(symbol, [])
             positions = open_positions.get(symbol, [])
             
-            # Calculate trade statistics
-            wins = [t for t in trades if t['pnl'] > 0]
-            losses = [t for t in trades if t['pnl'] < 0]
-            breakevens = [t for t in trades if t['pnl'] == 0]
+            # Get historical trade history from existing stats first (for stats calculation)
+            existing_trade_history = []
+            if symbol in existing_stats:
+                existing_trade_history = existing_stats[symbol].get('trade_history', [])
             
-            total_trades = len(trades)
-            total_profit = sum(t['pnl'] for t in trades)
+            # Build merged trade history (same logic as later in this method)
+            # Convert existing history format to match trades format for stats calculation
+            historical_trades_for_stats = [
+                {
+                    'pnl': t['pnl'],
+                    'pnl_percent': t.get('pnl_percent', 0),
+                    'entry_premium': t.get('entry_premium', 0),
+                    'exit_premium': t.get('exit_premium', 0),
+                    'highest_premium': t.get('highest_premium', 0),
+                    'exit_reason': t.get('exit_reason', ''),
+                    'duration_seconds': t.get('duration_seconds', 0),
+                    'entry_greeks': t.get('entry_greeks', {}),
+                    'quantity': t.get('quantity', 1),
+                }
+                for t in existing_trade_history
+            ]
             
-            # Recent form: analyze last 10 trades
-            recent_trades = trades[-10:]
+            # Combine new trades + historical trades for statistics
+            all_trades_for_stats = trades + historical_trades_for_stats
+            
+            # Calculate trade statistics from merged history
+            wins = [t for t in all_trades_for_stats if t['pnl'] > 0]
+            losses = [t for t in all_trades_for_stats if t['pnl'] < 0]
+            breakevens = [t for t in all_trades_for_stats if t['pnl'] == 0]
+            
+            total_trades = len(all_trades_for_stats)
+            total_profit = sum(t['pnl'] for t in all_trades_for_stats)
+            
+            # Recent form: analyze last 10 trades from merged history
+            recent_trades = all_trades_for_stats[-10:]
             recent_wins = len([t for t in recent_trades if t['pnl'] > 0])
             recent_form = 'hot' if recent_wins >= 7 else ('cold' if recent_wins <= 3 else 'neutral')
             
-            # Greeks analysis from closed trades
+            # Greeks analysis from closed trades (new trades only, as historical greeks are already in history)
             entry_greeks_list = [t['entry_greeks'] for t in trades if t.get('entry_greeks')]
             entry_greeks_stats = self.calculate_greeks_stats(entry_greeks_list)
             
@@ -248,14 +273,14 @@ class EODLearningAggregator:
             current_greeks_list = [p['current_greeks'] for p in positions if p.get('current_greeks')]
             current_greeks_stats = self.calculate_greeks_stats(current_greeks_list)
             
-            # Premium movement analysis
+            # Premium movement analysis from merged history
             premium_changes = [
                 (t['exit_premium'] - t['entry_premium']) / t['entry_premium'] * 100
-                for t in trades if t['entry_premium'] > 0
+                for t in all_trades_for_stats if t['entry_premium'] > 0
             ]
             
-            # IV analysis
-            entry_ivs = [t['entry_greeks'].get('iv', 0) for t in trades if t.get('entry_greeks')]
+            # IV analysis from merged history
+            entry_ivs = [t['entry_greeks'].get('iv', 0) for t in all_trades_for_stats if t.get('entry_greeks')]
             current_ivs = [p['current_iv'] for p in positions]
             
             # Expiry distance distribution
@@ -269,7 +294,7 @@ class EODLearningAggregator:
                     moneyness_values.append(moneyness)
             
             # Duration analysis
-            durations = [t['duration_seconds'] for t in trades if t['duration_seconds'] > 0]
+            durations = [t['duration_seconds'] for t in all_trades_for_stats if t['duration_seconds'] > 0]
             
             # Reliability score: based on win rate and consistency
             if total_trades > 0:
@@ -285,7 +310,7 @@ class EODLearningAggregator:
             else:
                 reliability_score = 0.5  # Default for new symbols
             
-            # Build new trade history from today
+            # Build new trade history from today's trades
             new_trade_history = [
                 {
                     'date': t['closed_at'],
@@ -302,11 +327,6 @@ class EODLearningAggregator:
                 }
                 for t in trades
             ]
-            
-            # Get historical trade history from existing stats
-            existing_trade_history = []
-            if symbol in existing_stats:
-                existing_trade_history = existing_stats[symbol].get('trade_history', [])
             
             # Merge: prepend new trades, keep last 100 total
             merged_trade_history = new_trade_history + existing_trade_history
