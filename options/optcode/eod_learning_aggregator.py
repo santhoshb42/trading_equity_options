@@ -516,16 +516,16 @@ No trades yet.
     def aggregate(self) -> Dict[str, Any]:
         """Main aggregation function - runs the complete EOD learning update
         
-        Daily learning processes TODAY's trades only (since market open at 9:15 AM).
-        This ensures symbol_stats reflect current day's performance and learning,
-        while preserving accumulated knowledge across trading days.
+        Updates symbol_stats.json from option_pnl_history.json for the current day.
+        Processes all closed trades from that day's trading, while preserving
+        accumulated knowledge across trading days through merge logic.
         """
         from datetime import date
         logger.info("EOD_LEARNING_AGGREGATOR: Starting end-of-day aggregation")
         
         try:
-            # Step 1: Analyze closed trades - TODAY ONLY (filter to current market date)
-            # This ensures we train only on today's verified trades, not historical data
+            # Step 1: Analyze closed trades from option_pnl_history.json
+            # For the current day (filter_date ensures we get today's trades only)
             today = date.today()
             closed_trades = self.analyze_closed_trades(filter_date=today)
             
