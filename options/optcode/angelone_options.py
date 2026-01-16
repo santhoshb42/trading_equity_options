@@ -1401,6 +1401,10 @@ class AngelOneOptionsBroker:
         # Get rate limiter instance
         rate_limiter = get_options_rate_limiter()
         
+        # Initialize pending orders tracking for BUY confirmation mechanism
+        if not hasattr(self, 'pending_buy_orders'):
+            self.pending_buy_orders = {}
+        
         logger.debug(f"ORDER_PLACE: {symbol} | action={action} qty={quantity} price={price:.2f} type={order_type}")
         
         if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
@@ -1447,6 +1451,18 @@ class AngelOneOptionsBroker:
                     'order_type': order_type,
                     'rate_limited': False
                 })
+                
+                # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism
+                if action == "BUY":
+                    self.pending_buy_orders[symbol] = {
+                        'order_id': order_id,
+                        'timestamp': time.time(),
+                        'quantity': quantity,
+                        'price': price,
+                        'status': 'PENDING'
+                    }
+                    logger.debug(f"ORDER_TRACKING: Pending BUY tracked (PAPER) | {symbol} | order_id={order_id} | qty={quantity}")
+                
                 return order_id
             
             # LIVE mode: Place actual order to broker
@@ -1487,6 +1503,18 @@ class AngelOneOptionsBroker:
                         'order_type': order_type,
                         'rate_limited': False
                     })
+                    
+                    # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism (LIVE mode)
+                    if action == "BUY":
+                        self.pending_buy_orders[symbol] = {
+                            'order_id': order_id,
+                            'timestamp': time.time(),
+                            'quantity': quantity,
+                            'price': price,
+                            'status': 'PENDING'
+                        }
+                        logger.debug(f"ORDER_TRACKING: Pending BUY tracked (LIVE) | {symbol} | order_id={order_id} | qty={quantity}")
+                    
                     return order_id
                 elif isinstance(response, dict) and response.get('status'):
                     # Old format with dict and status=True
@@ -1501,6 +1529,18 @@ class AngelOneOptionsBroker:
                         'order_type': order_type,
                         'rate_limited': False
                     })
+                    
+                    # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism (LIVE mode - dict response)
+                    if action == "BUY":
+                        self.pending_buy_orders[symbol] = {
+                            'order_id': order_id,
+                            'timestamp': time.time(),
+                            'quantity': quantity,
+                            'price': price,
+                            'status': 'PENDING'
+                        }
+                        logger.debug(f"ORDER_TRACKING: Pending BUY tracked (LIVE dict) | {symbol} | order_id={order_id} | qty={quantity}")
+                    
                     return order_id
                 else:
                     error_msg = str(response) if response is not None else "No response from broker"
@@ -1770,6 +1810,77 @@ class AngelOneOptionsBroker:
             logger.error(f"CANCEL_ORDER: ERROR | {symbol} | {str(e)}")
             print(f"❌ Error cancelling options order: {str(e)}")
             return False
+    
+    def wait_for_buy_confirmation(self, symbol: str, timeout: int = 30) -> bool:
+        """
+        🔧 CRITICAL FIX: Wait for BUY order confirmation before proceeding to SL placement.
+        
+        This prevents the race condition where:
+        - BUY order is sent to broker
+        - Before BUY is confirmed, monitoring starts checking for exits
+        - SL is placed before BUY fills
+        - Duplicate SELL orders might be placed
+        
+        Args:
+            symbol: Options contract symbol (e.g., BANKNIFTY25DEC47000CE)
+            timeout: Maximum seconds to wait for confirmation (default 30s)
+        
+        Returns:
+            True if BUY confirmed and filled, False if timeout/failed/not found
+        """
+        if symbol not in self.pending_buy_orders:
+            logger.warning(f"BUY_CONFIRM: No pending BUY found | {symbol}")
+            return False
+        
+        pending_order = self.pending_buy_orders[symbol]
+        order_id = pending_order.get('order_id')
+        quantity = pending_order.get('quantity')
+        
+        logger.info(f"BUY_CONFIRM: Waiting for BUY confirmation | {symbol} | order_id={order_id} | qty={quantity} | timeout={timeout}s")
+        
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                # Get current order book to check status
+                order_book = self.get_order_book()
+                if not order_book:
+                    time.sleep(0.5)
+                    continue
+                
+                # Find the BUY order in order book
+                for order in order_book:
+                    if order.get('orderid') == order_id or order.get('order_id') == order_id:
+                        order_status = order.get('orderstatus', '').upper()
+                        
+                        # Check for filled status
+                        if order_status in ['COMPLETE', 'FILLED', 'FULLY_FILLED']:
+                            logger.info(f"BUY_CONFIRM: ORDER_FILLED | {symbol} | order_id={order_id} | status={order_status} | elapsed={time.time() - start_time:.1f}s")
+                            
+                            # Mark order as filled and remove from pending
+                            self.pending_buy_orders[symbol]['status'] = 'FILLED'
+                            
+                            return True
+                        
+                        # Check for rejected status
+                        elif order_status in ['REJECTED', 'CANCELLED', 'EXPIRED']:
+                            logger.error(f"BUY_CONFIRM: ORDER_{order_status} | {symbol} | order_id={order_id}")
+                            del self.pending_buy_orders[symbol]  # Remove from pending
+                            return False
+                        
+                        # Still pending - log and wait
+                        logger.debug(f"BUY_CONFIRM: WAITING | {symbol} | status={order_status} | elapsed={time.time() - start_time:.1f}s")
+                        break
+                
+                # Check every 0.5 seconds
+                time.sleep(0.5)
+            
+            except Exception as e:
+                logger.warning(f"BUY_CONFIRM: CHECK_ERROR | {symbol} | {str(e)}")
+                time.sleep(0.5)
+        
+        # Timeout reached
+        logger.error(f"BUY_CONFIRM: TIMEOUT | {symbol} | order_id={order_id} | waited {timeout}s")
+        return False
     
     def get_instrument_token(self, symbol: str, exchange: str = "NFO") -> Optional[str]:
         """Get instrument token from CE extractor's instrument.json"""

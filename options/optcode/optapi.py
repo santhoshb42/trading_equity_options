@@ -57,6 +57,14 @@ except ImportError:
     AlertLevel = None
     AlertCategory = None
 
+# Sector strength analyzer integration
+try:
+    from .sector_strength_analyzer import SectorStrengthAnalyzer
+    HAS_SECTOR_ANALYZER = True
+except ImportError:
+    HAS_SECTOR_ANALYZER = False
+    SectorStrengthAnalyzer = None
+
 # =============================================================================
 # Flask App Setup
 # =============================================================================
@@ -85,12 +93,22 @@ def create_options_api_app():
         except Exception as e:
             logger.warning(f"API: LEARNING_ENGINE_INIT_FAILED | {str(e)}")
     
+    # Initialize sector analyzer for LIVE mode sector strength logging
+    sector_analyzer = None
+    if HAS_SECTOR_ANALYZER:
+        try:
+            sector_analyzer = SectorStrengthAnalyzer(broker=get_options_broker())
+            logger.info("API: SECTOR_ANALYZER_INITIALIZED")
+        except Exception as e:
+            logger.warning(f"API: SECTOR_ANALYZER_INIT_FAILED | {str(e)}")
+    
     state = {
         'broker': get_options_broker(),
         'monitor': get_option_monitor(),
         'signal_filter': get_options_signal_filter(),
         'instrument_manager': get_instrument_manager(),
         'learning_engine': learning_engine,
+        'sector_analyzer': sector_analyzer,
         'entry_filter': None,  # Will be initialized below
         'alert_manager': None,  # Will be set by main bot
         'active': False,
@@ -1296,20 +1314,67 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         new_trade_count = OptionsCapitalConfig.increment_daily_trade_count()
         logger.info(f"DAILY_TRADE_COUNT: Incremented to {new_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
         
-        # Send order filled/success alert
+        # 🔧 CRITICAL FIX: Wait for BUY order confirmation before adding position
+        # This prevents race condition where SL is placed before BUY fills
+        # without this wait, we can have:
+        # 1. BUY order sent but not filled
+        # 2. add_position() called immediately
+        # 3. SL placed for quantity that BUY hasn't confirmed yet
+        # 4. Monitoring loop exits before BUY fills (duplicate SELL orders)
+        
+        logger.info(f"BUY_CONFIRMATION: Waiting for {selected_contract.symbol} BUY confirmation (30s timeout)")
+        confirmation_timeout = 30
+        is_buy_confirmed = state['broker'].wait_for_buy_confirmation(
+            selected_contract.symbol,
+            timeout=confirmation_timeout
+        )
+        
+        if not is_buy_confirmed:
+            logger.error(f"BUY_CONFIRMATION: TIMEOUT | {symbol} | {selected_contract.symbol} | order_id={order_id} | waited {confirmation_timeout}s")
+            
+            # Send order confirmation timeout alert
+            if state['alert_manager']:
+                try:
+                    state['alert_manager'].alert_order_status_changed(
+                        bot_type='options',
+                        order_details={
+                            'symbol': selected_contract.symbol,
+                            'action': 'BUY',
+                            'order_id': order_id,
+                            'status': 'CONFIRMATION_TIMEOUT'
+                        },
+                        message=f"BUY order confirmation timeout after {confirmation_timeout}s - order may not have filled"
+                    )
+                except Exception as e:
+                    logger.warning(f"ALERT_CONFIRM_TIMEOUT: FAILED | {str(e)}")
+            
+            # Release capital and return failure
+            # (Capital is not allocated in options bot yet, but for consistency with equity)
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'failed',
+                'reason': f'BUY order confirmation timeout ({confirmation_timeout}s)',
+                'order_id': order_id
+            }
+        
+        logger.info(f"BUY_CONFIRMATION: SUCCESS | {selected_contract.symbol} | order_id={order_id} | confirmed in time")
+        
+        # Send order confirmed alert
         if state['alert_manager']:
             try:
-                state['alert_manager'].alert_order_filled(
+                state['alert_manager'].alert_order_status_changed(
                     bot_type='options',
                     order_details={
                         'symbol': selected_contract.symbol,
-                        'quantity': quantity,
-                        'price': selected_contract.ltp,
-                        'order_id': order_id
-                    }
+                        'action': 'BUY',
+                        'order_id': order_id,
+                        'status': 'CONFIRMED'
+                    },
+                    message=f"BUY order confirmed and filled for {selected_contract.symbol}"
                 )
             except Exception as e:
-                logger.warning(f"ORDER_FILLED_ALERT: FAILED | {str(e)}")
+                logger.warning(f"ALERT_CONFIRM_SUCCESS: FAILED | {str(e)}")
         
         # Add position to monitor with entry Greeks for ML learning
         entry_greeks_data = {
@@ -1333,6 +1398,45 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'ml_multiplier': 1.0
         }
         
+        # Fetch and log sector strength at entry (PAPER and LIVE modes)
+        sector_data = {
+            'sector': 'UNKNOWN',
+            'sector_rsi': None,
+            'sector_performance': None,
+            'sector_participation': None,
+            'sector_bullish': None
+        }
+        
+        if state['sector_analyzer']:
+            try:
+                # 🔧 FIX: Get sector for this symbol (using underlying, not full contract symbol)
+                sector = state['sector_analyzer'].get_sector(symbol)
+                if sector and sector != 'UNKNOWN':
+                    sector_data['sector'] = sector
+                    logger.info(f"SECTOR_ENTRY_LOG | symbol={symbol} | sector={sector} | mapping_found=YES")
+                    
+                    # Get sector strength metrics
+                    performance = state['sector_analyzer'].get_sector_performance(sector)
+                    if performance:
+                        sector_data['sector_rsi'] = performance.get('rsi')
+                        sector_data['sector_performance'] = performance.get('performance_pct')
+                        sector_data['sector_participation'] = performance.get('participation_pct')
+                    
+                    # Check if sector is bullish
+                    is_bullish, reason = state['sector_analyzer'].is_sector_bullish(symbol, threshold=60)
+                    sector_data['sector_bullish'] = is_bullish
+                    
+                    logger.debug(f"SECTOR_DATA_COMPLETE | symbol={symbol} | sector={sector} | rsi={sector_data['sector_rsi']} | perf={sector_data['sector_performance']}% | participation={sector_data['sector_participation']}% | bullish={is_bullish}")
+                else:
+                    logger.warning(f"SECTOR_ENTRY_LOG | symbol={symbol} | sector=NOT_MAPPED | mapping_found=NO")
+                    
+                logger.debug(f"SECTOR_DATA_TO_POSITION | symbol={symbol} | sector_data={sector_data}")  # DEBUG
+            except Exception as e:
+                # Log error but don't block the trade
+                logger.error(f"SECTOR_ANALYZER: ENTRY_LOG_FAILED | symbol={symbol} | error={str(e)}")
+                import traceback
+                logger.debug(f"SECTOR_ANALYZER: TRACEBACK | {traceback.format_exc()}")
+        
         state['monitor'].add_position(
             symbol=selected_contract.symbol,
             underlying=underlying,
@@ -1344,7 +1448,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             entry_premium=selected_contract.ltp,
             order_id=order_id,
             underlying_alert_price=alert_price if alert_price > 0 else None,
-            entry_greeks=entry_greeks_data  # ADDED: Pass entry Greeks
+            entry_greeks=entry_greeks_data,  # ADDED: Pass entry Greeks
+            sector_data=sector_data  # ADDED: Pass sector strength data
         )
         
         logger.info(f"ALERT_PROCESS: SUCCESS | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id}")

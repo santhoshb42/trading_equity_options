@@ -39,6 +39,11 @@ class TradeLogger:
             'entry_confidence',
             'entry_score',
             'entry_features',
+            'sector',
+            'sector_rsi',
+            'sector_performance',
+            'sector_participation',
+            'sector_bullish',
             'exit_time',
             'exit_premium',
             'pnl',
@@ -93,7 +98,8 @@ class TradeLogger:
                        score: float,
                        features: List[float],
                        ml_prediction: Optional[Dict] = None,
-                       trade_id: Optional[str] = None) -> str:
+                       trade_id: Optional[str] = None,
+                       sector_data: Optional[Dict] = None) -> str:
         """
         Log trade entry.
         
@@ -106,6 +112,7 @@ class TradeLogger:
             features: List of 15 extracted ML features
             ml_prediction: ML model prediction dict
             trade_id: Custom trade ID or auto-generate
+            sector_data: Sector strength data at entry
         
         Returns:
             trade_id: Unique identifier for this trade
@@ -113,6 +120,15 @@ class TradeLogger:
         with self.lock:
             if not trade_id:
                 trade_id = f"{symbol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Default sector data
+            sector_info = sector_data or {
+                'sector': 'UNKNOWN',
+                'sector_rsi': None,
+                'sector_performance': None,
+                'sector_participation': None,
+                'sector_bullish': None
+            }
             
             trade_data = {
                 'timestamp': datetime.now().isoformat(),
@@ -124,6 +140,11 @@ class TradeLogger:
                 'entry_confidence': confidence,
                 'entry_score': score,
                 'entry_features': json.dumps(features[:15]) if features else '[]',
+                'sector': sector_info.get('sector', 'UNKNOWN'),
+                'sector_rsi': sector_info.get('sector_rsi'),
+                'sector_performance': sector_info.get('sector_performance'),
+                'sector_participation': sector_info.get('sector_participation'),
+                'sector_bullish': sector_info.get('sector_bullish'),
                 'exit_time': '',
                 'exit_premium': '',
                 'pnl': '',
@@ -144,7 +165,7 @@ class TradeLogger:
                 writer = csv.DictWriter(f, fieldnames=self.csv_headers)
                 writer.writerow(trade_data)
             
-            print(f"[TRADE_ENTRY] {trade_id} | {symbol} {action} @ {entry_premium} | Conf: {confidence}%")
+            print(f"[TRADE_ENTRY] {trade_id} | {symbol} {action} @ {entry_premium} | Conf: {confidence}% | Sector: {sector_info.get('sector')}")
             return trade_id
     
     def log_trade_exit(self,
