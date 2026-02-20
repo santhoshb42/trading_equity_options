@@ -154,34 +154,58 @@ class OptionsCapitalConfig:
     
     @classmethod
     def increment_daily_trade_count(cls) -> int:
-        """Increment daily trade counter and return new count"""
+        """Increment daily trade counter and return new count (with atomic writes)"""
         from datetime import datetime
         import json
+        import tempfile
         
         daily_state_file = BASE_DIR / "data" / f"daily_trades_{datetime.now().strftime('%Y-%m-%d')}.json"
         
         try:
-            # Read existing count
+            # Create temp directory if needed
+            daily_state_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Read existing count with error tolerance
             count = 0
             if daily_state_file.exists():
-                with open(daily_state_file) as f:
-                    data = json.load(f)
-                    count = data.get('trades_placed', 0)
+                try:
+                    with open(daily_state_file, 'r') as f:
+                        data = json.load(f)
+                        count = data.get('trades_placed', 0)
+                except (json.JSONDecodeError, ValueError):
+                    # If file is corrupted, reset to 0
+                    count = 0
             
-            # Increment and save
+            # Increment
             count += 1
-            with open(daily_state_file, 'w') as f:
-                json.dump({
-                    'date': datetime.now().isoformat(),
-                    'trades_placed': count,
-                    'max_allowed': cls.MAX_TRADES_PER_DAY
-                }, f)
+            
+            # Atomic write using temp file
+            new_data = {
+                'date': datetime.now().isoformat(),
+                'trades_placed': count,
+                'max_allowed': cls.MAX_TRADES_PER_DAY
+            }
+            
+            # Write to temp file first, then rename (atomic on Unix)
+            with tempfile.NamedTemporaryFile(
+                mode='w', 
+                dir=daily_state_file.parent, 
+                delete=False,
+                suffix='.json'
+            ) as tmp:
+                json.dump(new_data, tmp)
+                tmp_path = tmp.name
+            
+            # Atomic rename
+            import os
+            os.replace(tmp_path, str(daily_state_file))
             
             return count
         except Exception as e:
             from .optlogging import logger
             logger.error(f"DAILY_TRADE_COUNT: ERROR incrementing | {str(e)}")
-            return 0
+            # Return at least 1 to continue processing
+            return 1
 
 # =============================================================================
 # Options Trading Configuration
@@ -727,7 +751,7 @@ class SentimentConfig:
     # Early Exit - Momentum Reversal Detection (Post-Entry Protection)
     # =========================================================================
     
-    ENABLE_EARLY_EXIT_MOMENTUM = True        # Exit early if momentum reverses post-entry
+    ENABLE_EARLY_EXIT_MOMENTUM = False       # Exit early if momentum reverses post-entry (DISABLED - leaving too much on table)
     EARLY_EXIT_MOMENTUM_THRESHOLD = 10.0     # Exit if price drops >10% from peak (catches 75% of hard SLs)
     # Example: Entry ₹100 → Peak ₹104 → Current ₹93.6 (10% below peak) → EXIT
     # Impact: Saves 69% of losses vs waiting for hard SL (-20%)

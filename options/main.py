@@ -598,10 +598,16 @@ class OptionsTradingBot:
                                 timeout_seconds=120.0  # 120-second timeout for entire LTP refresh (bulk API calls only)
                             )
                             
-                            if refresh_stats and refresh_stats.get('ltps_updated', 0) > 0:
+                            # FIX: Accept refresh as valid if we got stats back (even if 0 LTPs updated)
+                            # Previously required ltps_updated > 0, but this skipped exits when no updates occurred
+                            # Now we treat a successful call (stats returned) as valid for exit checks
+                            if refresh_stats is not None:
                                 ltps_refreshed = True
-                                logger.debug(f"POSITION_MONITOR: LTP_REFRESH | updated={refresh_stats['ltps_updated']}/{len(self.monitor.positions)}")
-                            elif refresh_stats is None:
+                                if refresh_stats.get('ltps_updated', 0) > 0:
+                                    logger.debug(f"POSITION_MONITOR: LTP_REFRESH | updated={refresh_stats['ltps_updated']}/{len(self.monitor.positions)}")
+                                else:
+                                    logger.debug(f"POSITION_MONITOR: LTP_REFRESH | no changes, but still valid for exit checks")
+                            else:
                                 logger.error("POSITION_MONITOR: LTP_REFRESH_TIMEOUT | skipping this cycle")
                                 time.sleep(current_interval)
                                 continue
@@ -617,16 +623,28 @@ class OptionsTradingBot:
                             continue
                     
                     # GREEKS REFRESH: Every 60 seconds (expensive chain fetches)
-                    # Separate from LTP refresh to keep main loop fast
+                    # ⭐ ASYNC: Run in background thread to NOT block monitoring loop
+                    # Critical fix: Greeks fetch was blocking main loop for 20+ seconds
                     current_time = time.time()
                     if current_time - last_greeks_refresh >= 60.0:
-                        try:
-                            greeks_stats = self.monitor.refresh_position_greeks()
-                            if greeks_stats and greeks_stats.get('greeks_updated', 0) > 0:
-                                logger.debug(f"POSITION_MONITOR: GREEKS_REFRESH | updated={greeks_stats['greeks_updated']}/{len(self.monitor.positions)}")
-                            last_greeks_refresh = current_time
-                        except Exception as e:
-                            logger.warning(f"POSITION_MONITOR: GREEKS_REFRESH_ERROR | {str(e)}")
+                        last_greeks_refresh = current_time
+                        # Start Greeks refresh in background thread (non-blocking)
+                        def background_greeks_refresh():
+                            try:
+                                start_time = time.time()
+                                logger.debug(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC | starting background fetch | time={start_time}")
+                                greeks_stats = self.monitor.refresh_position_greeks()
+                                duration = time.time() - start_time
+                                if greeks_stats and greeks_stats.get('greeks_updated', 0) > 0:
+                                    logger.info(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC | completed | updated={greeks_stats['greeks_updated']}/{len(self.monitor.positions)} | duration={duration:.2f}s")
+                                else:
+                                    logger.info(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC | completed | no updates | duration={duration:.2f}s")
+                            except Exception as e:
+                                logger.warning(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC_ERROR | {str(e)}")
+                        
+                        # Spawn background thread (daemon=True so it doesn't block shutdown)
+                        greeks_thread = threading.Thread(target=background_greeks_refresh, daemon=True, name="GreeksRefreshAsync")
+                        greeks_thread.start()
                     
                     # Only check exits if we successfully refreshed at least some LTPs
                     if not ltps_refreshed:
@@ -682,8 +700,34 @@ class OptionsTradingBot:
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: PROFIT_ALERT_FAILED | {str(e)}")
                     
+                    # ⭐ CRITICAL: Check HARD SL FIRST (ultimate safety net)
+                    # This runs BEFORE all other exit checks to ensure positions never exceed -10% loss
+                    hard_sl_exits = self.monitor.check_hard_stop_loss()
+                    if hard_sl_exits:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(hard_sl_exits, "HARD_SL")
+                        
+                        for pos in hard_sl_exits:
+                            print(f"   🛑 HARD SL hit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f} ({pos.get('pnl_percent', 0):.1f}%)")
+                            logger.error(f"POSITION_MONITOR: HARD_SL_HIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f} | CRITICAL SAFETY TRIGGERED")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_price', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'HARD STOP LOSS (-10%) - CRITICAL'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: HARD_SL_ALERT_FAILED | {str(e)}")
+                    
                     # ⭐ NEW: Check momentum reversal (EARLY EXIT to prevent hard SL)
-                    # This should run BEFORE check_stop_losses to catch reversals early
+                    # This should run AFTER hard SL check for layered protection
                     momentum_exits = self.monitor.check_momentum_reversal()
                     if momentum_exits:
                         # Record to learning engine
@@ -707,6 +751,58 @@ class OptionsTradingBot:
                                     )
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: MOMENTUM_ALERT_FAILED | {str(e)}")
+                    
+                    # ⭐ STALE CONSOLIDATION: Exit positions held >15min without hitting 10% peak
+                    # Prevents getting caught in low-gain consolidations that reverse into losses
+                    stale_consol_exits = self.monitor.check_stale_consolidation_exits()
+                    if stale_consol_exits:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(stale_consol_exits, "STALE_CONSOLIDATION")
+                        
+                        for pos in stale_consol_exits:
+                            print(f"   ⏱️  Stale consolidation exit: {pos['symbol']} (held {pos.get('duration', 0):.0f}s) PnL: ₹{pos['pnl']:.2f}")
+                            logger.warning(f"POSITION_MONITOR: STALE_CONSOL_EXIT | {pos['symbol']} | Duration: {pos.get('duration', 0):.0f}s | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_premium', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'Stale consolidation (no momentum after 15min)'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: STALE_CONSOL_ALERT_FAILED | {str(e)}")
+                    
+                    # ⭐ STALE TIMEOUT: Exit non-trending positions >20min without momentum
+                    # Catch positions that never developed into trending moves
+                    stale_timeout_exits = self.monitor.check_stale_positions()
+                    if stale_timeout_exits:
+                        # Record to learning engine
+                        self._record_closed_positions_to_learning(stale_timeout_exits, "STALE_TIMEOUT")
+                        
+                        for pos in stale_timeout_exits:
+                            print(f"   ⏰ Stale timeout exit: {pos['symbol']} (held {pos.get('duration', 0):.0f}s) PnL: ₹{pos['pnl']:.2f}")
+                            logger.warning(f"POSITION_MONITOR: STALE_TIMEOUT_EXIT | {pos['symbol']} | Duration: {pos.get('duration', 0):.0f}s | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_premium', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'Stale non-trending (>20min no momentum)'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: STALE_TIMEOUT_ALERT_FAILED | {str(e)}")
                     
                     # ⭐ NEW: Check IV crash (EARLY EXIT when premium dies)
                     # This is complementary to momentum reversal - catches IV collapse signal
@@ -796,7 +892,8 @@ class OptionsTradingBot:
                                     logger.warning(f"POSITION_MONITOR: TRIAL_SL_ALERT_FAILED | {str(e)}")
                     
                     # NEW: Check sentiment exit (PCR + OI Buildup fade)
-                    # HIGH IV: Check sentiment every 5 seconds (not 60) - profit bookings change IV rapidly
+                    # ⭐ ASYNC: Run in background thread to NOT block monitoring loop
+                    # Critical fix: Sentiment checks were blocking main loop for 2-5 seconds every 5 seconds
                     should_check_sentiment = False
                     if self.monitor.last_sentiment_check_time is None:
                         should_check_sentiment = True
@@ -805,35 +902,50 @@ class OptionsTradingBot:
                         if time_since_last_check >= MonitoringConfig.SENTIMENT_CHECK_INTERVAL_SECONDS:
                             should_check_sentiment = True
                     
-                    sentiment_exits = []
                     if should_check_sentiment:
-                        sentiment_exits = self.monitor.check_sentiment_exit()
-                        self.monitor.last_sentiment_check_time = datetime.now()  # Update timestamp
-                        if sentiment_exits:
-                            logger.info(f"POSITION_MONITOR: SENTIMENT_CHECK | {len(self.positions)} positions checked | {len(sentiment_exits)} exits triggered")
-                    
-                    if sentiment_exits:
-                        # Record to learning engine
-                        self._record_closed_positions_to_learning(sentiment_exits, "SENTIMENT")
+                        self.monitor.last_sentiment_check_time = datetime.now()
+                        # Start sentiment check in background thread (non-blocking)
+                        def background_sentiment_check():
+                            try:
+                                start_time = time.time()
+                                logger.debug(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | starting background fetch")
+                                sentiment_exits = self.monitor.check_sentiment_exit()
+                                duration = time.time() - start_time
+                                
+                                if sentiment_exits:
+                                    logger.info(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | completed | exits={len(sentiment_exits)} | duration={duration:.2f}s")
+                                    
+                                    # Record and alert for sentiment exits
+                                    try:
+                                        self._record_closed_positions_to_learning(sentiment_exits, "SENTIMENT")
+                                        
+                                        for pos in sentiment_exits:
+                                            logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                                            if self.alert_manager:
+                                                try:
+                                                    self.alert_manager.alert_position_closed(
+                                                        bot_type='options',
+                                                        position={
+                                                            'symbol': pos['symbol'],
+                                                            'entry_price': pos.get('entry_premium', 0),
+                                                            'exit_price': pos.get('exit_price', 0),
+                                                            'pnl': pos['pnl'],
+                                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                                            'reason': 'Sentiment deterioration'
+                                                        }
+                                                    )
+                                                except Exception as e:
+                                                    logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT_ALERT_FAILED | {str(e)}")
+                                    except Exception as e:
+                                        logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT_PROCESSING_ERROR | {str(e)}")
+                                else:
+                                    logger.debug(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | completed | no exits | duration={duration:.2f}s")
+                            except Exception as e:
+                                logger.warning(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC_ERROR | {str(e)}")
                         
-                        for pos in sentiment_exits:
-                            print(f"   📊 Sentiment exit: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
-                            logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
-                            if self.alert_manager:
-                                try:
-                                    self.alert_manager.alert_position_closed(
-                                        bot_type='options',
-                                        position={
-                                            'symbol': pos['symbol'],
-                                            'entry_price': pos.get('entry_premium', 0),
-                                            'exit_price': pos.get('exit_price', 0),
-                                            'pnl': pos['pnl'],
-                                            'pnl_percent': pos.get('pnl_percent', 0),
-                                            'reason': 'Sentiment deterioration'
-                                        }
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"POSITION_MONITOR: SENTIMENT_EXIT_ALERT_FAILED | {str(e)}")
+                        # Spawn background thread (daemon=True so it doesn't block shutdown)
+                        sentiment_thread = threading.Thread(target=background_sentiment_check, daemon=True, name="SentimentCheckAsync")
+                        sentiment_thread.start()
                     
                     # Get position summary
                     summary = self.monitor.get_position_summary()
@@ -971,23 +1083,59 @@ class OptionsTradingBot:
             logger.error(f"INSTRUMENT_REFRESH: ERROR | {str(e)}")
     
     def _start_api_server(self):
-        """Start API server"""
-        def run_api():
-            try:
-                self.api_server.start(
-                    host=WebhookConfig.HOST,
-                    port=WebhookConfig.PORT
-                )
-            except KeyboardInterrupt:
-                self.stop()
+        """Start API server with robust error handling and auto-restart"""
+        def run_api_with_restart():
+            """Run API server with automatic restart on crash"""
+            restart_count = 0
+            max_restarts = 100  # Prevent infinite restart loops
+            
+            while restart_count < max_restarts and self.running:
+                try:
+                    if restart_count > 0:
+                        print(f"🔄 API server restart attempt #{restart_count}")
+                        logger.warning(f"API_SERVER: RESTART_ATTEMPT | count={restart_count}")
+                        time.sleep(2)  # Wait before restart
+                    
+                    print(f"🚀 Starting API server (attempt {restart_count + 1})")
+                    self.api_server.start(
+                        host=WebhookConfig.HOST,
+                        port=WebhookConfig.PORT
+                    )
+                    
+                except KeyboardInterrupt:
+                    logger.info("API_SERVER: INTERRUPTED")
+                    self.stop()
+                    break
+                    
+                except OSError as e:
+                    # Port binding error
+                    restart_count += 1
+                    logger.error(f"API_SERVER: BIND_ERROR | error={str(e)} | restart_count={restart_count}")
+                    print(f"❌ Port binding error: {str(e)} - retrying in 2 seconds...")
+                    if restart_count >= max_restarts:
+                        logger.critical(f"API_SERVER: MAX_RESTARTS_EXCEEDED | {restart_count} attempts failed")
+                        print(f"❌ API server failed after {max_restarts} restart attempts!")
+                        break
+                    
+                except Exception as e:
+                    # Any other error in API server
+                    restart_count += 1
+                    logger.error(f"API_SERVER: CRASH | error={str(e)} | type={type(e).__name__} | restart_count={restart_count}")
+                    print(f"❌ API server crashed: {str(e)}")
+                    print(f"   Restarting... (attempt {restart_count})")
+                    
+                    if restart_count >= max_restarts:
+                        logger.critical(f"API_SERVER: UNRECOVERABLE | {restart_count} restart attempts exhausted")
+                        print(f"❌ API server unrecoverable after {max_restarts} restarts!")
+                        break
         
         api_thread = threading.Thread(
-            target=run_api,
+            target=run_api_with_restart,
             daemon=True,
             name="OptionsAPIServer"
         )
         api_thread.start()
-        print("✅ API server thread started")
+        print("✅ API server thread started (with auto-restart enabled)")
     
     def stop(self):
         """Stop options trading bot"""

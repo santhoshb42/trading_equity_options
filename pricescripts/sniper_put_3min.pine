@@ -1,0 +1,163 @@
+//@version=6
+indicator("Sniper v7.5 PUT - Midday Breakdown (11–12) | 3-Min", overlay=true)
+
+// ⚠️ TIMEFRAME: Optimized for 3-minute candles
+// On 3-min chart: ~20 alerts possible between 11:00-12:00 IST
+// Will NOT fire on other timeframes (enforced below)
+
+// — Timeframe Enforcement —
+if timeframe.period != "3"
+    runtime.error("⚠️ This script is optimized for 3-minute candles. Switch to 3-min chart.")
+
+// — Inputs —
+emaShort = input.int(9,  "EMA Short")
+emaLong  = input.int(20, "EMA Long")
+rsiLen   = input.int(14, "RSI Length")
+dmiLen   = input.int(14, "ADX/DI Length")
+atrLen   = input.int(14, "ATR Length")
+volLen   = input.int(20, "Vol MA Length")
+volMult  = input.float(1.4, "Vol Spike ×", step=0.1)
+
+maxRsi   = input.float(42.0, "Max RSI (Bearish)")
+minRsi   = input.float(15.0, "Min RSI (Avoid Oversold)")
+minAdx   = input.float(20.0, "Min ADX")
+minAtrPc = input.float(0.15, "Min ATR%")
+minBody  = input.float(0.55, "Min Body Ratio")
+exhaustPc= input.float(2.5, "Exhaustion % Below EMA9")
+
+maxGap = input.float(3.0, "Max Gap % Allowed")
+
+// — Core calcs —
+ema9  = ta.ema(close, emaShort)
+ema20 = ta.ema(close, emaLong)
+vwap  = ta.vwap(hlc3)
+rsi   = ta.rsi(close, rsiLen)
+atr   = ta.atr(atrLen)
+atrPc = (atr / close) * 100.0
+[_, _, adxVal] = ta.dmi(dmiLen, dmiLen)
+
+// Candle structure
+body      = math.abs(close - open)
+barRange  = math.max(high - low, 0.0)
+bodyRatio = barRange == 0.0 ? 0.0 : body / barRange
+closeToLow= barRange == 0.0 ? 0.0 : ((high - close) / barRange) * 100.0
+
+// Volume logic (bearish)
+volAvg    = ta.sma(volume, volLen)
+volSpike  = volume > volAvg * volMult
+prevVolOk = na(volume[1]) ? true : volume >= volume[1] * 0.8
+volOk     = volSpike and prevVolOk
+
+// Exhaustion guard (don't short too far from EMA9)
+exhaust   = (ema9 - close) / ema9 * 100.0
+exhaustOk = exhaust < exhaustPc
+
+// Gap filter
+open_gap_pct = na(close[1]) ? 0.0 : (open - close[1]) / close[1] * 100.0
+gapOk = math.abs(open_gap_pct) < maxGap
+
+// Time filter (11:00–12:00 IST)
+t = time(timeframe.period)
+tradeStart = timestamp("GMT+5:30", year, month, dayofmonth, 11, 0)
+tradeEnd   = timestamp("GMT+5:30", year, month, dayofmonth, 12, 0)
+timeOk = (t >= tradeStart and t <= tradeEnd)
+
+// — Helper metrics for payload —
+vwapLeadPct = (vwap - close) / vwap * 100.0
+emaGapPct   = (ema9 - close) / ema9 * 100.0
+hlRangePct  = barRange == 0.0 ? 0.0 : (barRange / close) * 100.0
+pc_lead_pct = na(close[1]) ? 0.0 : (close[1] - close) / close[1] * 100.0
+atrJump     = na(atrPc[1]) ? 0.0 : atrPc - atrPc[1]
+
+// Z-scores
+volStd  = ta.stdev(volume, volLen)
+vol_z   = volStd == 0.0 ? 0.0 : (volume - volAvg) / volStd
+rsiMean = ta.sma(rsi, rsiLen)
+rsiStd  = ta.stdev(rsi, rsiLen)
+z_rsi   = rsiStd == 0.0 ? 0.0 : (rsi - rsiMean) / rsiStd
+
+ultra_pass = (vwapLeadPct >= 0.35 and adxVal >= 27 and vol_z >= 1.2) ? 1 : 0
+
+// — Bearish Filters —
+fBelowMA = close < ema9 and close < ema20 and close < vwap
+fRSI     = rsi <= maxRsi and rsi >= minRsi
+fATR     = atrPc >= minAtrPc
+fADX     = adxVal >= minAdx
+fBody    = bodyRatio >= minBody and close < open
+fVolume  = volOk
+fExhaust = exhaustOk
+fGap     = gapOk
+
+allOk =
+    timeOk and
+    fBelowMA and
+    fRSI and
+    fATR and
+    fADX and
+    fBody and
+    fVolume and
+    fExhaust and
+    fGap
+
+// — Scoring —
+score = 0.0
+score += fBelowMA ? 12.5 : 0
+score += fRSI ? 12.5 : 0
+score += fATR ? 12.5 : 0
+score += fADX ? 12.5 : 0
+score += fBody ? 12.5 : 0
+score += fVolume ? 12.5 : 0
+score += fExhaust ? 12.5 : 0
+score += (vwapLeadPct >= 0.10) ? 12.5 : 0
+
+verdict    = allOk ? 1.0 : 0.0
+confidence = allOk ? math.min(95.0, 60.0 + score * 0.3) : 0.0
+
+// — Alert control (per 3-min bar) —
+varip bool alertedThisBar = false
+if barstate.isnew
+    alertedThisBar := false
+
+alertOk = allOk and not alertedThisBar
+if alertOk
+    alertedThisBar := true
+
+// — Plots —
+plot(ema9,  "EMA9",  color=color.yellow)
+plot(ema20, "EMA20", color=color.orange)
+plot(vwap,  "VWAP",  color=color.blue)
+
+// — JSON Payload (PE_Alerts wrapper for routing to PE bot port 8082) —
+// NOTE: action must be "BUY" (PE bot will auto-convert to SELL for PUT options)
+// NOTE: contract_type "PE" tells PE bot to select PUT options (not CALL)
+fmt(x) => str.tostring(x, format.mintick)
+jsonMsg =
+"{\"PE_Alerts\":[{\"symbol\":\"" + syminfo.ticker +
+"\",\"action\":\"BUY\",\"contract_type\":\"PE\",\"price\":\"" + fmt(close) +
+"\",\"score\":\"" + fmt(score) +
+"\",\"confidence\":\"" + fmt(confidence) +
+"\",\"verdict\":\"" + fmt(verdict) +
+"\",\"vwap\":\"" + fmt(vwap) +
+"\",\"rsi\":\"" + fmt(rsi) +
+"\",\"atr\":\"" + fmt(atr) +
+"\",\"adx\":\"" + fmt(adxVal) +
+"\",\"volume\":\"" + fmt(volume) +
+"\",\"ema9\":\"" + fmt(ema9) +
+"\",\"ema20\":\"" + fmt(ema20) +
+"\",\"ema_gap_pct\":\"" + fmt(emaGapPct) +
+"\",\"vwap_lead_pct\":\"" + fmt(vwapLeadPct) +
+"\",\"atr_pct\":\"" + fmt(atrPc) +
+"\",\"vol_z\":\"" + fmt(vol_z) +
+"\",\"z_rsi\":\"" + fmt(z_rsi) +
+"\",\"heat_ok\":\"" + fmt(allOk ? 1 : 0) +
+"\",\"body_ratio\":\"" + fmt(bodyRatio) +
+"\",\"hl_range_pct\":\"" + fmt(hlRangePct) +
+"\",\"pc_lead_pct\":\"" + fmt(pc_lead_pct) +
+"\",\"close_to_low\":\"" + fmt(closeToLow) +
+"\",\"atr_jump\":\"" + fmt(atrJump) +
+"\",\"ultra_pass\":\"" + fmt(ultra_pass) +
+"\"}]}"
+
+// Fire webhook alert with JSON payload
+if alertOk
+    alert(jsonMsg, alert.freq_once_per_bar_close)

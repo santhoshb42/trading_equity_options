@@ -10,9 +10,12 @@ Output: /root/santhosh/trading/options/data/live_data.json
 """
 
 import json
+import tempfile
+import os
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+import threading
 
 from .optconfig import BASE_DIR, OptionsCapitalConfig, OptionsTradingConfig
 from .optlogging import logger
@@ -29,6 +32,7 @@ class LiveDataTracker:
     - Daily trading summary (budget, trades, PNL)
     - Individual trade details (entry, current, exit info)
     - Updated every monitoring cycle
+    - THREAD-SAFE writes with atomic file operations
     """
     
     def __init__(self):
@@ -42,6 +46,9 @@ class LiveDataTracker:
         self.trading_mode = getattr(OptionsTradingConfig, 'TRADING_MODE', 'PAPER')
         self.max_daily_budget = getattr(OptionsCapitalConfig, 'MAX_DAILY_BUDGET', 100000)
         self.max_positions = getattr(OptionsTradingConfig, 'MAX_POSITIONS', 3)
+        
+        # Thread-safe lock for file writes (critical for preventing corruption)
+        self._file_lock = threading.RLock()
         
         # Initialize live data structure
         self.live_data = {
@@ -79,15 +86,16 @@ class LiveDataTracker:
         # Load existing data from file if it exists
         if self.live_data_file.exists():
             try:
-                with open(self.live_data_file, 'r') as f:
-                    existing_data = json.load(f)
-                    # Preserve existing trades
-                    if 'trades' in existing_data:
-                        self.live_data['trades'] = existing_data['trades']
-                    # Preserve summary if available
-                    if 'summary' in existing_data:
-                        self.live_data['summary'] = existing_data['summary']
-                    logger.info(f"LIVE_DATA_TRACKER: Loaded {len(self.live_data['trades'])} existing trades from file")
+                with self._file_lock:
+                    with open(self.live_data_file, 'r') as f:
+                        existing_data = json.load(f)
+                        # Preserve existing trades
+                        if 'trades' in existing_data:
+                            self.live_data['trades'] = existing_data['trades']
+                        # Preserve summary if available
+                        if 'summary' in existing_data:
+                            self.live_data['summary'] = existing_data['summary']
+                        logger.info(f"LIVE_DATA_TRACKER: Loaded {len(self.live_data['trades'])} existing trades from file")
             except Exception as e:
                 logger.warning(f"LIVE_DATA_TRACKER: Failed to load existing data | {str(e)}")
         
@@ -432,9 +440,35 @@ class LiveDataTracker:
             
             logger.debug(f"LIVE_DATA_TRACKER: Scraped | ongoing={ongoing_count} | closed={closed_count} | pnl=₹{output_data['summary']['total_pnl']:.2f}")
             
-            # Write JSON to file
-            with open(self.live_data_file, 'w') as f:
-                json.dump(output_data, f, indent=2)
+            # Write JSON to file with ATOMIC operation (prevent corruption)
+            try:
+                with self._file_lock:  # Critical section - prevent concurrent writes
+                    # Ensure directory exists
+                    self.live_data_file.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Write to temp file first
+                    with tempfile.NamedTemporaryFile(
+                        mode='w',
+                        dir=self.live_data_file.parent,
+                        delete=False,
+                        suffix='.json'
+                    ) as tmp:
+                        json.dump(output_data, tmp, indent=2)
+                        tmp_path = tmp.name
+                    
+                    # Atomic rename (on Unix, this is atomic)
+                    os.replace(tmp_path, str(self.live_data_file))
+                    logger.debug(f"LIVE_DATA_TRACKER: SAVED | file={self.live_data_file}")
+            except Exception as write_err:
+                logger.error(f"LIVE_DATA_TRACKER: ATOMIC_WRITE_ERROR | {str(write_err)}")
+                # Fallback: try direct write if atomic failed
+                try:
+                    with open(self.live_data_file, 'w') as f:
+                        json.dump(output_data, f, indent=2)
+                    logger.warning(f"LIVE_DATA_TRACKER: FALLBACK_WRITE | recovered from atomic write error")
+                except:
+                    logger.error(f"LIVE_DATA_TRACKER: FALLBACK_WRITE_ALSO_FAILED | data lost")
+                    return False
             
             return True
             

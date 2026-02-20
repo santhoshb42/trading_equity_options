@@ -20,6 +20,7 @@ from .fake_move_detector import get_fake_move_detector, get_decay_monitor
 from .trade_logger import get_trade_logger
 from .options_rate_limiter import get_options_rate_limiter
 from .live_data_tracker import get_live_data_tracker
+from .market_detector import get_market_condition_detector
 
 # =============================================================================
 # Utility: Timeout wrapper for monitoring functions
@@ -328,6 +329,7 @@ class OptionPosition:
         self.trial_sl_price = None  # Current TRIAL SL price (5% below peak)
         self.trial_sl_activation_time = None  # When TRIAL SL was activated
         self.trial_sl_update_count = 0  # Count of TRIAL SL adjustments
+        self.trial_sl_expected_threshold = None  # Expected threshold (5% or 10%) based on market at entry time
         self.hard_sl_price = None  # Hard SL: -20% from entry (default)
         
         # Rate limit optimization for modify_order (HYBRID strategy)
@@ -926,19 +928,27 @@ class OptionPositionMonitor:
                 print(f"⚠️ REJECTED: Position {symbol} has zero/invalid entry premium (premium={entry_premium})")
                 return False
             
-            logger.debug(f"POSITION_ADD: {symbol} | qty={quantity} | premium={entry_premium:.2f}")
+            logger.debug(f"POSITION_ADD: {symbol} | underlying={underlying} | qty={quantity} | premium={entry_premium:.2f}")
             
-            if symbol in self.positions:
-                # Position already exists - check if it's idempotent (same order_id)
-                existing_pos = self.positions[symbol]
+            # 🔧 FIX: Check for duplicate by UNDERLYING symbol, not option contract
+            # This prevents multiple positions in the same underlying (e.g., SAIL) even with different strikes
+            existing_position_with_same_underlying = None
+            for pos_symbol, pos in self.positions.items():
+                if pos.underlying == underlying:
+                    existing_position_with_same_underlying = pos
+                    break
+            
+            if existing_position_with_same_underlying:
+                # Position already exists for this underlying - check if it's idempotent (same order_id)
+                existing_pos = existing_position_with_same_underlying
                 if existing_pos.order_id == order_id:
                     # Idempotent call - same order ID being added again (from retry logic)
-                    logger.info(f"POSITION_ADD: IDEMPOTENT_CALL | {symbol} | order_id={order_id} (already added, returning success)")
+                    logger.info(f"POSITION_ADD: IDEMPOTENT_CALL | underlying={underlying} | symbol={symbol} | order_id={order_id} (already added, returning success)")
                     return True
                 else:
-                    # Conflict - different order IDs for same symbol
-                    logger.error(f"POSITION_ADD: DUPLICATE_CONFLICT | {symbol} | existing_order_id={existing_pos.order_id} vs new_order_id={order_id}")
-                    print(f"⚠️ Position {symbol} already exists with different order ID - possible duplicate BUY orders")
+                    # Conflict - different order IDs for same underlying
+                    logger.error(f"POSITION_ADD: DUPLICATE_CONFLICT | underlying={underlying} | new_symbol={symbol} vs existing_symbol={existing_pos.symbol} | existing_order_id={existing_pos.order_id} vs new_order_id={order_id}")
+                    print(f"⚠️ Position for {underlying} already exists ({existing_pos.symbol}) - rejecting duplicate alert")
                     return False
             
             position = OptionPosition(
@@ -978,8 +988,28 @@ class OptionPositionMonitor:
             
             self.positions[symbol] = position
             
-            # 🔧 INITIALIZE HARD SL: -10% from entry premium
-            position.hard_sl_price = position.entry_premium * 0.9  # -10% SL
+            # 🔧 INITIALIZE HARD SL: -20% from entry premium
+            position.hard_sl_price = position.entry_premium * 0.80  # -20% SL
+            
+            # 🔧 PRE-CALCULATE TRIAL_SL THRESHOLD based on current market conditions
+            # This ensures STALE_CONSOLIDATION can use the expected threshold without waiting for next monitoring cycle
+            market_detector = get_market_condition_detector()
+            nifty_ltp = None
+            nifty_open = None
+            try:
+                nifty_market_data = self.broker.get_market_data("NIFTY", exchange="NSE")
+                if nifty_market_data:
+                    nifty_ltp = nifty_market_data.get('ltp')
+                    nifty_open = nifty_market_data.get('open')
+                    if nifty_ltp and nifty_open:
+                        market_detector.update_market_data(nifty_ltp=nifty_ltp, nifty_open=nifty_open)
+            except Exception as e:
+                logger.debug(f"POSITION_ADD: Could not fetch Nifty for threshold | {str(e)}")
+            
+            # Get expected TRIAL_SL threshold for this trade
+            expected_threshold, market_reason = market_detector.get_trial_sl_threshold(nifty_ltp=nifty_ltp)
+            position.trial_sl_expected_threshold = expected_threshold
+            logger.info(f"POSITION_ADD: TRIAL_SL_THRESHOLD_SET | {symbol} | Threshold={expected_threshold:.0f}% | Market={market_reason}")
             
             self._save_positions()
             
@@ -1387,13 +1417,15 @@ class OptionPositionMonitor:
         logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-20%)")
         
         try:
-            # Place SELL order with STOPLOSS-MARKET type
+            # Place SELL order with STOPLOSS-LIMIT type (avoids slippage)
+            # STOPLOSS_LIMIT: When SL price is hit, executes as LIMIT at that price
+            # Prevents gap-down slippage that happens with STOPLOSS_MARKET
             sl_order_id = self.broker.place_options_order(
                 symbol=symbol,
                 action='SELL',
                 quantity=position.quantity,
                 price=sl_premium,
-                order_type='STOPLOSS_MARKET',
+                order_type='STOPLOSS_LIMIT',
                 product_type='INTRADAY'
             )
             
@@ -1811,11 +1843,42 @@ class OptionPositionMonitor:
             # ============================================================
             # PHASE 1 & 2: Check if we should activate TRIAL SL
             # ============================================================
-            if not is_trial_sl_enabled and peak_gain_percent >= 10.0:
-                # 🚀 ACTIVATE TRIAL SL at 10% gain
+            # 🔧 ADAPTIVE THRESHOLD: Use market conditions to determine activation threshold
+            market_detector = get_market_condition_detector()
+            
+            # 🔴 FIX: Fetch Nifty market data (LTP + Open) to determine market condition
+            # This determines if we use 5% (weak market) or 10% (strong market) threshold
+            nifty_ltp = None
+            nifty_open = None
+            try:
+                # Try to get Nifty full market data from broker for market condition analysis
+                nifty_market_data = self.broker.get_market_data("NIFTY", exchange="NSE")
+                if nifty_market_data:
+                    nifty_ltp = nifty_market_data.get('ltp')
+                    nifty_open = nifty_market_data.get('open')
+                    if nifty_ltp:
+                        # Update market detector with current Nifty data
+                        market_detector.update_market_data(
+                            nifty_ltp=nifty_ltp,
+                            nifty_open=nifty_open  # ✅ Now fetches actual open price
+                        )
+                        open_str = f"₹{nifty_open:.2f}" if nifty_open else "N/A"
+                        logger.debug(f"TRIAL_SL_MARKET_DATA: Nifty LTP=₹{nifty_ltp:.2f} | Open={open_str}")
+            except Exception as e:
+                logger.debug(f"Could not fetch Nifty market data for condition: {str(e)}")
+                nifty_ltp = None
+            
+            trial_sl_threshold, market_reason = market_detector.get_trial_sl_threshold(
+                nifty_ltp=nifty_ltp,  # ✅ Now passes actual Nifty LTP
+                current_time=datetime.now()
+            )
+            
+            if not is_trial_sl_enabled and peak_gain_percent >= trial_sl_threshold:
+                # 🚀 ACTIVATE TRIAL SL at threshold% gain - Lock at activation threshold milestone
                 position.trial_sl_enabled = True
                 position.trial_sl_activation_time = datetime.now().isoformat()
-                position.trial_sl_price = position.highest_premium * 0.95  # 5% below peak
+                # 🎯 STAIRCASE: Lock at threshold (5% or 10%), not peak * 0.95
+                position.trial_sl_price = position.entry_premium * (1 + trial_sl_threshold / 100)
                 # 🔴 IMPORTANT: Also update legacy trailing_sl fields for backward compatibility
                 position.trailing_sl_activated = True
                 position.last_trailing_sl_price = position.trial_sl_price
@@ -1823,7 +1886,7 @@ class OptionPositionMonitor:
                 is_trial_sl_enabled = True
                 
                 log_event("TRIAL_SL_ACTIVATED",
-                         f"✅ TRIAL SL ACTIVATED for {symbol} (10% gain reached)",
+                         f"✅ TRIAL SL ACTIVATED for {symbol} ({trial_sl_threshold:.0f}% gain reached)",
                          symbol=symbol,
                          peak_gain_percent=round(peak_gain_percent, 2),
                          current_gain_percent=round(gain_percent, 2),
@@ -1831,47 +1894,61 @@ class OptionPositionMonitor:
                          peak_premium=position.highest_premium,
                          trial_sl=round(position.trial_sl_price, 2),
                          current_premium=position.current_premium,
-                         reason="Switched from -20% hard SL to TRIAL SL (5% buffer)")
+                         threshold_used=trial_sl_threshold,
+                         market_condition=market_reason,
+                         reason=f"Adaptive threshold ({trial_sl_threshold:.0f}%): {market_reason}")
                 
-                logger.info(f"TRIAL_SL_ACTIVATED: {symbol} | Peak Gain: {peak_gain_percent:.2f}% | Current Gain: {gain_percent:.2f}% | "
-                           f"Peak: ₹{position.highest_premium:.2f} | TRIAL SL: ₹{position.trial_sl_price:.2f}")
+                logger.info(f"TRIAL_SL_ACTIVATED: {symbol} | Threshold: {trial_sl_threshold:.0f}% | Peak Gain: {peak_gain_percent:.2f}% | "
+                           f"Current Gain: {gain_percent:.2f}% | Peak: ₹{position.highest_premium:.2f} | TRIAL SL: ₹{position.trial_sl_price:.2f} | "
+                           f"Market: {market_reason}")
                 
                 # 🔴 CRITICAL: Save positions to disk so state persists across bot restarts
                 self._save_positions()
             
             # ============================================================
-            # PHASE 3: Update TRIAL SL as price moves up
+            # PHASE 3: Update TRIAL SL as price moves up (STAIRCASE LOCKING)
             # ============================================================
             if is_trial_sl_enabled:
-                new_trial_sl = position.highest_premium * 0.95  # 5% below peak
+                # 🎯 STAIRCASE LOCKING: Lock profit at 5% milestones
+                # Peak 7% → Lock at 5%, Peak 12% → Lock at 10%, Peak 17% → Lock at 15%, etc.
                 
-                # Only update if new SL is higher than current
-                if position.trial_sl_price is None or new_trial_sl > position.trial_sl_price:
-                    old_trial_sl = position.trial_sl_price
-                    position.trial_sl_price = new_trial_sl
-                    # 🔴 IMPORTANT: Update legacy trailing_sl tracking for analysis
-                    position.last_trailing_sl_price = new_trial_sl
-                    position.trailing_sl_update_count += 1
-                    position.trial_sl_update_count += 1
+                # Calculate which 5% milestone we've crossed
+                peak_gain_milestone = int(peak_gain_percent / 5) * 5  # Round down to nearest 5%
+                
+                # TRIAL_SL should be at the milestone (not peak * 0.95)
+                if peak_gain_milestone >= trial_sl_threshold:
+                    # Calculate SL price based on milestone percentage
+                    new_trial_sl = position.entry_premium * (1 + peak_gain_milestone / 100)
                     
-                    if old_trial_sl is not None:
-                        sl_increase = round(new_trial_sl - old_trial_sl, 2)
-                        log_event("TRIAL_SL_UPDATED",
-                                 f"🔺 TRIAL SL Updated for {symbol} (peak increased)",
-                                 symbol=symbol,
-                                 update_count=position.trial_sl_update_count,
-                                 old_trial_sl=round(old_trial_sl, 2),
-                                 new_trial_sl=round(new_trial_sl, 2),
-                                 sl_increase=sl_increase,
-                                 peak_premium=position.highest_premium,
-                                 current_premium=position.current_premium,
-                                 gain_percent=round(gain_percent, 2))
+                    # Only update if new SL is higher than current
+                    if position.trial_sl_price is None or new_trial_sl > position.trial_sl_price:
+                        old_trial_sl = position.trial_sl_price
+                        position.trial_sl_price = new_trial_sl
+                        # 🔴 IMPORTANT: Update legacy trailing_sl tracking for analysis
+                        position.last_trailing_sl_price = new_trial_sl
+                        position.trailing_sl_update_count += 1
+                        position.trial_sl_update_count += 1
                         
-                        logger.debug(f"TRIAL_SL_UPDATED: {symbol} | TRIAL SL: ₹{old_trial_sl:.2f} → ₹{new_trial_sl:.2f} | "
-                                   f"Increase: ₹{sl_increase}")
-                        
-                        # 🔴 CRITICAL: Save positions to disk so updated SL persists across bot restarts
-                        self._save_positions()
+                        if old_trial_sl is not None:
+                            sl_increase = round(new_trial_sl - old_trial_sl, 2)
+                            log_event("TRIAL_SL_UPDATED",
+                                     f"🔺 TRIAL SL Updated for {symbol} (locked at {peak_gain_milestone}% milestone)",
+                                     symbol=symbol,
+                                     update_count=position.trial_sl_update_count,
+                                     milestone=peak_gain_milestone,
+                                     old_trial_sl=round(old_trial_sl, 2),
+                                     new_trial_sl=round(new_trial_sl, 2),
+                                     sl_increase=sl_increase,
+                                     peak_premium=position.highest_premium,
+                                     peak_gain=round(peak_gain_percent, 2),
+                                     current_premium=position.current_premium,
+                                     gain_percent=round(gain_percent, 2))
+                            
+                            logger.debug(f"TRIAL_SL_UPDATED: {symbol} | Milestone: {peak_gain_milestone}% | "
+                                       f"TRIAL SL: ₹{old_trial_sl:.2f} → ₹{new_trial_sl:.2f} | Increase: ₹{sl_increase}")
+                            
+                            # 🔴 CRITICAL: Save positions to disk so updated SL persists across bot restarts
+                            self._save_positions()
             
             # ============================================================
             # CHECK SL HIT: Determine effective SL and check if hit
@@ -1879,7 +1956,7 @@ class OptionPositionMonitor:
             effective_sl = position.trial_sl_price if is_trial_sl_enabled else position.hard_sl_price
             
             if position.current_premium <= effective_sl:
-                # 🎯 SL HIT - Close position
+                # 🎯 SL HIT - Close position at SL price (not slippage price)
                 sl_type = "TRIAL_SL" if is_trial_sl_enabled else "HARD_SL"
                 
                 logger.warning(f"SL_HIT: {symbol} | Type: {sl_type} | SL: ₹{effective_sl:.2f} | "
@@ -1887,7 +1964,7 @@ class OptionPositionMonitor:
                 
                 pnl = self.close_position(
                     symbol,
-                    position.current_premium,
+                    effective_sl,  # ✅ FIXED: Close at SL price, not current LTP (prevents slippage loss)
                     f"{sl_type}_HIT (SL: ₹{effective_sl:.2f})"
                 )
                 
@@ -1915,6 +1992,60 @@ class OptionPositionMonitor:
                 logger.debug(f"TRIAL_SL_CHECK: {symbol} | Gain: {gain_percent:.2f}% | "
                            f"Peak: ₹{position.highest_premium:.2f} | "
                            f"SL: ₹{effective_sl:.2f} | Current: ₹{position.current_premium:.2f}")
+        
+        return closed
+    
+    def check_hard_stop_loss(self) -> List[Dict[str, Any]]:
+        """
+        🛑 ULTIMATE SAFETY NET: Hard stop loss at -10% from entry
+        
+        This is the CRITICAL failsafe that guarantees:
+        - No position can lose more than 10% from entry price
+        - Prevents catastrophic losses (like -36% SAMMAANCAP incident)
+        - Runs FIRST in monitoring loop, before any other exits
+        - Executes independently from TRIAL_SL check
+        
+        IMPORTANCE:
+        - On 2026-01-19, SAMMAANCAP lost ₹-10,823 (-36.1%) because HARD_SL check was skipped
+        - Adding this standalone function ensures hard SL check ALWAYS runs
+        - Critical for preserving capital and limiting downside risk
+        """
+        closed = []
+        
+        logger.debug(f"HARD_SL_CHECK: Starting | positions={len(self.positions)}")
+        
+        for symbol in list(self.positions.keys()):
+            position = self.positions[symbol]
+            
+            if not position.hard_sl_price:
+                logger.warning(f"HARD_SL_CHECK: {symbol} | No hard SL price set, using default -20%")
+                position.hard_sl_price = position.entry_premium * 0.80
+            
+            # Check if current premium has hit hard SL
+            if position.current_premium <= position.hard_sl_price:
+                # HARD SL BREACHED - EXIT IMMEDIATELY
+                loss_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
+                
+                logger.error(f"HARD_SL_BREACHED: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
+                           f"SL: ₹{position.hard_sl_price:.2f} | Current: ₹{position.current_premium:.2f} | "
+                           f"Loss: {loss_percent:.1f}%")
+                
+                pnl = self.close_position(
+                    symbol,
+                    position.current_premium,
+                    f"HARD_SL_HIT (SL: ₹{position.hard_sl_price:.2f})"
+                )
+                
+                if pnl:
+                    closed.append(pnl)
+                    logger.error(f"HARD_SL_EXIT_EXECUTED: {symbol} | PnL: ₹{pnl.get('pnl', 0):.2f} | "
+                               f"Entry: ₹{position.entry_premium:.2f} | Exit: ₹{position.current_premium:.2f}")
+            else:
+                # Log hard SL status
+                current_loss_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
+                sl_distance = position.current_premium - position.hard_sl_price
+                logger.debug(f"HARD_SL_OK: {symbol} | Current: ₹{position.current_premium:.2f} | "
+                           f"SL: ₹{position.hard_sl_price:.2f} | Distance: ₹{sl_distance:.2f} | Loss: {current_loss_percent:.1f}%")
         
         return closed
     
@@ -1955,6 +2086,12 @@ class OptionPositionMonitor:
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
+            
+            # 🔧 SKIP MOMENTUM CHECK IF TRIAL_SL IS ACTIVE
+            # Once TRIAL_SL is protecting the profit, momentum checks are unnecessary
+            if position.trial_sl_enabled:
+                logger.debug(f"MOMENTUM_SKIP: {symbol} | TRIAL_SL active - profit protected, momentum check skipped")
+                continue
             
             # Calculate unrealized P&L percentage
             unrealized_pnl_pct = position.unrealized_pnl / (position.entry_premium * position.quantity) if position.entry_premium > 0 else 0
@@ -1999,39 +2136,71 @@ class OptionPositionMonitor:
     
     def check_stale_consolidation_exits(self) -> List[Dict[str, Any]]:
         """
-        ⭐ NEW EXIT: Exit STALE CONSOLIDATIONS in +VE (before momentum reversal)
+        ⭐ NEW EXIT: Exit STALE CONSOLIDATIONS < 10% gain (before momentum reversal)
         
-        PROBLEM: 23 trades today crossed +5-6% then hit MOMENTUM reversal
-        - Pattern: Position goes +5% → consolidates stale → reverses → hit MOMENTUM at -2%
-        - Swing: +10% peak to -2% exit = 12% loss from peak
-        - Root cause: SL too wide (entry price), can't catch stale reversals
+        SIMPLIFIED LOGIC:
+        - If peak < 10%: TRIAL_SL not activated (trial_sl_enabled = FALSE)
+        - Position is stale for 15+ mins WITHOUT hitting 10% peak = trend died
+        - Exit early to lock whatever gain exists (6%, 7%, 8%)
+        - Don't let it reverse and hit MOMENTUM_REVERSAL at -5%
         
-        SOLUTION: Exit early when:
-        1. Position held 15-20 mins (stale period confirmed)
-        2. Currently in +VE (current_pnl > 0)
-        3. Had crossed +5% at peak (entered profit consolidation zone)
-        4. Before momentum can reverse it
+        PROTECTION LAYERS:
+        1. TRIAL_SL: Handles peaks >= threshold% (adaptive: 5% or 10%) - exits at 5% below peak
+        2. STALE_CONSOLIDATION: Handles peaks < threshold% (exits after 15min stale)
+        3. MOMENTUM_REVERSAL: Catch-all (exits at 10% drawdown from ANY peak)
+        4. HARD_SL: Ultimate safety (-20% emergency exit)
         
-        BENEFIT: Lock in +5% instead of taking -2% loss
-        Expected savings: 7-8% per trade × 23 = 161-184% PnL improvement
+        BENEFIT: Lock +6% instead of taking -5% loss (11% swing prevented)
+        Data: 85 positions peaked +6.9% but lost -5.45% with old MOMENTUM logic
         
         Returns:
             List of closed position stats
         """
         closed = []
         
-        # Thresholds from data analysis
-        stale_hold_time = 15 * 60  # 15 minutes (stale consolidation period)
-        peak_profit_threshold = 0.05  # 5% (crossed into profit consolidation)
-        current_profit_threshold = 0.001  # > 0% (currently in +VE)
+        # Get dynamic threshold based on market conditions
+        market_detector = get_market_condition_detector()
+        
+        # 🔴 FIX: Fetch Nifty market data (LTP + Open) to determine market condition
+        # This determines if we use 5% (weak market) or 10% (strong market) threshold
+        nifty_ltp = None
+        nifty_open = None
+        try:
+            # Try to get Nifty full market data from broker for market condition analysis
+            nifty_market_data = self.broker.get_market_data("NIFTY", exchange="NSE")
+            if nifty_market_data:
+                nifty_ltp = nifty_market_data.get('ltp')
+                nifty_open = nifty_market_data.get('open')
+                if nifty_ltp:
+                    market_detector.update_market_data(
+                        nifty_ltp=nifty_ltp,
+                        nifty_open=nifty_open  # ✅ Now fetches actual open price
+                    )
+        except Exception as e:
+            logger.debug(f"Could not fetch Nifty market data for stale consolidation check: {str(e)}")
+            nifty_ltp = None
+        
+        trial_sl_threshold, market_reason = market_detector.get_trial_sl_threshold(
+            nifty_ltp=nifty_ltp,  # ✅ Now passes actual Nifty LTP
+            current_time=datetime.now()
+        )
+        
+        # Threshold from data analysis
+        stale_hold_time_min = 20  # 20 minutes (stale consolidation period) - increased from 15min to allow more trend development
         
         logger.info(f"STALE_CONSOLIDATION_CHECK: Starting | positions={len(self.positions)} | "
-                   f"stale_threshold={stale_hold_time/60:.0f}min | "
-                   f"peak_profit={peak_profit_threshold*100:.1f}% | "
-                   f"current_profit_threshold={current_profit_threshold*100:.2f}%")
+                   f"stale_threshold={stale_hold_time_min}min | "
+                   f"trial_sl_threshold={trial_sl_threshold:.0f}% | market={market_reason} | "
+                   f"exit_condition=trial_sl_enabled=FALSE (peak < {trial_sl_threshold:.0f}%)")
         
         for symbol in list(self.positions.keys()):
             position = self.positions[symbol]
+            
+            # 🔧 SKIP STALE_CONSOLIDATION IF TRIAL_SL IS ACTIVE
+            # Once TRIAL_SL is protecting the profit, we don't need stale logic
+            if position.trial_sl_enabled:
+                logger.debug(f"STALE_CONSOL_SKIP: {symbol} | TRIAL_SL active - profit protected, stale check skipped")
+                continue
             
             # Calculate time held
             hold_time_sec = (datetime.now() - position.entry_time).total_seconds()
@@ -2044,32 +2213,54 @@ class OptionPositionMonitor:
             peak_profit_pct = (position.highest_premium - position.entry_premium) / position.entry_premium if position.entry_premium > 0 else 0
             
             logger.debug(f"STALE_CONSOL_CHECK: {symbol} | Hold: {hold_time_min:.1f}min | "
-                        f"Peak: +{peak_profit_pct*100:.2f}% | Current: {current_pnl_pct*100:.2f}% | "
-                        f"High: ₹{position.highest_premium:.2f} | Price: ₹{position.current_premium:.2f}")
+                        f"Trial_SL_Enabled: {position.trial_sl_enabled} | Peak: +{peak_profit_pct*100:.2f}% | "
+                        f"Current: {current_pnl_pct*100:.2f}%")
             
             # Check stale consolidation pattern
-            if (hold_time_min >= stale_hold_time / 60 and  # Been stale for 15+ mins
-                peak_profit_pct >= peak_profit_threshold and  # Crossed +5% at peak
-                current_pnl_pct >= current_profit_threshold):  # Still in +VE now
+            # Exit if:
+            # 1. Been holding for 15+ minutes (stale period)
+            # 2. TRIAL_SL not activated - trade should have exited by now
+            # 3. Exit regardless of peak value (consolidation after peak is also stale)
+            
+            # 🔧 CRITICAL FIX: Remove the peak_vs_threshold check
+            # Problem: If peak >= threshold but trial_sl_enabled=FALSE, trade sits idle
+            # Reason: Logic assumed "peak >= threshold" means "trial_sl already activated"
+            # Reality: Price can reach threshold, consolidate, and never activate trial_sl
+            # Solution: Exit after 15 mins if trial_sl not activated (PERIOD)
+            
+            if (hold_time_min >= stale_hold_time_min and  # Been stale for 15+ mins
+                not position.trial_sl_enabled):  # Trial SL not activated (regardless of peak)
                 
-                logger.warning(f"STALE_CONSOLIDATION_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
-                             f"Peak: +{peak_profit_pct*100:.2f}% | Current: +{current_pnl_pct*100:.2f}% | "
-                             f"Action: Exit to lock profit before momentum reversal")
+                # Exit if near break-even/small profit
+                should_exit = current_pnl_pct >= -0.01
                 
-                pnl = self.close_position(
-                    symbol,
-                    position.current_premium,
-                    f"STALE_CONSOLIDATION (Peak +{peak_profit_pct*100:.1f}%, Stale {hold_time_min:.0f}min)"
-                )
-                if pnl:
-                    closed.append(pnl)
-                    logger.warning(
-                        f"EARLY_EXIT_STALE_CONSOL: {symbol} | Hold: {hold_time_min:.1f}min | "
-                        f"Entry: ₹{position.entry_premium:.2f} | Peak: ₹{position.highest_premium:.2f} (+{peak_profit_pct*100:.1f}%) | "
-                        f"Exit: ₹{position.current_premium:.2f} (+{current_pnl_pct*100:.1f}%) | "
-                        f"PnL: ₹{pnl['pnl']:.2f} | "
-                        f"Saved from potential momentum reversal loss"
+                # OR exit if we've started losing but not too deeply yet (catch before momentum hits)
+                # AND we can still salvage some capital vs waiting for -10% momentum loss
+                if not should_exit and -0.10 <= current_pnl_pct < -0.01:
+                    # Position lost <10% and has been stale - exit now vs waiting for momentum
+                    should_exit = True
+                    logger.debug(f"STALE_CONSOLIDATION: {symbol} showing loss {current_pnl_pct*100:.2f}% but peak minimal - exiting early to avoid momentum")
+                
+                if should_exit:
+                    logger.warning(f"STALE_CONSOLIDATION_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
+                                 f"Trial_SL: {position.trial_sl_enabled} | Peak: +{peak_profit_pct*100:.2f}% | "
+                                 f"Current: {current_pnl_pct*100:.2f}% | "
+                                 f"Action: Exit stale position (15+ min held, TRIAL_SL inactive)")
+                    
+                    pnl = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        f"STALE_CONSOLIDATION (Peak +{peak_profit_pct*100:.1f}%, Stale {hold_time_min:.0f}min)"
                     )
+                    if pnl:
+                        closed.append(pnl)
+                        logger.warning(
+                            f"EARLY_EXIT_STALE_CONSOL: {symbol} | Hold: {hold_time_min:.1f}min | "
+                            f"Entry: ₹{position.entry_premium:.2f} | Peak: ₹{position.highest_premium:.2f} (+{peak_profit_pct*100:.1f}%) | "
+                            f"Exit: ₹{position.current_premium:.2f} ({current_pnl_pct*100:+.1f}%) | "
+                            f"PnL: ₹{pnl['pnl']:.2f} | "
+                            f"Exited after 15min stale (TRIAL_SL not activated)"
+                        )
         
         return closed
     
@@ -2471,6 +2662,7 @@ class OptionPositionMonitor:
         
         This prevents holding in dead/weakening markets.
         """
+        start_time = time.time()
         from .market_sentiment import get_market_sentiment
         from .optconfig import SentimentConfig
         
@@ -2616,6 +2808,8 @@ class OptionPositionMonitor:
             print(f"\n❌ SENTIMENT_EXIT_CHECK FULL ERROR:\n{tb_str}\n", file=__import__('sys').stderr)
             # Don't block monitoring on sentiment errors
         
+        duration = time.time() - start_time
+        logger.debug(f"SENTIMENT_CHECK: Complete | exits={len(closed)} | duration={duration:.2f}s")
         return closed
     
     def get_position_summary(self) -> Dict[str, Any]:
@@ -2660,6 +2854,7 @@ class OptionPositionMonitor:
         Returns:
             Dictionary with refresh statistics
         """
+        start_time = time.time()
         refresh_stats = {
             'positions_checked': 0,
             'ltps_updated': 0,
@@ -2667,7 +2862,8 @@ class OptionPositionMonitor:
             'failed_fetches': 0,
             'errors': [],
             'bucket_info': {},
-            'active_symbol_pool': {}
+            'active_symbol_pool': {},
+            'duration': 0.0
         }
         
         if not self.broker:
@@ -2914,7 +3110,8 @@ class OptionPositionMonitor:
         if refresh_stats['ltps_updated'] > 0:
             self._save_positions()
         
-        logger.info(f"REFRESH_LTP: Complete | updated={refresh_stats['ltps_updated']}/{refresh_stats['positions_checked']} | greeks={refresh_stats['greeks_updated']} | failed={refresh_stats['failed_fetches']}")
+        refresh_stats['duration'] = time.time() - start_time
+        logger.info(f"REFRESH_LTP: Complete | updated={refresh_stats['ltps_updated']}/{refresh_stats['positions_checked']} | greeks={refresh_stats['greeks_updated']} | failed={refresh_stats['failed_fetches']} | duration={refresh_stats['duration']:.2f}s")
         return refresh_stats
     
     def refresh_position_greeks(self) -> Dict[str, Any]:
@@ -3448,16 +3645,16 @@ class OptionPositionMonitor:
             if greeks_delta_closes:
                 logger.info(f"MONITORING: Greeks delta caught {len(greeks_delta_closes)} reversals BEFORE momentum loss | Avoided {len(greeks_delta_closes)} × 10% loss")
             
-            # ⭐ PRIORITY 2.3: Stale consolidation exit (NEW)
-            # Exit +VE positions that became stale before momentum can reverse them
-            # Prevents: +5% peak → stale → MOMENTUM reversal → -2% exit (12% swing)
-            stale_consol_closes = self.check_stale_consolidation_exits()
-            # Filter out any that were already closed by other mechanisms
-            stale_consol_closes = [p for p in stale_consol_closes if p['symbol'] not in greeks_closed_symbols and p['symbol'] not in set(c['symbol'] for c in momentum_closes)]
-            monitoring_result['closed_by_stale_consolidation'] = [p['symbol'] for p in stale_consol_closes]
+            # ⭐ PRIORITY 2.3: Stale consolidation exit (DISABLED)
+            # ANALYSIS SHOWS: This exit strategy costs ₹1,22,879 in missed gains (492% worse than HARD_SL)
+            # 32 positions exited: -₹25,001 loss | If held with HARD_SL: +₹97,878 profit
+            # Winners cut early (MUTHOOTFIN +174%, SIEMENS +55%, KEI +36%) >> Small losses saved
+            # Let HARD_SL (-10%) and TRIAL_SL handle exits instead
+            stale_consol_closes = []  # DISABLED - was: []
+            monitoring_result['closed_by_stale_consolidation'] = []
             
-            if stale_consol_closes:
-                logger.info(f"MONITORING: Stale consolidation exit detected {len(stale_consol_closes)} profitable positions | Locked gains before momentum reversal")
+            # if stale_consol_closes:  # DISABLED
+            #     logger.info(f"MONITORING: Stale consolidation exit detected {len(stale_consol_closes)} profitable positions | Locked gains before momentum reversal")
             
             # ⭐ NEW: Retry failed SL placement (critical - ensures all positions protected)
             # This runs in background to place SL orders for any positions still missing them
@@ -3467,15 +3664,14 @@ class OptionPositionMonitor:
                 monitoring_result['sl_retries_placed'] = sl_retry_stats['placed']
                 monitoring_result['sl_retries_max_exceeded'] = sl_retry_stats['max_retries']
             
-            # ⭐ PRIORITY 2.5: Time-based staleness exit (NEW)
-            # Exit positions that show no trending momentum after 20 minutes
-            stale_closes = self.check_stale_positions()
-            # Filter out any that were already closed by other mechanisms
-            stale_closes = [p for p in stale_closes if p['symbol'] not in greeks_closed_symbols and p['symbol'] not in set(c['symbol'] for c in momentum_closes) and p['symbol'] not in set(c['symbol'] for c in stale_consol_closes)]
-            monitoring_result['closed_by_stale_timeout'] = [p['symbol'] for p in stale_closes]
+            # ⭐ PRIORITY 2.5: Time-based staleness exit (DISABLED)
+            # ANALYSIS: Costs ₹162,905 in missed gains on strong trend days (MUTHOOTFIN +171%, SIEMENS +52%)
+            # Let HARD_SL (-10%) and TRIAL_SL handle exits instead
+            stale_closes = []  # DISABLED - was: []
+            monitoring_result['closed_by_stale_timeout'] = []
             
-            if stale_closes:
-                logger.info(f"MONITORING: Stale timeout detected {len(stale_closes)} non-trending positions | Proactive exit before momentum hit")
+            # if stale_closes:  # DISABLED
+            #     logger.info(f"MONITORING: Stale timeout detected {len(stale_closes)} non-trending positions | Proactive exit before momentum hit")
             
             # Check and close positions by stop loss (hard SL if loss exceeds 20%)
             sl_closes = self.check_stop_losses()

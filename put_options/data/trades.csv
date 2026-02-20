@@ -1,0 +1,5 @@
+timestamp,trade_id,symbol,action,entry_time,entry_premium,entry_confidence,entry_score,entry_features,sector,sector_rsi,sector_performance,sector_participation,sector_bullish,exit_time,exit_premium,pnl,pnl_percent,is_win,exit_reason,duration_minutes,max_profit,max_loss,status,ml_prediction,actual_outcome,ml_accuracy
+2026-02-06T14:12:18.541593,BANKNIFTYFEBCE_20260206_141218,BANKNIFTYFEBCE,BUY,2026-02-06 14:12:18,8840.0,85,85,"[85, 85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",UNKNOWN,,,,,,,,,,,,,,OPEN,,,
+2026-02-06T14:28:48.100941,BANKNIFTYFEBCE_20260206_142848,BANKNIFTYFEBCE,BUY,2026-02-06 14:28:48,9055.0,85,85,"[85, 85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",UNKNOWN,,,,,,,,,,,,,,OPEN,,,
+2026-02-11T11:41:08.984026,MANKINDFEBCE_20260211_114108,MANKINDFEBCE,BUY,2026-02-11 11:41:08,413.5,85,85,"[85, 85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",UNKNOWN,,,,,,,,,,,,,,OPEN,,,
+2026-02-11T12:05:13.910714,RELIANCEFEBPE_20260211_120513,RELIANCEFEBPE,BUY,2026-02-11 12:05:13,373.0,85,85,"[85, 85, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",UNKNOWN,,,,,2026-02-11 12:20:15,373.0,0.0,0.0,NO,"STALE_CONSOLIDATION (Peak +0.0%, Stale 15min)",15.04,,,CLOSED,,,

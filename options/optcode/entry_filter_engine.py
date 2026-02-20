@@ -28,6 +28,37 @@ from .optlogging import logger, log_event
 from .optconfig import SentimentConfig, MLConfig
 
 # =============================================================================
+# VALIDATOR 0: PREMIUM FILTER (Minimum Entry Premium Check)
+# =============================================================================
+
+class PremiumValidator:
+    """Validates minimum premium to avoid low-liquidity gap risk trades"""
+    
+    def __init__(self):
+        self.name = "PremiumValidator"
+        self.min_premium = float(os.getenv("ENTRY_FILTER_MIN_PREMIUM", "5.0"))  # Min ₹5 premium
+        logger.info(f"{self.name}: Initialized | Min premium: ₹{self.min_premium}")
+    
+    def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
+        """
+        Validate that entry premium is above minimum threshold.
+        Low premiums (< ₹5) have high gap risk and slippage.
+        
+        Args:
+            signal: Alert signal
+            market_data: Market data with 'entry_premium'
+        
+        Returns:
+            (is_valid, reason)
+        """
+        entry_premium = market_data.get('entry_premium', 0)
+        
+        if entry_premium >= self.min_premium:
+            return True, f"Premium ₹{entry_premium:.2f} >= ₹{self.min_premium} (sufficient liquidity)"
+        else:
+            return False, f"Premium ₹{entry_premium:.2f} < ₹{self.min_premium} (low liquidity, high gap risk)"
+
+# =============================================================================
 # VALIDATOR 1: MARKET STRUCTURE (PCR + OI Buildup)
 # =============================================================================
 
@@ -397,6 +428,7 @@ class ComprehensiveEntryFilter:
         
         # Initialize all validators
         self.validators = {
+            'premium': PremiumValidator(),  # NEW: Check minimum premium first
             'market_structure': MarketStructureValidator(),
             'momentum': MomentumValidator(),
             'trend': TrendValidator(),
@@ -412,7 +444,7 @@ class ComprehensiveEntryFilter:
         
         # Configuration
         self.require_all_filters = os.getenv("ENTRY_FILTER_REQUIRE_ALL", "False").lower() == "true"
-        self.min_filters_pass = int(os.getenv("ENTRY_FILTER_MIN_PASS", "4"))  # Need at least 4/6 validators
+        self.min_filters_pass = int(os.getenv("ENTRY_FILTER_MIN_PASS", "5"))  # Need at least 5/7 validators (was 4/6, now 5/7 with premium filter)
         
         logger.info(f"{self.name}: Initialized | Mode: {'ALL_REQUIRED' if self.require_all_filters else f'MIN_{self.min_filters_pass}_PASS'}")
         logger.info(f"{self.name}: Active validators: {list(self.validators.keys())}")

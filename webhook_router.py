@@ -37,7 +37,8 @@ ROUTER_HOST = os.getenv("ROUTER_HOST", "0.0.0.0")
 
 # Downstream bot endpoints
 EQUITY_BOT_URL = os.getenv("EQUITY_BOT_URL", "http://127.0.0.1:8080/webhook")
-OPTIONS_BOT_URL = os.getenv("OPTIONS_BOT_URL", "http://127.0.0.1:8081/webhook/options")
+CE_BOT_URL = os.getenv("CE_BOT_URL", "http://127.0.0.1:8081/webhook/options")
+PE_BOT_URL = os.getenv("PE_BOT_URL", "http://127.0.0.1:8082/webhook/put_options")
 
 # Optional authentication
 ROUTER_SECRET = os.getenv("ROUTER_SECRET", "")
@@ -46,7 +47,8 @@ ROUTER_SECRET = os.getenv("ROUTER_SECRET", "")
 STATS = {
     "total_alerts_received": 0,
     "equity_forwarded": 0,
-    "options_forwarded": 0,
+    "ce_forwarded": 0,
+    "pe_forwarded": 0,
     "forward_failures": 0,
     "last_alert_time": None,
     "last_symbols": []
@@ -81,7 +83,8 @@ def forward_alert(url: str, payload: Dict[str, Any], bot_name: str, retries: int
                 headers={"Content-Type": "application/json"}
             )
             
-            if response.status_code in [200, 201]:
+            # Accept 2xx status codes (200, 201, 202 Accepted, 204 No Content)
+            if 200 <= response.status_code < 300:
                 logger.info(f"✓ Alert forwarded to {bot_name}: {response.status_code}")
                 return True
             else:
@@ -107,6 +110,64 @@ def forward_alert(url: str, payload: Dict[str, Any], bot_name: str, retries: int
             return False
     
     return False
+
+
+def detect_alert_type(payload: Dict[str, Any], raw_payload: Dict[str, Any] = None) -> str:
+    """
+    Detect if alert is for CE (Call) or PE (Put) options.
+    
+    Detection priority:
+    1. Check wrapper: "PE_Alerts" vs "Alerts" in raw_payload
+    2. Check signal name: "BUY_CE", "SELL_PE", etc.
+    3. Check symbol suffix: ends with "CE" or "PE"
+    4. Check message/notes field
+    5. Default to "CE" (Call options)
+    
+    Returns: "ce", "pe", or "equity"
+    """
+    if raw_payload is None:
+        raw_payload = {}
+    
+    # Check for PE_Alerts wrapper (PE specific) - HIGHEST PRIORITY
+    if "PE_Alerts" in raw_payload:
+        logger.info(f"✓ Detected PE from 'PE_Alerts' wrapper")
+        return 'pe'
+    
+    # Check for standard Alerts wrapper (CE specific)
+    if "Alerts" in raw_payload:
+        logger.info(f"✓ Detected CE from 'Alerts' wrapper")
+        return 'ce'
+    
+    # Check signal/action field for CE/PE
+    signal = payload.get('signal', '') or payload.get('action', '')
+    if 'PE' in signal.upper():
+        logger.info(f"✓ Detected PE from signal/action field")
+        return 'pe'
+    elif 'CE' in signal.upper():
+        logger.info(f"✓ Detected CE from signal/action field")
+        return 'ce'
+    
+    # Check symbol for CE/PE suffix
+    symbol = payload.get('symbol', '').upper()
+    if symbol.endswith('PE'):
+        logger.info(f"✓ Detected PE from symbol suffix")
+        return 'pe'
+    elif symbol.endswith('CE'):
+        logger.info(f"✓ Detected CE from symbol suffix")
+        return 'ce'
+    
+    # Check message field
+    message = payload.get('message', '') or payload.get('notes', '')
+    if 'PE' in message.upper():
+        logger.info(f"✓ Detected PE from message field")
+        return 'pe'
+    elif 'CE' in message.upper():
+        logger.info(f"✓ Detected CE from message field")
+        return 'ce'
+    
+    # Default to CE (Call options are more common)
+    logger.info(f"⚠️  Could not detect CE/PE from alert, defaulting to CE")
+    return 'ce'
 
 
 @app.route('/webhook', methods=['POST'])
@@ -147,11 +208,21 @@ def handle_webhook():
         
         # Extract from TradingView Alerts wrapper if present
         payload = raw_payload
-        if "Alerts" in raw_payload and isinstance(raw_payload["Alerts"], list) and len(raw_payload["Alerts"]) > 0:
+        alert_source = "direct"
+        
+        # Check for PE_Alerts (Put options)
+        if "PE_Alerts" in raw_payload and isinstance(raw_payload["PE_Alerts"], list) and len(raw_payload["PE_Alerts"]) > 0:
+            payload = raw_payload["PE_Alerts"][0]
+            alert_source = "PE_Alerts"
+            logger.info(f"ℹ️ Extracted alert from TradingView PE_Alerts wrapper (PUT OPTIONS)")
+        # Check for standard Alerts (Call options)
+        elif "Alerts" in raw_payload and isinstance(raw_payload["Alerts"], list) and len(raw_payload["Alerts"]) > 0:
             payload = raw_payload["Alerts"][0]
-            logger.info(f"ℹ️ Extracted alert from TradingView Alerts wrapper")
+            alert_source = "Alerts"
+            logger.info(f"ℹ️ Extracted alert from TradingView Alerts wrapper (CALL OPTIONS)")
         elif "alerts" in raw_payload and isinstance(raw_payload["alerts"], list) and len(raw_payload["alerts"]) > 0:
             payload = raw_payload["alerts"][0]
+            alert_source = "alerts"
             logger.info(f"ℹ️ Extracted alert from lowercase alerts wrapper")
         
         # Validate required fields
@@ -179,61 +250,74 @@ def handle_webhook():
         logger.info(f"Payload: {json.dumps(payload, indent=2)}")
         logger.info(f"{'='*70}\n")
         
-        # Forward to both bots IN PARALLEL (not sequentially) for burst handling
-        logger.info(f"🔄 Forwarding alert to both bots in PARALLEL...")
+        # ✅ INTELLIGENT ROUTING: Detect CE vs PE from wrapper or other fields
+        alert_type = detect_alert_type(payload, raw_payload)
+        logger.info(f"🔍 DETECTED: {alert_type.upper()} OPTION ALERT")
         
-        # Launch forwarding to both bots in separate threads
-        equity_result = {'success': False}
-        options_result = {'success': False}
+        # Determine target bot(s)
+        targets = []
+        if alert_type == 'ce':
+            targets.append(('CE OPTIONS BOT', CE_BOT_URL, 'ce'))
+            logger.info(f"🎯 ROUTING: To CE Bot (port 8081)")
+        elif alert_type == 'pe':
+            targets.append(('PE OPTIONS BOT', PE_BOT_URL, 'pe'))
+            logger.info(f"🎯 ROUTING: To PE Bot (port 8082)")
+        else:
+            targets.append(('EQUITY BOT', EQUITY_BOT_URL, 'equity'))
+            logger.info(f"🎯 ROUTING: To EQUITY Bot (port 8080)")
         
-        def forward_equity():
-            equity_result['success'] = forward_alert(EQUITY_BOT_URL, payload, "EQUITY BOT")
+        # Forward to target bot(s) IN PARALLEL
+        logger.info(f"🔄 Forwarding alert to {len(targets)} bot(s) in PARALLEL...")
         
-        def forward_options():
-            options_result['success'] = forward_alert(OPTIONS_BOT_URL, payload, "OPTIONS BOT")
+        results = {}
+        threads = []
         
-        equity_thread = threading.Thread(target=forward_equity, daemon=True, name="EquityForward")
-        options_thread = threading.Thread(target=forward_options, daemon=True, name="OptionsForward")
+        for bot_name, bot_url, bot_type in targets:
+            result_dict = {'success': False}
+            results[bot_type] = result_dict
+            
+            def forward_to_bot(name=bot_name, url=bot_url, res_dict=result_dict):
+                res_dict['success'] = forward_alert(url, payload, name)
+            
+            thread = threading.Thread(target=forward_to_bot, daemon=True, name=f"{bot_type.upper()}Forward")
+            thread.start()
+            threads.append(thread)
         
-        equity_thread.start()
-        options_thread.start()
+        # Wait for all threads with timeout (5 seconds max per bot)
+        for thread in threads:
+            thread.join(timeout=5)
         
-        # Wait for both with timeout (5 seconds max per bot, so 5 seconds total for both in parallel)
-        equity_thread.join(timeout=5)
-        options_thread.join(timeout=5)
+        # Check results
+        ce_success = results.get('ce', {}).get('success', False)
+        pe_success = results.get('pe', {}).get('success', False)
+        equity_success = results.get('equity', {}).get('success', False)
         
-        equity_success = equity_result['success']
-        options_success = options_result['success']
-        
+        # Update stats
+        if ce_success:
+            STATS["ce_forwarded"] += 1
+        if pe_success:
+            STATS["pe_forwarded"] += 1
         if equity_success:
             STATS["equity_forwarded"] += 1
-        if options_success:
-            STATS["options_forwarded"] += 1
         
-        if not (equity_success or options_success):
+        total_success = ce_success or pe_success or equity_success
+        if not total_success:
             STATS["forward_failures"] += 1
-            logger.error("⚠️  Alert failed to forward to both bots!")
+            logger.error("⚠️  Alert failed to forward to target bot!")
             return jsonify({
-                "status": "partial_failure",
-                "message": "Alert could not be forwarded to any bot"
+                "status": "failure",
+                "message": "Alert could not be forwarded to target bot"
             }), 503
         
-        if equity_success and options_success:
-            logger.info("✓ Alert successfully forwarded to BOTH bots IN PARALLEL")
-            return jsonify({
-                "status": "success",
-                "message": "Alert forwarded to both equity and options bots (parallel)",
-                "equity_status": "success",
-                "options_status": "success"
-            }), 200
-        else:
-            logger.warning("⚠️  Alert forwarded to only 1 bot")
-            return jsonify({
-                "status": "partial_success",
-                "message": "Alert forwarded to some bots",
-                "equity_status": "success" if equity_success else "failed",
-                "options_status": "success" if options_success else "failed"
-            }), 206
+        logger.info(f"✓ Alert successfully routed to {alert_type.upper()} bot")
+        return jsonify({
+            "status": "success",
+            "message": f"Alert routed to {alert_type.upper()} bot",
+            "alert_type": alert_type,
+            "ce_status": "success" if ce_success else "skipped",
+            "pe_status": "success" if pe_success else "skipped",
+            "equity_status": "success" if equity_success else "skipped"
+        }), 200
         
     except Exception as e:
         logger.error(f"✗ Error processing webhook: {str(e)}", exc_info=True)
@@ -250,7 +334,8 @@ def get_stats():
         "config": {
             "router_port": ROUTER_PORT,
             "equity_bot": EQUITY_BOT_URL,
-            "options_bot": OPTIONS_BOT_URL
+            "ce_bot": CE_BOT_URL,
+            "pe_bot": PE_BOT_URL
         }
     }), 200
 
@@ -278,7 +363,8 @@ def index():
         "configuration": {
             "listen_port": ROUTER_PORT,
             "equity_bot_endpoint": EQUITY_BOT_URL,
-            "options_bot_endpoint": OPTIONS_BOT_URL,
+            "ce_bot_endpoint": CE_BOT_URL,
+            "pe_bot_endpoint": PE_BOT_URL,
             "authentication": "enabled" if ROUTER_SECRET else "disabled"
         }
     }), 200
@@ -291,8 +377,10 @@ def start_router():
     logger.info(f"{'='*70}")
     logger.info(f"Listening on: http://{ROUTER_HOST}:{ROUTER_PORT}")
     logger.info(f"Equity bot endpoint: {EQUITY_BOT_URL}")
-    logger.info(f"Options bot endpoint: {OPTIONS_BOT_URL}")
+    logger.info(f"CE Options bot endpoint: {CE_BOT_URL}")
+    logger.info(f"PE Options bot endpoint: {PE_BOT_URL}")
     logger.info(f"Authentication: {'ENABLED' if ROUTER_SECRET else 'DISABLED'}")
+    logger.info(f"Alert routing: INTELLIGENT (CE/PE detection enabled)")
     logger.info(f"{'='*70}\n")
     
     try:

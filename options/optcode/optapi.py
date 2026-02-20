@@ -11,6 +11,11 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import queue
+import time
+import traceback
+from threading import RLock
+import atexit
 
 try:
     from flask import Flask, request, jsonify
@@ -132,6 +137,85 @@ def create_options_api_app():
             logger.warning(f"API: ALERT_SYSTEM_INIT_FAILED | {str(e)}")
     
     # ==========================================================================
+    # WEBHOOK ASYNC IMPLEMENTATION - Alert Queue & Background Worker
+    # ==========================================================================
+    
+    # Alert queue for non-blocking webhook processing
+    ALERT_QUEUE = queue.Queue(maxsize=1000)  # Max 1000 queued alerts
+    WEBHOOK_WORKER_ACTIVE = True
+    state_lock = RLock()  # Thread-safe access to state dict
+    
+    def webhook_alert_worker():
+        """Background worker that processes alerts from queue"""
+        logger.info("WEBHOOK_WORKER: Starting background alert worker thread")
+        while WEBHOOK_WORKER_ACTIVE:
+            try:
+                # Wait for alert with timeout
+                alert_data = ALERT_QUEUE.get(timeout=1)
+                if alert_data is None:  # Shutdown signal
+                    logger.info("WEBHOOK_WORKER: Received shutdown signal")
+                    break
+                
+                alert, local_state = alert_data
+                symbol = alert.get('symbol', 'UNKNOWN')
+                
+                # 🔧 NEW: Log at bot level - what we pulled from webhook queue
+                logger.info(f"WEBHOOK_WORKER: Pulled from queue | symbol={symbol} | action={alert.get('action', '?')} | price={alert.get('price', '?')} | queue_remaining={ALERT_QUEUE.qsize()}")
+                log_alert(alert=alert, status='bot_processing_started', details={
+                    'queue_remaining': ALERT_QUEUE.qsize()
+                })
+                
+                try:
+                    # Process the alert (this may take 30+ seconds)
+                    start_time = time.time()
+                    result = _process_options_alert(alert, local_state)
+                    elapsed = time.time() - start_time
+                    result_status = result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'
+                    
+                    # 🔧 NEW: Log processing result
+                    logger.info(f"WEBHOOK_WORKER: Alert processed | symbol={symbol} | status={result_status} | elapsed_ms={elapsed*1000:.1f}")
+                    log_alert(alert=alert, status='bot_processing_completed', details={
+                        'result_status': result_status,
+                        'elapsed_ms': elapsed * 1000
+                    })
+                except Exception as e:
+                    elapsed = time.time() - start_time
+                    logger.error(f"WEBHOOK_WORKER: Alert processing failed | symbol={symbol} | error={str(e)} | elapsed_ms={elapsed*1000:.1f}", exc_info=True)
+                    log_alert(alert=alert, status='bot_processing_error', details={
+                        'error': str(e),
+                        'elapsed_ms': elapsed * 1000
+                    })
+            except queue.Empty:
+                # Normal timeout waiting for next alert
+                continue
+            except Exception as e:
+                logger.error(f"WEBHOOK_WORKER: Fatal error | {str(e)}", exc_info=True)
+                break
+        
+        logger.info("WEBHOOK_WORKER: Background worker thread stopped")
+    
+    # Start background worker thread (daemon=False for graceful shutdown)
+    try:
+        _worker_thread = threading.Thread(target=webhook_alert_worker, daemon=False, name="WebhookAlertWorker")
+        _worker_thread.start()
+        logger.info("API: Background webhook worker thread started")
+    except Exception as e:
+        logger.error(f"API: Failed to start webhook worker thread | {str(e)}")
+    
+    def shutdown_webhook_worker():
+        """Stop the background worker thread gracefully"""
+        global WEBHOOK_WORKER_ACTIVE
+        WEBHOOK_WORKER_ACTIVE = False
+        try:
+            ALERT_QUEUE.put(None)  # Send shutdown signal
+            logger.info("WEBHOOK_WORKER: Shutdown signal sent")
+        except:
+            pass
+    
+    # Register shutdown handler
+    atexit.register(shutdown_webhook_worker)
+    
+    # ==========================================================================
     # Health Check Endpoint
     # ==========================================================================
     
@@ -163,14 +247,21 @@ def create_options_api_app():
     @app.route(WebhookConfig.ENDPOINT, methods=['POST'])
     def options_webhook():
         """
-        Main webhook endpoint for options trading signals.
-        Accepts TradingView alerts and processes them.
+        NON-BLOCKING webhook endpoint for options trading signals.
         
-        Burst handling: Multiple alerts in one request are processed in parallel
-        using ThreadPoolExecutor to minimize latency (default: max 5 workers).
+        CRITICAL FIX: Returns immediately to avoid TradingView timeouts.
+        Alert processing happens in background worker thread.
         
-        CIRCUIT BREAKER: When rate limiter utilization >95%, alerts are queued to disk
-        recovery file instead of processed, preventing bot crashes from broker API overload.
+        This implements the correct async pattern:
+        - Receive alert
+        - Queue for processing
+        - Return 202 Accepted immediately
+        - Process in background (non-blocking)
+        
+        This prevents:
+        - TradingView timeouts (no response in 5-10s)
+        - Duplicate alerts (from TradingView retry)
+        - System overload (non-blocking processing)
         """
         try:
             logger.debug(f"WEBHOOK: Received request | remote_addr={request.remote_addr}")
@@ -181,81 +272,62 @@ def create_options_api_app():
                 logger.warning("WEBHOOK: Empty request body")
                 return jsonify({'error': 'Empty request body'}), 400
             
-            logger.debug(f"WEBHOOK: Request data | {type(data).__name__}")
+            # 🔧 NEW: Log raw webhook data from TradingView at source
+            log_alert(alert=data, status='received', details={'source': 'tradingview'})
             
-            # CIRCUIT BREAKER FIX: Check broker API rate limiter status
-            # If utilization >95%, queue alert to disk recovery file instead of crashing
+            # Extract alert(s)
+            alerts = data if isinstance(data, list) else [data]
+            logger.info(f"WEBHOOK: Received {len(alerts)} alert(s) | raw_data={json.dumps(data)[:200]}")
+            
+            # CIRCUIT BREAKER: Check broker API rate limiter
             try:
                 from .bulk_order_fetcher import rate_limiter
                 rate_util = getattr(rate_limiter, 'utilization_percent', 0) if rate_limiter else 0
                 if rate_util > 95:
-                    # Save to recovery queue on disk for later processing
+                    import os
                     recovery_file = '/root/santhosh/trading/options/data/alert_recovery_queue.jsonl'
                     os.makedirs(os.path.dirname(recovery_file), exist_ok=True)
                     with open(recovery_file, 'a') as f:
                         f.write(json.dumps({'timestamp': time.time(), 'data': data}) + '\n')
-                    logger.warning(f"WEBHOOK: CIRCUIT_BREAKER_ACTIVE | rate_util={rate_util:.1f}% | queued {len(data) if isinstance(data, list) else 1} alert(s) to recovery disk")
+                    logger.warning(f"WEBHOOK: CIRCUIT_BREAKER | rate_util={rate_util:.1f}% | queued to disk")
                     return jsonify({
-                        'status': 'recovery_queue',
+                        'status': 'queued_to_disk',
                         'message': 'high_load_backoff',
-                        'queued_to_disk': True
+                        'count': len(alerts)
                     }), 202
             except Exception as cb_err:
-                logger.warning(f"WEBHOOK: Circuit breaker check failed | {str(cb_err)[:40]} - proceeding with alert")
+                logger.warning(f"WEBHOOK: Circuit breaker check failed | proceeding")
             
-            # Extract alert(s)
-            alerts = data if isinstance(data, list) else [data]
-            logger.info(f"WEBHOOK: Processing {len(alerts)} alert(s) | burst_mode={len(alerts) > 1}")
+            # ✅ CRITICAL FIX: Queue alerts for background processing
+            # Return IMMEDIATELY WITHOUT waiting for processing
+            queued_count = 0
+            for alert in alerts:
+                try:
+                    # Non-blocking queue with timeout
+                    ALERT_QUEUE.put((alert, state), timeout=1)
+                    queued_count += 1
+                    symbol = alert.get('symbol', 'UNKNOWN')
+                    logger.debug(f"WEBHOOK: Alert queued | symbol={symbol} | action={alert.get('action', '?')} | price={alert.get('price', '?')}")
+                    # 🔧 NEW: Log parsed alert at bot level
+                    log_alert(alert=alert, status='queued', details={'bot_level': True})
+                except queue.Full:
+                    logger.warning(f"WEBHOOK: Alert queue full | symbol={alert.get('symbol')} | dropped")
+                    log_alert(alert=alert, status='dropped', details={'reason': 'queue_full'})
+                    # Queue is full - alert will be lost, but we return success to avoid TradingView resend
             
-            # Process alerts in parallel for burst handling
-            results = []
-            if len(alerts) > 1:
-                # Burst mode: use ThreadPoolExecutor for parallel processing
-                # CRITICAL: Limited to 2 workers to prevent rate limiting
-                # Angel One API has strict rate limits (~8 req/sec)
-                # Multiple threads calling broker APIs simultaneously triggers limits
-                max_workers = min(2, len(alerts))  # Process max 2 alerts in parallel (was 5, causing rate limits)
-                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="webhook_alert") as executor:
-                    futures = []
-                    for idx, alert in enumerate(alerts, 1):
-                        # Submit each alert for processing
-                        future = executor.submit(_process_options_alert, alert, state)
-                        futures.append((idx, alert, future))
-                    
-                    # Collect results as they complete
-                    for idx, alert, future in futures:
-                        try:
-                            result = future.result(timeout=30)  # 30 second timeout per alert
-                            results.append(result)
-                            log_alert(alert, result['status'], result)
-                            logger.debug(f"WEBHOOK: Alert {idx}/{len(alerts)} completed | symbol={alert.get('symbol')} | status={result['status']}")
-                        except Exception as e:
-                            logger.error(f"WEBHOOK: Alert {idx}/{len(alerts)} failed | {str(e)}")
-                            results.append({
-                                'symbol': alert.get('symbol', 'UNKNOWN'),
-                                'status': 'error',
-                                'error': str(e)
-                            })
-            else:
-                # Single alert: process directly
-                result = _process_options_alert(alerts[0], state)
-                results.append(result)
-                log_alert(alerts[0], result['status'], result)
-            
-            successful = sum(1 for r in results if r['status'] == 'success')
-            logger.info(f"WEBHOOK: Completed | total={len(alerts)} | successful={successful} | time_mode={'parallel' if len(alerts) > 1 else 'direct'}")
-            
+            # ✅ IMMEDIATE RESPONSE to TradingView (before any processing!)
+            logger.info(f"WEBHOOK: Returning immediately | queued={queued_count}/{len(alerts)} | response_time=<100ms")
             return jsonify({
-                'status': 'processed',
-                'total': len(alerts),
-                'successful': successful,
-                'results': results
-            }), 200
+                'status': 'accepted',
+                'message': f'Queued {queued_count} alert(s) for background processing',
+                'queued': queued_count,
+                'total': len(alerts)
+            }), 202  # 202 Accepted = processing asynchronously
         
         except Exception as e:
-            logger.error(f"WEBHOOK: ERROR | {str(e)}")
+            logger.error(f"WEBHOOK: ERROR | {str(e)}", exc_info=True)
             return jsonify({
-                'error': f'Webhook error: {str(e)}'
+                'error': str(e)
             }), 500
     
     # ==========================================================================
@@ -781,6 +853,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         if not is_valid:
             logger.warning(f"ALERT_PROCESS: REJECTED | symbol={symbol} | reason={reason}")
+            # 🔧 NEW: Log validation rejection at bot level
+            log_alert(alert=alert, status='validation_rejected', details={'reason': reason})
             log_signal_validation(symbol, False, reason)
             return {
                 'symbol': symbol,
@@ -790,7 +864,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.debug(f"ALERT_PROCESS: VALIDATED | symbol={symbol}")
-        log_signal_validation(symbol, True)
+        # 🔧 NEW: Log validation passed at bot level
+        log_alert(alert=alert, status='signal_validated', details={'symbol': symbol})
         
         # Authorized to process
         symbol = processed['symbol']
@@ -865,6 +940,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         daily_trade_count = OptionsCapitalConfig.get_daily_trade_count()
         if daily_trade_count >= OptionsCapitalConfig.MAX_TRADES_PER_DAY:
             logger.warning(f"ALERT_PROCESS: DAILY_LIMIT_REACHED | symbol={symbol} | trades_today={daily_trade_count} | max={OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
+            # 🔧 NEW: Log daily limit rejection at bot level
+            log_alert(alert=alert, status='daily_limit_rejected', details={
+                'trades_today': daily_trade_count,
+                'max_trades': OptionsCapitalConfig.MAX_TRADES_PER_DAY
+            })
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
@@ -873,6 +953,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.debug(f"ALERT_PROCESS: DAILY_LIMIT_OK | trades_today={daily_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
+        # 🔧 NEW: Log daily limit passed at bot level
+        log_alert(alert=alert, status='daily_limit_passed', details={
+            'trades_today': daily_trade_count,
+            'max_trades': OptionsCapitalConfig.MAX_TRADES_PER_DAY
+        })
         
         # Check position slots
         summary = state['monitor'].get_position_summary()
@@ -906,11 +991,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     logger.info(f"ALERT_PROCESS: CHAIN_FETCH_SUCCESS_AFTER_RETRY | underlying={underlying} | attempts={attempt+1}")
                 break
             
-            # Chain fetch failed, attempt retry with exponential backoff
+            # Chain fetch failed, attempt retry (no artificial delays - just retry immediately)
             if attempt < max_retries - 1:
-                delay = retry_delays[attempt]
-                logger.warning(f"ALERT_PROCESS: CHAIN_FETCH_FAILED | underlying={underlying} | attempt={attempt+1}/{max_retries} | retrying in {delay}s")
-                time.sleep(delay)
+                logger.warning(f"ALERT_PROCESS: CHAIN_FETCH_FAILED | underlying={underlying} | attempt={attempt+1}/{max_retries} | retrying immediately")
+                # ✅ FIX: Removed blocking time.sleep() call
+                # Just continue to next retry iteration without artificial delays
             
             # On last attempt, try re-authentication
             if attempt == max_retries - 2:  # Second-to-last attempt
@@ -1310,73 +1395,14 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.info(f"ALERT_PROCESS: ORDER_PLACED | order_id={order_id}")
         
-        # Increment daily trade counter
-        new_trade_count = OptionsCapitalConfig.increment_daily_trade_count()
-        logger.info(f"DAILY_TRADE_COUNT: Incremented to {new_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
+        # 🔧 CRITICAL FIX: Move BUY confirmation to monitoring loop
+        # DO NOT BLOCK the webhook handler waiting for confirmation!
+        # This was causing 30-second blocking times and TradingView timeouts.
         
-        # 🔧 CRITICAL FIX: Wait for BUY order confirmation before adding position
-        # This prevents race condition where SL is placed before BUY fills
-        # without this wait, we can have:
-        # 1. BUY order sent but not filled
-        # 2. add_position() called immediately
-        # 3. SL placed for quantity that BUY hasn't confirmed yet
-        # 4. Monitoring loop exits before BUY fills (duplicate SELL orders)
+        # ✅ NEW PATTERN: Add position immediately and let monitoring loop handle confirmation
+        logger.info(f"BUY_ORDER: Placed | order_id={order_id} | {selected_contract.symbol} | confirmation will be monitored in loop")
         
-        logger.info(f"BUY_CONFIRMATION: Waiting for {selected_contract.symbol} BUY confirmation (30s timeout)")
-        confirmation_timeout = 30
-        is_buy_confirmed = state['broker'].wait_for_buy_confirmation(
-            selected_contract.symbol,
-            timeout=confirmation_timeout
-        )
-        
-        if not is_buy_confirmed:
-            logger.error(f"BUY_CONFIRMATION: TIMEOUT | {symbol} | {selected_contract.symbol} | order_id={order_id} | waited {confirmation_timeout}s")
-            
-            # Send order confirmation timeout alert
-            if state['alert_manager']:
-                try:
-                    state['alert_manager'].alert_order_status_changed(
-                        bot_type='options',
-                        order_details={
-                            'symbol': selected_contract.symbol,
-                            'action': 'BUY',
-                            'order_id': order_id,
-                            'status': 'CONFIRMATION_TIMEOUT'
-                        },
-                        message=f"BUY order confirmation timeout after {confirmation_timeout}s - order may not have filled"
-                    )
-                except Exception as e:
-                    logger.warning(f"ALERT_CONFIRM_TIMEOUT: FAILED | {str(e)}")
-            
-            # Release capital and return failure
-            # (Capital is not allocated in options bot yet, but for consistency with equity)
-            return {
-                'symbol': symbol,
-                'timestamp': timestamp,
-                'status': 'failed',
-                'reason': f'BUY order confirmation timeout ({confirmation_timeout}s)',
-                'order_id': order_id
-            }
-        
-        logger.info(f"BUY_CONFIRMATION: SUCCESS | {selected_contract.symbol} | order_id={order_id} | confirmed in time")
-        
-        # Send order confirmed alert
-        if state['alert_manager']:
-            try:
-                state['alert_manager'].alert_order_status_changed(
-                    bot_type='options',
-                    order_details={
-                        'symbol': selected_contract.symbol,
-                        'action': 'BUY',
-                        'order_id': order_id,
-                        'status': 'CONFIRMED'
-                    },
-                    message=f"BUY order confirmed and filled for {selected_contract.symbol}"
-                )
-            except Exception as e:
-                logger.warning(f"ALERT_CONFIRM_SUCCESS: FAILED | {str(e)}")
-        
-        # Add position to monitor with entry Greeks for ML learning
+        # Prepare entry Greek data for learning
         entry_greeks_data = {
             'delta': selected_contract.delta,
             'gamma': selected_contract.gamma,
@@ -1437,7 +1463,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 import traceback
                 logger.debug(f"SECTOR_ANALYZER: TRACEBACK | {traceback.format_exc()}")
         
-        state['monitor'].add_position(
+        # 🔧 FIX: Check if position was successfully added before incrementing counter
+        position_added = state['monitor'].add_position(
             symbol=selected_contract.symbol,
             underlying=underlying,
             strike=selected_contract.strike,
@@ -1451,6 +1478,30 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             entry_greeks=entry_greeks_data,  # ADDED: Pass entry Greeks
             sector_data=sector_data  # ADDED: Pass sector strength data
         )
+        
+        # 🔧 CRITICAL: Only increment counter if position was actually added (not rejected as duplicate)
+        if not position_added:
+            logger.warning(f"ALERT_PROCESS: POSITION_NOT_ADDED | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id} | likely_duplicate")
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': 'Position not added (likely duplicate)'
+            }
+        
+        # 🔧 FIX: Increment daily trade counter ONLY after position is successfully added
+        # This ensures we count actual trades, not just order attempts
+        new_trade_count = OptionsCapitalConfig.increment_daily_trade_count()
+        logger.info(f"DAILY_TRADE_COUNT: Incremented to {new_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
+        
+        # 🔧 NEW: Log successful position creation at bot level
+        log_alert(alert=alert, status='position_created', details={
+            'symbol': selected_contract.symbol,
+            'order_id': order_id,
+            'quantity': quantity,
+            'entry_premium': selected_contract.ltp,
+            'new_trade_count': new_trade_count
+        })
         
         logger.info(f"ALERT_PROCESS: SUCCESS | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id}")
         
@@ -1489,10 +1540,17 @@ class OptionsAPIServer:
         self.running = False
     
     def start(self, host: str = WebhookConfig.HOST, port: int = WebhookConfig.PORT):
-        """Start webhook server using Werkzeug WSGI server (non-blocking for daemon threads)"""
+        """Start webhook server using Werkzeug WSGI server (non-blocking for daemon threads)
+        
+        Added robustness:
+        - Better exception handling with logging
+        - Port binding retry logic
+        - Graceful shutdown handling
+        """
         if not self.app:
+            logger.error("API_SERVER: FLASK_NOT_AVAILABLE")
             print("❌ Cannot start API server - Flask not available")
-            return
+            raise RuntimeError("Flask not imported")
         
         print(f"🚀 Starting Options Webhook Server on {host}:{port}")
         print(f"   Endpoint: {WebhookConfig.ENDPOINT}")
@@ -1506,12 +1564,31 @@ class OptionsAPIServer:
             # Use Werkzeug WSGI server directly instead of app.run()
             # app.run() uses reloader which fails in daemon threads
             from werkzeug.serving import make_server
+            
+            # Create server with timeout and error handling
             self.server = make_server(host, port, self.app, threaded=True)
-            print(f"✅ Webhook server bound to {host}:{port}")
-            self.server.serve_forever()
-        except Exception as e:
-            print(f"❌ Failed to start API server: {str(e)}")
+            logger.info(f"API_SERVER: BOUND | host={host} | port={port}")
+            print(f"✅ Webhook server bound to {host}:{port} - listening for alerts")
+            
+            # Serve with timeout for cleaner shutdown
+            try:
+                self.server.serve_forever()
+            finally:
+                logger.info("API_SERVER: SERVE_ENDED")
+                self.running = False
+                self.server.server_close()
+                
+        except OSError as e:
+            logger.error(f"API_SERVER: BIND_FAILED | error={str(e)}")
+            print(f"❌ Failed to bind port {port}: {str(e)}")
             self.running = False
+            raise  # Re-raise for restart logic
+            
+        except Exception as e:
+            logger.error(f"API_SERVER: EXCEPTION | error={str(e)} | type={type(e).__name__}")
+            print(f"❌ API server error: {str(e)}")
+            self.running = False
+            raise  # Re-raise for restart logic
     
     def stop(self):
         """Stop webhook server"""

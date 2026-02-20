@@ -1115,7 +1115,50 @@ class AngelOneOptionsBroker:
                 contract.ask = ltp * 1.02
                 logger.debug(f"CHAIN_FETCH: ATM {contract_data['contract_type']} | {symbol} | ltp=₹{ltp:.2f}")
             else:
-                logger.debug(f"CHAIN_FETCH: ATM {contract_data['contract_type']} without LTP | {symbol}")
+                # ⚠️ CRITICAL FIX: Retry LTP fetch if not available on first attempt
+                # This happens at market open when broker data isn't synced yet
+                logger.warning(f"CHAIN_FETCH: MISSING_LTP | {contract_data['contract_type']} | {symbol} | retrying...")
+                
+                import time
+                max_retries = 3
+                retry_delay = 0.5  # 500ms between retries
+                
+                for attempt in range(max_retries):
+                    try:
+                        time.sleep(retry_delay)
+                        single_ltp = self.get_ltp_bulk([symbol], exchange="NFO")
+                        
+                        if symbol in single_ltp and single_ltp[symbol] and single_ltp[symbol] > 0:
+                            ltp = single_ltp[symbol]
+                            contract.ltp = ltp
+                            contract.bid = ltp * 0.98
+                            contract.ask = ltp * 1.02
+                            logger.info(f"CHAIN_FETCH: RETRY_SUCCESS | {symbol} | ltp=₹{ltp:.2f} (attempt {attempt+1}/{max_retries})")
+                            break
+                    except Exception as retry_error:
+                        logger.debug(f"CHAIN_FETCH: RETRY_FAILED | {symbol} | attempt {attempt+1}/{max_retries} | {str(retry_error)}")
+                        continue
+                
+                # If still no LTP after retries, use conservative fallback
+                if contract.ltp == 0.0:
+                    # Use estimated premium based on strike distance from underlying
+                    # This prevents qty=0 orders by ensuring a valid minimum premium
+                    if underlying and current_price:
+                        distance_from_atm = abs(strike - current_price)
+                        # For OTM options: premium ≈ (distance * underlying_volatility)
+                        # Estimate: 1% of strike value as fallback minimum premium
+                        fallback_premium = max(1.0, strike * 0.01)  # At least ₹1 or 1% of strike
+                        contract.ltp = fallback_premium
+                        contract.bid = fallback_premium * 0.98
+                        contract.ask = fallback_premium * 1.02
+                        logger.warning(f"CHAIN_FETCH: USING_FALLBACK_PREMIUM | {symbol} | fallback=₹{fallback_premium:.2f} (estimated {distance_from_atm:.0f} pts from ATM)")
+                    else:
+                        logger.error(f"CHAIN_FETCH: CANNOT_ESTIMATE_PREMIUM | {symbol} | no fallback available")
+                        # Last resort: use ₹1 to prevent qty=0
+                        contract.ltp = 1.0
+                        contract.bid = 0.98
+                        contract.ask = 1.02
+                        logger.warning(f"CHAIN_FETCH: USING_MINIMUM_PREMIUM | {symbol} | ltp=₹1.00 (fallback minimum)")
             
             # 🔴 ESTIMATE GREEKS if broker didn't provide them
             # Calculate time to expiry in days
@@ -1815,6 +1858,12 @@ class AngelOneOptionsBroker:
         """
         🔧 CRITICAL FIX: Wait for BUY order confirmation before proceeding to SL placement.
         
+        ⚡ SAFETY FIRST - REVERTED TO STABLE TIMEOUT:
+        - Orders MUST be confirmed and recorded before SL placement
+        - 30 seconds = safe margin for broker API response + recording
+        - Prevents losing trades due to premature timeout
+        - Better to wait slightly longer than lose order execution records
+        
         This prevents the race condition where:
         - BUY order is sent to broker
         - Before BUY is confirmed, monitoring starts checking for exits
@@ -1823,7 +1872,7 @@ class AngelOneOptionsBroker:
         
         Args:
             symbol: Options contract symbol (e.g., BANKNIFTY25DEC47000CE)
-            timeout: Maximum seconds to wait for confirmation (default 30s)
+            timeout: Maximum seconds to wait for confirmation (default 30s, REVERTED from 5s)
         
         Returns:
             True if BUY confirmed and filled, False if timeout/failed/not found
@@ -1836,6 +1885,13 @@ class AngelOneOptionsBroker:
         order_id = pending_order.get('order_id')
         quantity = pending_order.get('quantity')
         
+        # PAPER MODE: Auto-confirm immediately (no broker confirmation needed)
+        if OptionsTradingConfig.TRADING_MODE == "PAPER":
+            logger.info(f"BUY_CONFIRM: PAPER MODE | {symbol} | order_id={order_id} | qty={quantity} | AUTO_CONFIRMED")
+            self.pending_buy_orders[symbol]['status'] = 'FILLED'
+            return True
+        
+        # LIVE MODE: Wait for broker confirmation
         logger.info(f"BUY_CONFIRM: Waiting for BUY confirmation | {symbol} | order_id={order_id} | qty={quantity} | timeout={timeout}s")
         
         start_time = time.time()
