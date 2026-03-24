@@ -216,7 +216,9 @@ class OptionPosition:
                  entry_time: datetime,
                  order_id: str = "",
                  underlying_alert_price: Optional[float] = None,
-                 sector_data: Optional[Dict[str, Any]] = None):
+                 sector_data: Optional[Dict[str, Any]] = None,
+                 market_trend: Optional[str] = None,
+                 trend_strength: Optional[float] = None):
         self.symbol = symbol
         self.underlying = underlying
         self.strike = strike
@@ -243,6 +245,11 @@ class OptionPosition:
             }
         else:
             self.sector_data = sector_data
+
+        # Market trend at entry time (from Pine Script alert)
+        # Stored for ML training: learn how each symbol behaves per trend
+        self.market_trend   = (market_trend or 'NEUTRAL').strip().upper()
+        self.trend_strength = trend_strength  # raw emaSpread % from Pine Script
         
         # Current state
         self.current_premium = entry_premium
@@ -406,6 +413,7 @@ class OptionPosition:
         
         return {
             'symbol': self.symbol,
+            'underlying': self.underlying,
             'entry_premium': self.entry_premium,
             'entry_premium_total': self.entry_premium * self.quantity,
             'exit_premium': exit_premium,
@@ -448,6 +456,9 @@ class OptionPosition:
             'sector_participation': self.sector_data.get('sector_participation') if self.sector_data is not None else None,
             'sector_bullish': self.sector_data.get('sector_bullish') if self.sector_data is not None else None,
             'sector_check': "PASS" if (self.sector_data is not None and self.sector_data.get('sector_bullish', False)) else "FAIL",
+            # Market trend at entry (Pine Script 7.18-E) — used for ML trend analysis
+            'market_trend':   self.market_trend,
+            'trend_strength': self.trend_strength,
         }
     
     # =========================================================================
@@ -874,6 +885,13 @@ class OptionPositionMonitor:
         self.positions_file = BASE_DIR / "data" / "option_positions.json"
         self.pnl_history_file = BASE_DIR / "data" / "option_pnl_history.json"
         
+        # Thread-safety: prevent concurrent close_position() calls for the same symbol.
+        # The async sentiment-exit thread and the main monitor loop both call close_position(),
+        # so without a guard a race can place two SELL orders (creating a naked short).
+        import threading as _th
+        self._closing_lock = _th.Lock()
+        self._closing_symbols: set = set()
+        
         # Bucket manager for bulk LTP fetching (optimization)
         # Uses buckets to distribute API calls: don't fetch all 100 positions in one call
         # 🔧 CRITICAL FIX: bucket_size increased from 5 to 50 to fix rate limiting
@@ -908,7 +926,9 @@ class OptionPositionMonitor:
                     order_id: str,
                     underlying_alert_price: Optional[float] = None,
                     entry_greeks: Optional[Dict[str, float]] = None,
-                    sector_data: Optional[Dict[str, Any]] = None) -> bool:
+                    sector_data: Optional[Dict[str, Any]] = None,
+                    market_trend: Optional[str] = None,
+                    trend_strength: Optional[float] = None) -> bool:
         """Add new option position"""
         try:
             # 🔧 CRITICAL FIX: Prevent duplicate position additions from retry logic
@@ -963,7 +983,9 @@ class OptionPositionMonitor:
                 entry_time=datetime.now(),
                 order_id=order_id,
                 underlying_alert_price=underlying_alert_price,
-                sector_data=sector_data
+                sector_data=sector_data,
+                market_trend=market_trend,
+                trend_strength=trend_strength
             )
             
             # DEBUG: Log what sector_data was stored in position
@@ -988,8 +1010,8 @@ class OptionPositionMonitor:
             
             self.positions[symbol] = position
             
-            # 🔧 INITIALIZE HARD SL: -20% from entry premium
-            position.hard_sl_price = position.entry_premium * 0.80  # -20% SL
+            # 🔧 INITIALIZE HARD SL: use configured SL% from entry premium
+            position.hard_sl_price = position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
             
             # 🔧 PRE-CALCULATE TRIAL_SL THRESHOLD based on current market conditions
             # This ensures STALE_CONSOLIDATION can use the expected threshold without waiting for next monitoring cycle
@@ -1151,6 +1173,37 @@ class OptionPositionMonitor:
                 print(f"⚠️ Position {symbol} not found")
                 return None
             
+            # 🔴 DOUBLE-CLOSE GUARD: Async threads (sentiment exit, BUY confirmation) and the
+            # main monitor loop can both call close_position() for the same symbol at the
+            # same time. Without this guard both threads place a market SELL, producing a
+            # naked short position on the broker.
+            with self._closing_lock:
+                if symbol in self._closing_symbols:
+                    logger.warning(f"POSITION_CLOSE: ALREADY_CLOSING | {symbol} | concurrent call blocked (double-SELL prevented)")
+                    return None
+                self._closing_symbols.add(symbol)
+            
+            try:
+                return self._close_position_inner(symbol, exit_premium, exit_reason)
+            finally:
+                with self._closing_lock:
+                    self._closing_symbols.discard(symbol)
+        except Exception as e:
+            logger.error(f"POSITION_CLOSE: ERROR | {symbol} | {str(e)}")
+            print(f"❌ Error closing position {symbol}: {str(e)}")
+            with self._closing_lock:
+                self._closing_symbols.discard(symbol)
+            return None
+    
+    def _close_position_inner(self, symbol: str, exit_premium: float, exit_reason: str):
+        """Inner close logic (called only after the is_closing guard has been acquired)."""
+        try:
+            logger.debug(f"POSITION_CLOSE: INNER | {symbol} | reason={exit_reason} | premium={exit_premium:.2f}")
+            
+            if symbol not in self.positions:
+                logger.warning(f"POSITION_CLOSE: INNER_NOT_FOUND | {symbol}")
+                return None
+            
             position = self.positions[symbol]
             
             # CAPTURE EXIT GREEKS for ML learning
@@ -1162,33 +1215,41 @@ class OptionPositionMonitor:
                 'iv': position.current_iv
             }
             
-            # 🔴 CRITICAL: Cancel SL order on broker before manual exit
-            # This prevents DOUBLE FILLS when bot exits manually but SL order still exists
+            # 🔴 CRITICAL: Cancel SL order on broker BEFORE placing exit SELL.
+            # If we skip this, both the market SELL (placed here) and the broker's open
+            # SL SELL order can fill → two SELLs → net short position.
+            # Retry up to 3 times so a momentary rate-limit doesn't let both fire.
             if position.sl_order_id and self.broker:
                 logger.info(f"POSITION_CLOSE: Cancelling SL order | {symbol} | order_id={position.sl_order_id}")
-                try:
-                    cancel_success = self.broker.cancel_order(position.sl_order_id, symbol)
-                    if cancel_success:
-                        logger.info(f"POSITION_CLOSE: SL_CANCELLED | {symbol} | order_id={position.sl_order_id}")
-                        log_event("SL_ORDER_CANCELLED",
-                                 f"✅ SL order cancelled before manual exit for {symbol}",
-                                 symbol=symbol,
-                                 sl_order_id=position.sl_order_id,
-                                 exit_reason=exit_reason)
-                    else:
-                        logger.warning(f"POSITION_CLOSE: SL_CANCEL_FAILED | {symbol} | order_id={position.sl_order_id}")
-                        log_event("SL_CANCEL_FAILED",
-                                 f"⚠️ Failed to cancel SL order for {symbol} - may cause double fill",
-                                 symbol=symbol,
-                                 sl_order_id=position.sl_order_id,
-                                 exit_reason=exit_reason,
-                                 risk="Double fill possible")
-                except Exception as cancel_error:
-                    logger.error(f"POSITION_CLOSE: SL_CANCEL_ERROR | {symbol} | {str(cancel_error)}")
-                    log_event("SL_CANCEL_ERROR",
-                             f"❌ Error cancelling SL order for {symbol}: {str(cancel_error)}",
+                cancel_success = False
+                for _cancel_attempt in range(3):
+                    try:
+                        cancel_success = self.broker.cancel_order(position.sl_order_id, symbol)
+                        if cancel_success:
+                            break
+                        if _cancel_attempt < 2:
+                            import time as _t; _t.sleep(0.5)
+                    except Exception as cancel_error:
+                        logger.error(f"POSITION_CLOSE: SL_CANCEL_EXCEPTION (attempt {_cancel_attempt+1}) | {symbol} | {str(cancel_error)}")
+                
+                if cancel_success:
+                    logger.info(f"POSITION_CLOSE: SL_CANCELLED | {symbol} | order_id={position.sl_order_id}")
+                    log_event("SL_ORDER_CANCELLED",
+                             f"✅ SL order cancelled before manual exit for {symbol}",
                              symbol=symbol,
-                             error=str(cancel_error))
+                             sl_order_id=position.sl_order_id,
+                             exit_reason=exit_reason)
+                else:
+                    logger.error(f"POSITION_CLOSE: SL_CANCEL_FAILED_ALL_ATTEMPTS | {symbol} | order_id={position.sl_order_id} | DOUBLE-FILL RISK - proceeding with SELL anyway")
+                    log_event("SL_CANCEL_FAILED",
+                             f"⚠️ Failed to cancel SL order for {symbol} after 3 attempts - double fill risk",
+                             symbol=symbol,
+                             sl_order_id=position.sl_order_id,
+                             exit_reason=exit_reason,
+                             risk="Double fill possible")
+                # Clear sl_order_id regardless - we don't want retry_failed_sl_orders
+                # attempting to place another SL after the position is being closed
+                position.sl_order_id = None
             
             # 🔴 CRITICAL: Place SELL order to broker in LIVE mode with RETRY LOGIC
             # This ensures position is actually closed on broker, not just locally
@@ -1385,7 +1446,7 @@ class OptionPositionMonitor:
             
             return pnl_info
         except Exception as e:
-            logger.error(f"POSITION_CLOSE: ERROR | {symbol} | {str(e)}")
+            logger.error(f"POSITION_CLOSE: INNER_ERROR | {symbol} | {str(e)}")
             print(f"❌ Error closing position {symbol}: {str(e)}")
             return None
     
@@ -1410,26 +1471,30 @@ class OptionPositionMonitor:
             logger.debug(f"PLACE_SL: Already placed | {symbol} | order_id={position.sl_order_id}")
             return True
         
-        # Calculate -20% SL from entry premium with 10 paise rounding
-        sl_premium_raw = position.entry_premium * 0.80  # -20%
+        # Calculate SL from entry premium using configured SL% with 10 paise rounding
+        sl_premium_raw = position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
         sl_premium = self._round_to_10_paise(sl_premium_raw)
         
-        logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-20%)")
+        logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-{OptionsTradingConfig.STOP_LOSS_PERCENTAGE:.0f}%)")
         
         try:
             # Place SELL order with STOPLOSS-LIMIT type (avoids slippage)
-            # STOPLOSS_LIMIT: When SL price is hit, executes as LIMIT at that price
-            # Prevents gap-down slippage that happens with STOPLOSS_MARKET
+            # allow_queue=False: if rate-limited, return None so retry_failed_sl_orders()
+            # handles retries. We MUST know the real broker order_id — storing a QUEUED_
+            # marker means the cancel in close_position() will use a garbage ID and fail,
+            # leaving a live SL on the broker that fires after the exit SELL → SHORT.
             sl_order_id = self.broker.place_options_order(
                 symbol=symbol,
                 action='SELL',
                 quantity=position.quantity,
                 price=sl_premium,
                 order_type='STOPLOSS_LIMIT',
-                product_type='INTRADAY'
+                product_type='INTRADAY',
+                allow_queue=False  # ❌ NEVER queue SL orders — must have real order_id
             )
             
-            if sl_order_id:
+            if sl_order_id and not str(sl_order_id).startswith("QUEUED_"):
+                position.sl_order_id = sl_order_id
                 position.sl_order_id = sl_order_id
                 position.sl_order_price = sl_premium
                 self._save_positions()
@@ -1580,7 +1645,15 @@ class OptionPositionMonitor:
                         new_price=new_sl_price,
                         quantity=position.quantity
                     )
-                    if not result:
+                    if result and not str(result).startswith("QUEUED_"):
+                        # AngelOne's modifyOrder returns a NEW order_id for the modified order.
+                        # We MUST update sl_order_id here — cancel_order() in close_position()
+                        # uses sl_order_id. If we don't update it, cancel sends the OLD id,
+                        # the broker rejects it, and the modified SL stays live → fires → SHORT.
+                        if result != order_id:
+                            logger.info(f"MODIFY_SL: ORDER_ID_UPDATED | {symbol} | old={order_id} | new={result}")
+                        position.sl_order_id = result
+                    elif not result:
                         logger.warning(f"MODIFY_SL: Broker API failed | {symbol} | order_id={order_id}")
                 except Exception as e:
                     logger.warning(f"MODIFY_SL: Broker API error | {symbol} | {str(e)}")
@@ -1644,7 +1717,9 @@ class OptionPositionMonitor:
             
             stats['attempted'] += 1
             position.sl_retry_count += 1
-            current_sl_price = position.entry_price * (1 - OptionsTradingConfig.SL_PERCENTAGE / 100)
+            # BUG FIX #7: Use entry_premium (not entry_price) — consistent with place_stop_loss_order()
+            current_sl_price = self._round_to_10_paise(
+                position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100))
             
             logger.warning(f"RETRY_SL: Attempting SL placement (retry #{position.sl_retry_count}/{max_sl_retries}) | {symbol} | sl_price=₹{current_sl_price:.2f}")
             
@@ -1662,15 +1737,15 @@ class OptionPositionMonitor:
                 if self.broker and OptionsTradingConfig.TRADING_MODE == "LIVE":
                     sl_order_id = self.broker.place_options_order(
                         symbol=symbol,
-                        action='BUY',  # BUY to close the short position
+                        action='SELL',          # BUG FIX #5: Must be SELL (bot is LONG options)
                         quantity=position.quantity,
                         price=current_sl_price,
-                        order_type='STOPLOSS-MARKET',
+                        order_type='STOPLOSS_LIMIT',   # BUG FIX #6: underscore, matches place_stop_loss_order()
                         product_type='INTRADAY',
-                        trigger_price=current_sl_price
+                        allow_queue=False  # ❌ NEVER queue SL — must have real order_id
                     )
                     
-                    if sl_order_id:
+                    if sl_order_id and not str(sl_order_id).startswith("QUEUED_"):
                         position.sl_order_id = sl_order_id
                         stats['placed'] += 1
                         logger.info(f"RETRY_SL: SUCCESS | {symbol} | order_id={sl_order_id} | retry_count={position.sl_retry_count}")
@@ -1904,51 +1979,74 @@ class OptionPositionMonitor:
                 
                 # 🔴 CRITICAL: Save positions to disk so state persists across bot restarts
                 self._save_positions()
+                
+                # 🔴 LIVE: Push TRIAL_SL activation price to broker SL order
+                # Moves broker SL from initial -10% up to the activation milestone
+                self.modify_sl_order(symbol, position.trial_sl_price, position.sl_order_id)
             
             # ============================================================
-            # PHASE 3: Update TRIAL SL as price moves up (STAIRCASE LOCKING)
+            # PHASE 3: Update TRIAL SL as price moves up (TRAILING FROM PEAK)
             # ============================================================
             if is_trial_sl_enabled:
-                # 🎯 STAIRCASE LOCKING: Lock profit at 5% milestones
-                # Peak 7% → Lock at 5%, Peak 12% → Lock at 10%, Peak 17% → Lock at 15%, etc.
-                
-                # Calculate which 5% milestone we've crossed
-                peak_gain_milestone = int(peak_gain_percent / 5) * 5  # Round down to nearest 5%
-                
-                # TRIAL_SL should be at the milestone (not peak * 0.95)
-                if peak_gain_milestone >= trial_sl_threshold:
-                    # Calculate SL price based on milestone percentage
-                    new_trial_sl = position.entry_premium * (1 + peak_gain_milestone / 100)
-                    
-                    # Only update if new SL is higher than current
-                    if position.trial_sl_price is None or new_trial_sl > position.trial_sl_price:
-                        old_trial_sl = position.trial_sl_price
-                        position.trial_sl_price = new_trial_sl
-                        # 🔴 IMPORTANT: Update legacy trailing_sl tracking for analysis
-                        position.last_trailing_sl_price = new_trial_sl
-                        position.trailing_sl_update_count += 1
-                        position.trial_sl_update_count += 1
-                        
-                        if old_trial_sl is not None:
-                            sl_increase = round(new_trial_sl - old_trial_sl, 2)
-                            log_event("TRIAL_SL_UPDATED",
-                                     f"🔺 TRIAL SL Updated for {symbol} (locked at {peak_gain_milestone}% milestone)",
-                                     symbol=symbol,
-                                     update_count=position.trial_sl_update_count,
-                                     milestone=peak_gain_milestone,
-                                     old_trial_sl=round(old_trial_sl, 2),
-                                     new_trial_sl=round(new_trial_sl, 2),
-                                     sl_increase=sl_increase,
-                                     peak_premium=position.highest_premium,
-                                     peak_gain=round(peak_gain_percent, 2),
-                                     current_premium=position.current_premium,
-                                     gain_percent=round(gain_percent, 2))
-                            
-                            logger.debug(f"TRIAL_SL_UPDATED: {symbol} | Milestone: {peak_gain_milestone}% | "
-                                       f"TRIAL SL: ₹{old_trial_sl:.2f} → ₹{new_trial_sl:.2f} | Increase: ₹{sl_increase}")
-                            
-                            # 🔴 CRITICAL: Save positions to disk so updated SL persists across bot restarts
-                            self._save_positions()
+                # 🎯 TRAILING FROM PEAK: SL = max(activation_threshold, peak - TRAILING_GAP)
+                #
+                # WHY: Staircase (int(peak/5)*5) had a 5%-wide dead zone — any peak between
+                # 5.0% and 9.9% locked at 5%, leaving 4.9% on the table.  Smaller steps (2%)
+                # solve the capture problem but create a noise problem: SL sits only 0-1%
+                # below current price, firing on normal options bid-ask wiggle.
+                #
+                # TRAILING GAP = 3%: always keeps SL exactly 3% below the all-time peak.
+                #   Peak  5% → SL = max(5%, 2%)  = 5%   (activation floor holds)
+                #   Peak  8% → SL = max(5%, 5%)  = 5%   (no change, floor holds)
+                #   Peak  9% → SL = max(5%, 6%)  = 6%   ← better than old 5%
+                #   Peak 12% → SL = max(5%, 9%)  = 9%   ← better than old 10% (stay in longer)
+                #   Peak 15% → SL = max(5%, 12%) = 12%  ← better than old 10%
+                #   Peak 29% → SL = max(5%, 26%) = 26%  ← better than old 25%
+                #
+                # The 3% gap means a normal intraday options wiggle (1-2%) never fires the SL.
+                TRAILING_GAP = 3.0  # % breathing room between SL and all-time peak
+
+                trailing_sl_pct = max(trial_sl_threshold, peak_gain_percent - TRAILING_GAP)
+                new_trial_sl = position.entry_premium * (1 + trailing_sl_pct / 100)
+
+                # Only update if new SL is meaningfully higher than current (avoid micro-updates
+                # that spam broker modify_sl_order calls on every monitoring tick)
+                MIN_SL_MOVE_PCT = 0.5   # at least 0.5% premium move before pushing to broker
+                min_move = position.entry_premium * MIN_SL_MOVE_PCT / 100
+                current_sl = position.trial_sl_price or 0.0
+
+                if new_trial_sl > current_sl + min_move:
+                    old_trial_sl = position.trial_sl_price
+                    position.trial_sl_price = new_trial_sl
+                    # 🔴 IMPORTANT: Update legacy trailing_sl tracking for analysis
+                    position.last_trailing_sl_price = new_trial_sl
+                    position.trailing_sl_update_count += 1
+                    position.trial_sl_update_count += 1
+
+                    if old_trial_sl is not None:
+                        sl_increase = round(new_trial_sl - old_trial_sl, 2)
+                        log_event("TRIAL_SL_UPDATED",
+                                 f"🔺 TRIAL SL Updated for {symbol} (peak-trail: peak={peak_gain_percent:.1f}% - {TRAILING_GAP:.0f}% → locked at {trailing_sl_pct:.1f}%)",
+                                 symbol=symbol,
+                                 update_count=position.trial_sl_update_count,
+                                 trailing_gap=TRAILING_GAP,
+                                 trailing_sl_pct=round(trailing_sl_pct, 2),
+                                 old_trial_sl=round(old_trial_sl, 2),
+                                 new_trial_sl=round(new_trial_sl, 2),
+                                 sl_increase=sl_increase,
+                                 peak_premium=position.highest_premium,
+                                 peak_gain=round(peak_gain_percent, 2),
+                                 current_premium=position.current_premium,
+                                 gain_percent=round(gain_percent, 2))
+
+                        logger.debug(f"TRIAL_SL_UPDATED: {symbol} | Peak: {peak_gain_percent:.1f}% - {TRAILING_GAP:.0f}% = "
+                                   f"Lock: {trailing_sl_pct:.1f}% | TRIAL SL: ₹{old_trial_sl:.2f} → ₹{new_trial_sl:.2f} | Δ₹{sl_increase}")
+
+                        # 🔴 CRITICAL: Save positions to disk so updated SL persists across bot restarts
+                        self._save_positions()
+
+                        # 🔴 LIVE: Modify broker SL order to new trailing price
+                        self.modify_sl_order(symbol, new_trial_sl, position.sl_order_id)
             
             # ============================================================
             # CHECK SL HIT: Determine effective SL and check if hit
@@ -2018,8 +2116,8 @@ class OptionPositionMonitor:
             position = self.positions[symbol]
             
             if not position.hard_sl_price:
-                logger.warning(f"HARD_SL_CHECK: {symbol} | No hard SL price set, using default -20%")
-                position.hard_sl_price = position.entry_premium * 0.80
+                logger.warning(f"HARD_SL_CHECK: {symbol} | No hard SL price set, recalculating from config")
+                position.hard_sl_price = position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
             
             # Check if current premium has hit hard SL
             if position.current_premium <= position.hard_sl_price:

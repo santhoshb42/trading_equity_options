@@ -6,7 +6,7 @@ Validates TradingView alerts for options trading:
 - IV conditions (percentile thresholds)
 - Greeks constraints
 - Expiry window validation
-- Directional signal mapping (BUY→Long CE, SELL→Long PE)
+- Directional signal mapping (BUY_PUT→Long PE)
 """
 
 import json
@@ -36,26 +36,30 @@ class OptionsSignalValidator:
         try:
             # Extract basic fields
             symbol = alert.get('symbol', '').upper().strip()
-            action = alert.get('action', '').upper()
+            raw_action = alert.get('action', '').upper()
+            action = OptionsSignalValidator._normalize_alert_action(raw_action)
             confidence = float(alert.get('confidence', 0))
             # Use score if provided, otherwise use confidence as fallback
             score = float(alert.get('score', confidence))
             verdict = alert.get('verdict', 0)
             
-            logger.debug(f"SIGNAL_VALIDATE: START | symbol={symbol} | action={action} | conf={confidence}% | score={score}")
+            logger.debug(
+                f"SIGNAL_VALIDATE: START | symbol={symbol} | raw_action={raw_action} | "
+                f"normalized_action={action} | conf={confidence}% | score={score}"
+            )
             
             # Validation 1: Symbol and action
             if not symbol or action not in ['BUY', 'SELL']:
                 message = "Invalid symbol or action"
-                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={action}")
-                log_signal_validation(symbol, False, message, action=action)
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={raw_action}")
+                log_signal_validation(symbol, False, message, action=raw_action)
                 return False, message, None
             
-            # Validation 1B: PE only - reject BUY actions (CE trades)
-            if action == 'BUY':
+            # Validation 1B: PE only - raw BUY is a CE trade and must be rejected
+            if raw_action == 'BUY':
                 message = f"PE only strategy: BUY action (CE) rejected"
-                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={action}")
-                log_signal_validation(symbol, False, message, action=action)
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={raw_action}")
+                log_signal_validation(symbol, False, message, action=raw_action)
                 return False, message, None
             
             # Validation 2: Signal quality thresholds - use combined confidence/score check
@@ -154,7 +158,9 @@ class OptionsSignalValidator:
             
             processed_signal = {
                 'underlying': underlying,
-                'action': action,  # BUY = Long CE, SELL = Long PE
+                'action': action,  # Internal directional action: SELL means bearish PE setup
+                'original_action': raw_action,
+                'execution_action': 'BUY',
                 'symbol': symbol,  # Original symbol from alert
                 'confidence': confidence,
                 'score': score,
@@ -168,7 +174,7 @@ class OptionsSignalValidator:
             logger.info(f"SIGNAL_VALIDATE: PASSED | symbol={symbol} | action={action} | contract={processed_signal['recommended_contract']} | iv={processed_signal['iv_percentile']:.1f}%")
             log_signal_validation(
                 symbol, True, "Signal validation passed",
-                action=action,
+                action=raw_action,
                 underlying=underlying,
                 confidence=confidence,
                 score=score,
@@ -193,6 +199,15 @@ class OptionsSignalValidator:
         Returns None if symbol cannot be mapped.
         """
         symbol_upper = symbol.upper()
+
+        # TradingView -> AngelOne F&O symbol remaps.
+        TV_SYMBOL_REMAP = {
+            'BAJAJ_AUTO': 'BAJAJ-AUTO',
+            'M_M': 'M&M',
+            'M_MFIN': 'M&MFIN',
+        }
+        if symbol_upper in TV_SYMBOL_REMAP:
+            symbol_upper = TV_SYMBOL_REMAP[symbol_upper]
         
         # Check if it's already an index
         for underlying in OptionsTradingConfig.UNDERLYING_INDEXES:
@@ -231,6 +246,14 @@ class OptionsSignalValidator:
             return "CE"  # Call (bullish)
         else:  # SELL
             return "PE"  # Put (bearish)
+
+    @staticmethod
+    def _normalize_alert_action(action: str) -> str:
+        """Normalize TradingView PUT payloads to the internal bearish signal convention."""
+        action_upper = action.upper().strip()
+        if action_upper == "BUY_PUT":
+            return "SELL"
+        return action_upper
     
     @staticmethod
     def check_greeks_constraints(greeks: Dict[str, float]) -> Tuple[bool, str]:

@@ -1024,6 +1024,24 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 broker = state['broker']
                 market_data = {}
                 fetch_results = {}
+
+                # 0. ENTRY PREMIUM (PE bot should use nearest ATM PE premium)
+                try:
+                    pe_contracts = [c for c in chain.contracts.values() if c.contract_type == 'PE' and c.ltp > 0]
+                    if pe_contracts:
+                        spot_price = float(chain.atm_strike or alert_price or 0)
+                        nearest_pe = min(pe_contracts, key=lambda c: abs(c.strike - spot_price))
+                        market_data['entry_premium'] = nearest_pe.ltp
+                        logger.debug(
+                            f"ENTRY_FILTER: entry_premium from nearest ATM PE | {underlying} | "
+                            f"strike={nearest_pe.strike} | ltp=₹{nearest_pe.ltp:.2f}"
+                        )
+                    else:
+                        market_data['entry_premium'] = 0
+                        logger.debug(f"ENTRY_FILTER: no PE contracts with ltp>0 in chain | {underlying}")
+                except Exception as e:
+                    market_data['entry_premium'] = 0
+                    logger.debug(f"ENTRY_FILTER: entry_premium error | {underlying} | {str(e)[:40]}")
                 
                 # 1. MARKET SENTIMENT (PCR + OI)
                 try:
@@ -1196,17 +1214,17 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         contract_type = processed['recommended_contract']
         
         # VALIDATION: Check if fetched chain has strikes to cover alert price
-        # If alert price is outside available strikes, refresh chain with expanded range
+        # For the PUT bot, validate against PE strikes because we always buy PE contracts.
+        # If alert price is outside the available PE strike range, refresh the chain.
         if chain and hasattr(chain, 'contracts') and chain.contracts:
-            # Extract available CE strikes
-            ce_strikes = []
+            pe_strikes = []
             for contract in chain.contracts.values():
-                if contract.contract_type == 'CE':
-                    ce_strikes.append(contract.strike)
+                if contract.contract_type == 'PE':
+                    pe_strikes.append(contract.strike)
             
-            if ce_strikes and alert_price > 0:
-                min_strike = min(ce_strikes)
-                max_strike = max(ce_strikes)
+            if pe_strikes and alert_price > 0:
+                min_strike = min(pe_strikes)
+                max_strike = max(pe_strikes)
                 
                 # If alert price is outside the available range, fetch fresh chain
                 if alert_price < min_strike or alert_price > max_strike:
@@ -1232,7 +1250,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.debug(f"ALERT_PROCESS: ATM_CONTRACTS | ce={ce.symbol} | pe={pe.symbol}")
         
-        # Select contract based on action (contract_type was used in get_atm_contracts for strike selection)
+        # Select the actual tradable contract. For the PUT bot this should resolve to the PE leg.
         selected_contract = ce if contract_type == 'CE' else pe
         
         logger.debug(f"ALERT_PROCESS: SELECTED | contract={selected_contract.symbol} | type={contract_type} | ltp=₹{selected_contract.ltp:.2f}")
@@ -1488,6 +1506,27 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'status': 'rejected',
                 'reason': 'Position not added (likely duplicate)'
             }
+
+        # Match CE bot behavior: verify in the background that the broker actually filled the BUY.
+        # Without this, a broker-side rejection in LIVE mode can leave a phantom PE position open.
+        if OptionsTradingConfig.TRADING_MODE == "LIVE" and state.get('broker'):
+            _sym = selected_contract.symbol
+            _broker = state['broker']
+            _mon = state['monitor']
+
+            def _verify_buy():
+                try:
+                    confirmed = _broker.wait_for_buy_confirmation(_sym, timeout=30)
+                    if not confirmed:
+                        logger.error(f"BUY_CONFIRMATION: REJECTED_BY_BROKER | {_sym} | removing phantom position")
+                        _mon.close_position(_sym, 0, "BUY_REJECTED_BY_BROKER")
+                    else:
+                        logger.info(f"BUY_CONFIRMATION: FILLED | {_sym}")
+                except Exception as _e:
+                    logger.warning(f"BUY_CONFIRMATION: ERROR | {_sym} | {str(_e)}")
+
+            import threading as _th
+            _th.Thread(target=_verify_buy, daemon=True, name=f"BuyConfirm_{_sym}").start()
         
         # 🔧 FIX: Increment daily trade counter ONLY after position is successfully added
         # This ensures we count actual trades, not just order attempts
@@ -1515,7 +1554,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'strike': selected_contract.strike,
             'expiry': expiry,
             'entry_premium': selected_contract.ltp,
-            'message': f'{action} {contract_type} position opened',
+            'message': f"{processed.get('execution_action', 'BUY')} {contract_type} position opened",
             'neural_ml': neural_ml_metadata  # ADDED: Include in response for debugging
         }
     

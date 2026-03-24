@@ -118,10 +118,11 @@ def detect_alert_type(payload: Dict[str, Any], raw_payload: Dict[str, Any] = Non
     
     Detection priority:
     1. Check wrapper: "PE_Alerts" vs "Alerts" in raw_payload
-    2. Check signal name: "BUY_CE", "SELL_PE", etc.
-    3. Check symbol suffix: ends with "CE" or "PE"
-    4. Check message/notes field
-    5. Default to "CE" (Call options)
+    2. Check explicit TradingView action/entry_type conventions
+    3. Check signal name
+    4. Check symbol suffix: ends with "CE" or "PE"
+    5. Check message/notes field
+    6. Default to "CE" (Call options)
     
     Returns: "ce", "pe", or "equity"
     """
@@ -136,6 +137,17 @@ def detect_alert_type(payload: Dict[str, Any], raw_payload: Dict[str, Any] = Non
     # Check for standard Alerts wrapper (CE specific)
     if "Alerts" in raw_payload:
         logger.info(f"✓ Detected CE from 'Alerts' wrapper")
+        return 'ce'
+
+    action = str(payload.get('action', '')).upper()
+    entry_type = str(payload.get('entry_type', '')).upper()
+
+    # Check explicit TradingView payload conventions used in this setup
+    if action == 'BUY_PUT' or entry_type.startswith('PUT_'):
+        logger.info(f"✓ Detected PE from TradingView PUT payload")
+        return 'pe'
+    if action == 'BUY':
+        logger.info(f"✓ Detected CE from BUY action")
         return 'ce'
     
     # Check signal/action field for CE/PE
@@ -168,6 +180,32 @@ def detect_alert_type(payload: Dict[str, Any], raw_payload: Dict[str, Any] = Non
     # Default to CE (Call options are more common)
     logger.info(f"⚠️  Could not detect CE/PE from alert, defaulting to CE")
     return 'ce'
+
+
+def normalize_payload_for_target(payload: Dict[str, Any], alert_type: str) -> Dict[str, Any]:
+    """Normalize TradingView payloads into the format expected by the target bot."""
+    normalized_payload = dict(payload)
+
+    if alert_type == 'pe':
+        original_action = str(payload.get('action', ''))
+        original_entry_type = str(payload.get('entry_type', ''))
+
+        if original_action.upper() == 'BUY_PUT':
+            normalized_payload['action'] = 'SELL'
+            normalized_payload['original_action'] = original_action
+            normalized_payload['option_side'] = 'PE'
+
+            if original_entry_type.upper().startswith('PUT_'):
+                normalized_payload['entry_type'] = original_entry_type[4:]
+                normalized_payload['original_entry_type'] = original_entry_type
+
+            logger.info(
+                "🔧 Normalized PE payload | "
+                f"symbol={payload.get('symbol')} | action={original_action}->SELL | "
+                f"entry_type={original_entry_type}->{normalized_payload.get('entry_type', original_entry_type)}"
+            )
+
+    return normalized_payload
 
 
 @app.route('/webhook', methods=['POST'])
@@ -252,6 +290,7 @@ def handle_webhook():
         
         # ✅ INTELLIGENT ROUTING: Detect CE vs PE from wrapper or other fields
         alert_type = detect_alert_type(payload, raw_payload)
+        forward_payload = normalize_payload_for_target(payload, alert_type)
         logger.info(f"🔍 DETECTED: {alert_type.upper()} OPTION ALERT")
         
         # Determine target bot(s)
@@ -277,7 +316,7 @@ def handle_webhook():
             results[bot_type] = result_dict
             
             def forward_to_bot(name=bot_name, url=bot_url, res_dict=result_dict):
-                res_dict['success'] = forward_alert(url, payload, name)
+                res_dict['success'] = forward_alert(url, forward_payload, name)
             
             thread = threading.Thread(target=forward_to_bot, daemon=True, name=f"{bot_type.upper()}Forward")
             thread.start()

@@ -184,7 +184,17 @@ class OptionsSignalValidator:
         Returns None if symbol cannot be mapped.
         """
         symbol_upper = symbol.upper()
-        
+
+        # TradingView → AngelOne F&O symbol name remaps
+        # TradingView uses underscores; AngelOne uses hyphens for some symbols
+        TV_SYMBOL_REMAP = {
+            'BAJAJ_AUTO': 'BAJAJ-AUTO',
+            'M_M':        'M&M',
+            'M_MFIN':     'M&MFIN',
+        }
+        if symbol_upper in TV_SYMBOL_REMAP:
+            symbol_upper = TV_SYMBOL_REMAP[symbol_upper]
+
         # Check if it's already an index
         for underlying in OptionsTradingConfig.UNDERLYING_INDEXES:
             if underlying in symbol_upper:

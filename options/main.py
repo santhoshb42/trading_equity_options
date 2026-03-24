@@ -1026,6 +1026,15 @@ class OptionsTradingBot:
                         except Exception as live_err:
                             logger.debug(f"POSITION_MONITOR: LIVE_DATA_SAVE_FAILED | {str(live_err)}")
                     
+                    # GAP 7 FIX: Drain rate-limiter queue each cycle.
+                    # place_options_order() and modify_sl_order() queue callbacks when the
+                    # token bucket is full.  Without this call those retries would never run.
+                    if self.broker:
+                        try:
+                            self.broker.process_pending_rate_limited_requests()
+                        except Exception as _ql_err:
+                            logger.debug(f"POSITION_MONITOR: QUEUE_DRAIN_ERROR | {str(_ql_err)}")
+                    
                     time.sleep(current_interval)  # Adaptive monitoring interval (default 10s, can go to 8s or 20s)
                 
                 except Exception as e:
@@ -1241,31 +1250,44 @@ if __name__ == "__main__":
     # Prevent multiple instances using PID file with atomic locking
     pid_file = script_dir / "options_bot.pid"
     lock_file = script_dir / ".options_bot.lock"
-    
+
+    def is_our_bot_running(pid: int) -> bool:
+        """Return True only if PID exists AND its cmdline belongs to options/main.py.
+        Prevents false positives when the OS recycles a PID after a reboot."""
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False  # No such process
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b'\x00', b' ').decode(errors='replace')
+            return 'options/main.py' in cmdline
+        except Exception:
+            return False  # Can't verify → treat as stale
+
+    def force_cleanup_stale():
+        for f in (pid_file, lock_file):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
     # Use exclusive file lock for atomic PID check+write
     try:
-        # ENHANCED: Check for stale lock file BEFORE trying to acquire
-        if lock_file.exists() and pid_file.exists():
+        # Pre-check: clean stale lock+pid BEFORE trying to acquire flock
+        if lock_file.exists() or pid_file.exists():
+            stale_pid = None
             try:
-                with open(pid_file, 'r') as f:
-                    lock_pid = int(f.read().strip())
-                # Check if that PID is actually running
-                try:
-                    os.kill(lock_pid, 0)
-                except OSError:
-                    # PID is stale - force clean the lock file
-                    print(f"🧹 Cleaning stale lock file (PID {lock_pid} not running)")
-                    try:
-                        lock_file.unlink()
-                        pid_file.unlink()
-                    except:
-                        pass
-            except:
+                if pid_file.exists():
+                    stale_pid = int(pid_file.read_text().strip())
+            except Exception:
                 pass
-        
+            if stale_pid and not is_our_bot_running(stale_pid):
+                print(f"🧹 Cleaning stale PID/lock files (PID {stale_pid} is not our bot)")
+                force_cleanup_stale()
+
         # Open lock file for writing (create if doesn't exist)
         lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_WRONLY, 0o644)
-        
+
         try:
             # Try to get exclusive lock (non-blocking)
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1274,24 +1296,20 @@ if __name__ == "__main__":
             print(f"   If bot is not running, delete: {lock_file}")
             os.close(lock_fd)
             sys.exit(1)
-        
-        # Lock acquired - check if PID file exists with running process
+
+        # Lock acquired - check if PID file exists with a genuinely running bot
         if pid_file.exists():
             try:
-                with open(pid_file, 'r') as f:
-                    old_pid = int(f.read().strip())
-                
-                # Check if process is actually running
-                try:
-                    os.kill(old_pid, 0)  # Signal 0 just checks if process exists
+                old_pid = int(pid_file.read_text().strip())
+                if is_our_bot_running(old_pid):
                     print(f"❌ ERROR: Options bot already running (PID {old_pid})")
                     print(f"   If bot is not running, delete: {pid_file}")
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
                     os.close(lock_fd)
                     sys.exit(1)
-                except OSError:
-                    # Process doesn't exist, remove stale PID file
-                    print(f"⚠️  Removing stale PID file (process {old_pid} not found)")
+                else:
+                    # Stale PID file (process dead or recycled by OS)
+                    print(f"⚠️  Removing stale PID file (process {old_pid} is not our bot)")
                     pid_file.unlink()
             except Exception as e:
                 print(f"⚠️  Error checking PID file: {e}")

@@ -1038,7 +1038,10 @@ class OptionPositionMonitor:
             decay_monitor = get_decay_monitor()
             # Parse expiry date to calculate days remaining
             try:
-                expiry_date = datetime.strptime(expiry, "%d-%b-%Y")
+                try:
+                    expiry_date = datetime.strptime(expiry, "%Y-%m-%d")
+                except ValueError:
+                    expiry_date = datetime.strptime(expiry, "%d-%b-%Y")
                 days_to_expiry = (expiry_date - datetime.now()).days
                 decay_monitor.initialize_position(symbol, entry_premium, max(0, days_to_expiry))
                 logger.debug(f"POSITION_ADD: DECAY_MONITOR_INIT | {symbol} | days_to_expiry={days_to_expiry}")
@@ -1419,19 +1422,13 @@ class OptionPositionMonitor:
             logger.debug(f"PLACE_SL: Already placed | {symbol} | order_id={position.sl_order_id}")
             return True
         
-        # Calculate SL based on action type
-        # CE (BUY): Exit if premium FALLS 20% below entry (loss scenario)
-        # PE (SELL): Exit if premium RISES 20% above entry (loss scenario - premium increase)
+        # Calculate SL based on whether the position is long or short premium.
         if position.action == "SELL":
-            # PE (PUT): Loss occurs when premium INCREASES (underlying goes UP)
-            # HARD_SL at +20% above entry (INVERTED from CE logic)
             sl_premium_raw = position.entry_premium * 1.20  # +20%
-            sl_type = "PE_HARD_SL"
+            sl_type = "SHORT_PREMIUM_HARD_SL"
         else:
-            # CE (CALL): Loss occurs when premium DECREASES (underlying goes DOWN)
-            # HARD_SL at -20% below entry (standard logic)
             sl_premium_raw = position.entry_premium * 0.80  # -20%
-            sl_type = "CE_HARD_SL"
+            sl_type = "LONG_PREMIUM_HARD_SL"
         
         sl_premium = self._round_to_10_paise(sl_premium_raw)
         
@@ -3015,46 +3012,6 @@ class OptionPositionMonitor:
                 real_iv = vol_calc.get_dynamic_iv(symbol, default_iv=0.25)
                 
                 try:
-                    # CRITICAL: Use the last TUESDAY of the month (NSE monthly expiry)
-                    from datetime import datetime as dt, timedelta
-                    exp_date = dt.strptime(position.expiry, "%Y-%m-%d")
-                    
-                    # Find last TUESDAY of the same month
-                    # Start from last day of month and walk backwards
-                    if exp_date.month == 12:
-                        last_day = dt(exp_date.year, 12, 31)
-                    else:
-                        last_day = dt(exp_date.year, exp_date.month + 1, 1) - timedelta(days=1)
-                    
-                    # Walk backwards to find Tuesday (weekday=1)
-                    while last_day.weekday() != 1:
-                        last_day -= timedelta(days=1)
-                    
-                    monthly_expiry_iso = last_day.strftime("%Y-%m-%d")
-                    # Also convert to broker format for matching (DDMMMYYYY, e.g., 30DEC2025)
-                    monthly_expiry_broker = last_day.strftime("%d%b%Y").upper()
-                    
-                    # If exact monthly expiry not available, find closest available expiry
-                    # (instruments.json might not have the exact last Tuesday)
-                    from .pe_extractor import InstrumentCEExtractor
-                    pe_extractor = InstrumentCEExtractor()
-                    available_expiries = set(item['expiry'] for item in pe_extractor.all_instruments 
-                                            if item['name'] == position.underlying)
-                    
-                    # Check if monthly expiry exists (in broker format: DDMMMYYYY)
-                    if available_expiries and monthly_expiry_broker not in available_expiries:
-                        # Find closest available expiry to our monthly expiry
-                        # Convert broker format back to ISO for comparison
-                        def broker_to_iso(broker_date_str):
-                            """Convert DDMMMYYYY to YYYY-MM-DD"""
-                            from datetime import datetime as dt_convert
-                            return dt_convert.strptime(broker_date_str, "%d%b%Y").strftime("%Y-%m-%d")
-                        
-                        closest = min(available_expiries, 
-                                    key=lambda x: abs((dt.strptime(broker_to_iso(x), "%Y-%m-%d") - dt.strptime(monthly_expiry_iso, "%Y-%m-%d")).days))
-                        logger.debug(f"REFRESH_LTP: Monthly expiry {monthly_expiry_broker} not available, using {closest}")
-                        monthly_expiry_iso = broker_to_iso(closest)
-                    
                     # USE PRE-FETCHED underlying LTP from bulk fetch (no per-position API calls)
                     underlying_ltp = underlying_ltps.get(position.underlying)
                     if underlying_ltp and underlying_ltp > 0:
@@ -3105,8 +3062,6 @@ class OptionPositionMonitor:
                                 position.entry_iv = real_iv
                         else:
                             logger.debug(f"REFRESH_LTP: Contract not found | {symbol} | strike={position.strike} | type={position.contract_type} (using fallback Greeks)")
-                    else:
-                        logger.debug(f"REFRESH_LTP: Option chain not available | {symbol} | expiry={monthly_expiry_iso} (using fallback Greeks)")
                         
                 except Exception as chain_error:
                     logger.debug(f"REFRESH_LTP: Could not fetch real Greeks | {symbol} | {str(chain_error)} (using fallback)")

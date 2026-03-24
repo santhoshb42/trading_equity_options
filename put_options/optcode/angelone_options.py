@@ -1362,38 +1362,52 @@ class AngelOneOptionsBroker:
             print(f"⚠️ Failed to cache option chain: {str(e)}")
     
     def get_next_expiry(self, underlying: str) -> str:
-        """Get current month's expiry (last Tuesday of month)
-        
-        Monthly expiry = last Tuesday of current month.
-        This matches what's available in instrument.json from broker.
+        """Get current month's expiry date string (YYYY-MM-DD).
+
+        NSE monthly expiry calendar (hardcoded known dates take priority):
+        - March 2026: 30th (NSE changed from last Tuesday)
+        - April  2026: 29th (last Tuesday — verified NSE calendar)
+        - All other months: computed as last Tuesday of that month
         """
-        today = datetime.now().date()
-        
-        # Find LAST Tuesday of current month
-        # Start from last day of month and work backwards
         import calendar
-        last_day = calendar.monthrange(today.year, today.month)[1]
-        last_date = today.replace(day=last_day)
-        
-        # Find last Tuesday
-        # Tuesday = 1 in Python's weekday (0=Monday, 1=Tuesday, ... 6=Sunday)
-        days_back = (last_date.weekday() - 1) % 7
-        last_tuesday = last_date - timedelta(days=days_back)
-        
-        # If we've passed this month's expiry, use next month's
-        if today > last_tuesday:
-            # Move to next month
-            if today.month == 12:
-                next_month = today.replace(year=today.year + 1, month=1, day=1)
-            else:
-                next_month = today.replace(month=today.month + 1, day=1)
-            
-            last_day = calendar.monthrange(next_month.year, next_month.month)[1]
-            last_date = next_month.replace(day=last_day)
-            days_back = (last_date.weekday() - 1) % 7  # Tuesday = 1
-            last_tuesday = last_date - timedelta(days=days_back)
-        
-        return last_tuesday.strftime("%Y-%m-%d")
+        today = datetime.now().date()
+
+        # Hardcoded NSE expiry overrides — update monthly as the calendar is published
+        KNOWN_EXPIRIES = {
+            (2026, 3): "2026-03-30",
+            (2026, 4): "2026-04-29",
+        }
+
+        year, month = today.year, today.month
+        key = (year, month)
+
+        if key in KNOWN_EXPIRIES:
+            expiry_str = KNOWN_EXPIRIES[key]
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            if today <= expiry_date:
+                return expiry_str
+
+        def _last_tuesday(y: int, m: int) -> str:
+            last_day = calendar.monthrange(y, m)[1]
+            last_date = datetime(y, m, last_day).date()
+            days_back = (last_date.weekday() - 1) % 7
+            tue = last_date - timedelta(days=days_back)
+            return tue.strftime("%Y-%m-%d")
+
+        current_expiry = _last_tuesday(year, month)
+        if today <= datetime.strptime(current_expiry, "%Y-%m-%d").date():
+            return current_expiry
+
+        if month == 12:
+            year, month = year + 1, 1
+        else:
+            month += 1
+
+        next_key = (year, month)
+        if next_key in KNOWN_EXPIRIES:
+            return KNOWN_EXPIRIES[next_key]
+
+        return _last_tuesday(year, month)
     
     def place_options_order(self,
                            symbol: str,  # BANKNIFTY25XXX1900CE
