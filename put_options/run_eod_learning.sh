@@ -7,11 +7,11 @@
 # Skips weekends and Indian stock market holidays
 # Prevents duplicate learning from the same data
 #
-# Usage: /root/santhosh/trading/options/run_eod_learning.sh
+# Usage: /root/santhosh/trading/put_options/run_eod_learning.sh
 # Typically run via cron at market close (3:30 PM IST): 30 15 * * 1-5
 ################################################################################
 
-LOG_FILE="/root/santhosh/trading/options/logs/eod_learning.log"
+LOG_FILE="/root/santhosh/trading/put_options/logs/eod_learning.log"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Ensure log directory exists
@@ -90,14 +90,14 @@ done
 log "✅ Trading day detected - proceeding with EOD learning"
 
 # Check if learning files exist (option_pnl_history.json is required)
-PNL_FILE="/root/santhosh/trading/options/data/option_pnl_history.json"
+PNL_FILE="/root/santhosh/trading/put_options/data/option_pnl_history.json"
 if [ ! -f "$PNL_FILE" ]; then
     log "⚠️  WARNING: option_pnl_history.json not found - skipping learning"
     exit 0
 fi
 
 # Check if this script already ran today (by checking if archive has today's files)
-ARCHIVE_DIR="/root/santhosh/trading/options/data/archive"
+ARCHIVE_DIR="/root/santhosh/trading/put_options/data/archive"
 ARCHIVE_COUNT=$(find "$ARCHIVE_DIR" -name "*${TODAY}*" -type f 2>/dev/null | wc -l)
 if [ "$ARCHIVE_COUNT" -gt 0 ]; then
     log "⚠️  WARNING: Learning already completed today (archive files exist)"
@@ -111,7 +111,7 @@ log "Running EOD learning aggregation..."
 cd "$SCRIPT_DIR"
 python3 -c "
 import sys
-sys.path.insert(0, '/root/santhosh/trading/options/optcode')
+sys.path.insert(0, '/root/santhosh/trading/put_options/optcode')
 from eod_learning_aggregator import run_eod_learning
 import json
 

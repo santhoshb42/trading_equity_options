@@ -157,7 +157,8 @@ class LiveDataTracker:
         
         # PNL tracking
         summary['total_pnl'] = round(total_pnl, 2)
-        pnl_percent = (total_pnl / total_budget * 100) if total_budget > 0 else 0.0
+        budget_used = summary.get('budget_used', 0.0)
+        pnl_percent = (total_pnl / budget_used * 100) if budget_used > 0 else 0.0
         summary['total_pnl_percent'] = round(pnl_percent, 2)
         summary['avg_win'] = round(avg_win, 2)
         summary['avg_loss'] = round(avg_loss, 2)
@@ -217,6 +218,7 @@ class LiveDataTracker:
             'current_greeks': entry_greeks or {},
             'current_iv': entry_iv,
             'highest_premium': entry_premium,  # For trailing exit tracking
+            'lowest_premium': entry_premium,  # For HARD_SL optimization
             'unrealized_pnl': 0.0,
             'unrealized_pnl_percent': 0.0,
             'exit_time': None,
@@ -263,6 +265,9 @@ class LiveDataTracker:
                 
                 if highest_premium:
                     trade['highest_premium'] = max(trade['highest_premium'], round(highest_premium, 2))
+                
+                # Track lowest premium for HARD_SL analysis
+                trade['lowest_premium'] = min(trade['lowest_premium'], round(current_premium, 2))
                 
                 # Calculate unrealized PNL
                 premium_diff = current_premium - trade['entry_premium']
@@ -319,6 +324,8 @@ class LiveDataTracker:
                 trade['exit_greeks'] = exit_greeks or {}
                 trade['exit_iv'] = round(exit_iv, 2)
                 trade['status'] = 'CLOSED'
+                
+                # Preserve lowest_premium seen during trade lifetime
                 
                 # Calculate realized PNL
                 premium_diff = exit_premium - entry_premium
@@ -406,11 +413,11 @@ class LiveDataTracker:
             # Win rate
             win_rate = (winning_trades / closed_count * 100) if closed_count > 0 else 0.0
             
-            # Calculate PnL percentages
+            # Calculate PnL percentages (based on budget_used, not total_budget)
             total_budget = OptionsCapitalConfig.MAX_CAPITAL
-            unrealized_pnl_percent = (total_unrealized_pnl / total_budget * 100) if total_budget > 0 else 0.0
-            realized_pnl_percent = (total_realized_pnl / total_budget * 100) if total_budget > 0 else 0.0
-            total_pnl_percent = (((total_unrealized_pnl + total_realized_pnl) / total_budget) * 100) if total_budget > 0 else 0.0
+            unrealized_pnl_percent = (total_unrealized_pnl / budget_used * 100) if budget_used > 0 else 0.0
+            realized_pnl_percent = (total_realized_pnl / budget_used * 100) if budget_used > 0 else 0.0
+            total_pnl_percent = (((total_unrealized_pnl + total_realized_pnl) / budget_used) * 100) if budget_used > 0 else 0.0
             
             # Create summary
             output_data = {

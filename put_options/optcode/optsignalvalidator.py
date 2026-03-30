@@ -25,6 +25,23 @@ from .pe_extractor import get_pe_extractor
 
 class OptionsSignalValidator:
     """Validates and processes TradingView alerts for options trading"""
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        """Parse optional numeric fields without forcing missing values to 0."""
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_normalized_put_alert(alert: Dict[str, Any]) -> bool:
+        """Return True for payloads explicitly normalized for the PUT bot."""
+        original_action = str(alert.get('original_action', '')).upper()
+        option_side = str(alert.get('option_side', '')).upper()
+        return original_action == 'BUY_PUT' or option_side == 'PE'
     
     @staticmethod
     def validate_options_signal(alert: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
@@ -38,9 +55,23 @@ class OptionsSignalValidator:
             symbol = alert.get('symbol', '').upper().strip()
             raw_action = alert.get('action', '').upper()
             action = OptionsSignalValidator._normalize_alert_action(raw_action)
-            confidence = float(alert.get('confidence', 0))
-            # Use score if provided, otherwise use confidence as fallback
-            score = float(alert.get('score', confidence))
+            confidence_value = OptionsSignalValidator._safe_float(alert.get('confidence'))
+            score_value = OptionsSignalValidator._safe_float(alert.get('score'))
+
+            # PUT alerts from the router may not carry explicit confidence/score even
+            # when they are valid strategy outputs. Treat those as passing the quality
+            # gate only for explicit PUT payloads, then let downstream filters decide.
+            if confidence_value is None and score_value is None and OptionsSignalValidator._is_normalized_put_alert(alert):
+                confidence = OptionsTradingConfig.MIN_CONFIDENCE
+                score = OptionsTradingConfig.MIN_CONFIDENCE
+                logger.info(
+                    f"SIGNAL_VALIDATE: QUALITY_FALLBACK | symbol={symbol} | "
+                    f"raw_action={raw_action} | using min_quality={confidence}%"
+                )
+            else:
+                confidence = confidence_value if confidence_value is not None else 0.0
+                # Use score if provided, otherwise use confidence as fallback
+                score = score_value if score_value is not None else confidence
             verdict = alert.get('verdict', 0)
             
             logger.debug(

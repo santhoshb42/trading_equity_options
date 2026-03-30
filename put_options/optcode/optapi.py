@@ -43,11 +43,12 @@ except ImportError:
 
 # Learning engine integration
 try:
-    from .options_learning_engine import SymbolPerformanceTracker
+    from .options_learning_engine import SymbolPerformanceTracker, get_symbol_tracker
     HAS_LEARNING_ENGINE = True
 except ImportError:
     HAS_LEARNING_ENGINE = False
     SymbolPerformanceTracker = None
+    get_symbol_tracker = None
 
 # Alert system integration
 try:
@@ -93,7 +94,7 @@ def create_options_api_app():
         try:
             # Use options-specific data directory for learning
             options_learning_file = Path(__file__).parent.parent / "data" / "learning" / "symbol_stats.json"
-            learning_engine = SymbolPerformanceTracker(symbol_stats_file=options_learning_file)
+            learning_engine = get_symbol_tracker(options_learning_file)
             logger.info("API: LEARNING_ENGINE_INITIALIZED")
         except Exception as e:
             logger.warning(f"API: LEARNING_ENGINE_INIT_FAILED | {str(e)}")
@@ -174,16 +175,20 @@ def create_options_api_app():
                     
                     # 🔧 NEW: Log processing result
                     logger.info(f"WEBHOOK_WORKER: Alert processed | symbol={symbol} | status={result_status} | elapsed_ms={elapsed*1000:.1f}")
-                    log_alert(alert=alert, status='bot_processing_completed', details={
-                        'result_status': result_status,
-                        'elapsed_ms': elapsed * 1000
-                    })
+                    log_alert(
+                        alert=alert,
+                        status='bot_processing_completed',
+                        details=_build_alert_completion_details(alert, result, elapsed * 1000)
+                    )
                 except Exception as e:
                     elapsed = time.time() - start_time
                     logger.error(f"WEBHOOK_WORKER: Alert processing failed | symbol={symbol} | error={str(e)} | elapsed_ms={elapsed*1000:.1f}", exc_info=True)
                     log_alert(alert=alert, status='bot_processing_error', details={
                         'error': str(e),
-                        'elapsed_ms': elapsed * 1000
+                        'elapsed_ms': round(elapsed * 1000, 2),
+                        'attempted_symbol': alert.get('symbol'),
+                        'alert_action': alert.get('action'),
+                        'alert_price': alert.get('price'),
                     })
             except queue.Empty:
                 # Normal timeout waiting for next alert
@@ -827,6 +832,50 @@ def create_options_api_app():
 # Alert Processing
 # =============================================================================
 
+def _compact_alert_details(details: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop empty values before writing alert summaries."""
+    return {key: value for key, value in details.items() if value is not None}
+
+
+def _build_alert_completion_details(alert: Dict[str, Any], result: Any, elapsed_ms: float) -> Dict[str, Any]:
+    """Create a precise final alert summary for alerts.jsonl."""
+    details = {
+        'result_status': result.get('status', 'unknown') if isinstance(result, dict) else 'unknown',
+        'elapsed_ms': round(elapsed_ms, 2),
+        'attempted_symbol': alert.get('symbol'),
+        'alert_action': alert.get('action'),
+        'alert_price': alert.get('price'),
+    }
+
+    if not isinstance(result, dict):
+        return _compact_alert_details(details)
+
+    details.update(_compact_alert_details({
+        'decision_stage': result.get('stage'),
+        'underlying': result.get('underlying'),
+        'normalized_action': result.get('normalized_action'),
+        'attempted_contract': result.get('contract'),
+        'contract_type': result.get('contract_type'),
+        'strike': result.get('strike'),
+        'expiry': result.get('expiry'),
+        'entry_premium': result.get('entry_premium'),
+        'quantity': result.get('quantity'),
+        'actual_cost': result.get('actual_cost'),
+        'budget': result.get('budget'),
+        'order_id': result.get('order_id'),
+        'trades_today': result.get('trades_today'),
+        'max_trades': result.get('max_trades'),
+        'open_positions': result.get('open_positions'),
+        'max_slots': result.get('max_slots'),
+        'message': result.get('message'),
+        'reason': result.get('reason') or result.get('error'),
+        'liquidity_metrics': result.get('liquidity_metrics'),
+        'filter_details': result.get('filter_details'),
+        'data_fetch_status': result.get('data_fetch_status'),
+    }))
+
+    return details
+
 
 # Neural ML Signal - DISABLED due to system constraints
 # Disabled neural ML to reduce memory footprint and simplify alert processing
@@ -871,6 +920,12 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         symbol = processed['symbol']
         underlying = processed['underlying']
         action = processed['action']
+        alert_price = float(alert.get('price', 0) or 0)
+        base_context = {
+            'underlying': underlying,
+            'normalized_action': action,
+            'alert_price': alert_price if alert_price > 0 else None,
+        }
         
         logger.debug(f"ALERT_PROCESS: MAPPED | underlying={underlying} | action={action}")
         
@@ -897,7 +952,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             'symbol': symbol,
                             'timestamp': timestamp,
                             'status': 'rejected',
-                            'reason': f'PCR data not available - waiting for market data'
+                            'reason': f'PCR data not available - waiting for market data',
+                            'stage': 'sentiment_check',
+                            **base_context,
                         }
                     else:
                         # Actual poor market condition (PCR too extreme, no buildup, etc)
@@ -906,7 +963,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             'symbol': symbol,
                             'timestamp': timestamp,
                             'status': 'rejected',
-                            'reason': f'Poor market conditions: {entry_reason}'
+                            'reason': f'Poor market conditions: {entry_reason}',
+                            'stage': 'sentiment_check',
+                            **base_context,
                         }
                 
                 # Entry passed sentiment check - log the good conditions
@@ -929,7 +988,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Insufficient capital'
+                'reason': 'Insufficient capital',
+                'stage': 'capital_check',
+                'budget': OptionsCapitalConfig.CAP_PER_TRADE,
+                **base_context,
             }
         
         logger.debug(f"ALERT_PROCESS: CAPITAL_OK | available=₹{available_capital:.2f}")
@@ -949,7 +1011,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': f'Daily trade limit reached ({daily_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY})'
+                'reason': f'Daily trade limit reached ({daily_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY})',
+                'stage': 'daily_trade_limit',
+                'trades_today': daily_trade_count,
+                'max_trades': OptionsCapitalConfig.MAX_TRADES_PER_DAY,
+                **base_context,
             }
         
         logger.debug(f"ALERT_PROCESS: DAILY_LIMIT_OK | trades_today={daily_trade_count}/{OptionsCapitalConfig.MAX_TRADES_PER_DAY}")
@@ -967,7 +1033,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Max positions reached'
+                'reason': 'Max positions reached',
+                'stage': 'position_slot_check',
+                'open_positions': summary['open_positions'],
+                'max_slots': OptionsCapitalConfig.MAX_SLOTS,
+                **base_context,
             }
         
         logger.debug(f"ALERT_PROCESS: SLOTS_OK | open={summary['open_positions']}/{OptionsCapitalConfig.MAX_SLOTS}")
@@ -975,7 +1045,6 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # Fetch option chain with automatic re-auth on Invalid Token errors
         logger.debug(f"ALERT_PROCESS: FETCHING_CHAIN | underlying={underlying}")
         expiry = state['broker'].get_next_expiry(underlying)
-        alert_price = float(alert.get('price', 0))
         
         # Try to fetch chain with exponential backoff retry logic
         import time
@@ -1008,7 +1077,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Failed to fetch option chain'
+                'reason': 'Failed to fetch option chain',
+                'stage': 'option_chain_fetch',
+                'expiry': expiry,
+                **base_context,
             }
         
         logger.debug(f"ALERT_PROCESS: CHAIN_OK | contracts={len(chain.contracts)} | atm={chain.atm_strike}")
@@ -1197,8 +1269,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                         'timestamp': timestamp,
                         'status': 'rejected',
                         'reason': entry_reason,
+                        'stage': 'entry_filter',
                         'filter_details': entry_details,
-                        'data_fetch_status': fetch_results
+                        'data_fetch_status': fetch_results,
+                        **base_context,
                     }
                 
                 validators_passed = entry_details.get('validators_passed', 0)
@@ -1245,15 +1319,46 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'No ATM contracts available'
+                'reason': 'No ATM contracts available',
+                'stage': 'atm_contract_selection',
+                'expiry': expiry,
+                **base_context,
             }
         
         logger.debug(f"ALERT_PROCESS: ATM_CONTRACTS | ce={ce.symbol} | pe={pe.symbol}")
         
         # Select the actual tradable contract. For the PUT bot this should resolve to the PE leg.
         selected_contract = ce if contract_type == 'CE' else pe
+        contract_context = {
+            **base_context,
+            'contract': selected_contract.symbol,
+            'contract_type': contract_type,
+            'strike': selected_contract.strike,
+            'expiry': expiry,
+            'entry_premium': selected_contract.ltp,
+        }
         
         logger.debug(f"ALERT_PROCESS: SELECTED | contract={selected_contract.symbol} | type={contract_type} | ltp=₹{selected_contract.ltp:.2f}")
+
+        min_entry_premium = 5.0
+        if state.get('entry_filter'):
+            premium_validator = getattr(state['entry_filter'], 'validators', {}).get('premium')
+            if premium_validator and hasattr(premium_validator, 'min_premium'):
+                min_entry_premium = float(premium_validator.min_premium)
+
+        if selected_contract.ltp < min_entry_premium:
+            logger.warning(
+                f"ALERT_PROCESS: PREMIUM_FAILED | symbol={symbol} | contract={selected_contract.symbol} | "
+                f"premium=₹{selected_contract.ltp:.2f} < ₹{min_entry_premium:.2f}"
+            )
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': f'Premium ₹{selected_contract.ltp:.2f} < ₹{min_entry_premium:.2f} (low liquidity, high gap risk)',
+                'stage': 'selected_contract_premium_check',
+                **contract_context,
+            }
         
         # Check Liquidity (Minimum OI threshold)
         if SentimentConfig.CHECK_MIN_OI_ON_ENTRY:
@@ -1263,7 +1368,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     'symbol': symbol,
                     'timestamp': timestamp,
                     'status': 'rejected',
-                    'reason': f'Insufficient liquidity: OI={selected_contract.open_interest:,.0f} < {SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:,.0f}'
+                    'reason': f'Insufficient liquidity: OI={selected_contract.open_interest:,.0f} < {SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:,.0f}',
+                    'stage': 'minimum_oi_check',
+                    **contract_context,
                 }
             else:
                 logger.debug(f"ALERT_PROCESS: LIQUIDITY_OK | contract={selected_contract.symbol} | oi={selected_contract.open_interest:,.0f}")
@@ -1279,7 +1386,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': greeks_msg
+                'reason': greeks_msg,
+                'stage': 'greeks_validation',
+                **contract_context,
             }
         
         logger.debug(f"ALERT_PROCESS: GREEKS_OK | delta={selected_contract.delta:.3f} | gamma={selected_contract.gamma:.5f}")
@@ -1306,7 +1415,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     'symbol': symbol,
                     'timestamp': timestamp,
                     'status': 'rejected',
-                    'reason': 'No Greeks data available for entry filter validation'
+                    'reason': 'No Greeks data available for entry filter validation',
+                    'stage': 'greeks_data_check',
+                    **contract_context,
                 }
             else:
                 # Enrich alert with actual Greeks data before ML validation
@@ -1326,7 +1437,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                         'timestamp': timestamp,
                         'status': 'rejected',
                         'reason': f"ML filter: {ml_reason}",
-                        'ml_details': ml_details
+                        'stage': 'ml_validation',
+                        'ml_details': ml_details,
+                        **contract_context,
                     }
                 
                 # Log successful ML validation with details
@@ -1358,6 +1471,48 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # quantity is already in contracts (lot_size=1), so cost = quantity * premium
         actual_cost = quantity * selected_contract.ltp
         utilization_pct = (actual_cost / OptionsCapitalConfig.CAP_PER_TRADE) * 100 if OptionsCapitalConfig.CAP_PER_TRADE > 0 else 0
+        order_context = {
+            **contract_context,
+            'quantity': quantity,
+            'actual_cost': round(actual_cost, 2),
+            'budget': OptionsCapitalConfig.CAP_PER_TRADE,
+        }
+
+        liquidity_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
+        liquidity_oi_map = state['broker'].get_oi_data([selected_contract.symbol], "NFO") or {}
+        live_volume = int(liquidity_market_data.get('volume') or selected_contract.volume or 0)
+        live_oi = int(liquidity_oi_map.get(selected_contract.symbol) or selected_contract.open_interest or 0)
+        selected_contract.volume = live_volume
+        selected_contract.open_interest = live_oi
+
+        liquidity_ok, liquidity_reason, liquidity_metrics = OptionsCapitalConfig.evaluate_liquidity_for_order(
+            budget=OptionsCapitalConfig.CAP_PER_TRADE,
+            quantity=quantity,
+            premium=selected_contract.ltp,
+            volume=live_volume,
+            open_interest=live_oi,
+            lot_size=1,
+        )
+
+        logger.info(
+            f"ALERT_PROCESS: LIQUIDITY_CHECK | contract={selected_contract.symbol} | qty={quantity} "
+            f"| budget=₹{OptionsCapitalConfig.CAP_PER_TRADE:.0f} | volume={live_volume:,} | oi={live_oi:,} | result={liquidity_ok}"
+        )
+
+        if not liquidity_ok:
+            logger.warning(
+                f"ALERT_PROCESS: REJECTED_LIQUIDITY | symbol={symbol} | contract={selected_contract.symbol} "
+                f"| reason={liquidity_reason} | metrics={liquidity_metrics}"
+            )
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': liquidity_reason,
+                'liquidity_metrics': liquidity_metrics,
+                'stage': 'dynamic_liquidity_check',
+                **order_context,
+            }
         
         logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} | budget=₹{OptionsCapitalConfig.CAP_PER_TRADE} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
         
@@ -1378,16 +1533,25 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             except Exception as e:
                 logger.warning(f"ORDER_PLACEMENT_ALERT: FAILED | {str(e)}")
         
-        order_id = state['broker'].place_options_order(
-            symbol=selected_contract.symbol,
-            action='BUY',
-            quantity=quantity,
-            price=selected_contract.ltp,
-            order_type='MARKET'
-        )
-        
+        order_id = None
+        for _attempt in range(3):
+            _raw = state['broker'].place_options_order(
+                symbol=selected_contract.symbol,
+                action='BUY',
+                quantity=quantity,
+                price=selected_contract.ltp,
+                order_type='MARKET',
+                allow_queue=False,
+            )
+            if _raw and not str(_raw).startswith("QUEUED_"):
+                order_id = _raw
+                break
+            logger.warning(f"ALERT_PROCESS: BUY_ATTEMPT_{_attempt + 1}_FAILED | contract={selected_contract.symbol} | result={_raw}")
+            if _attempt < 2:
+                time.sleep(2 ** _attempt)
+
         if not order_id:
-            logger.error(f"ALERT_PROCESS: ORDER_FAILED | symbol={symbol} | contract={selected_contract.symbol}")
+            logger.error(f"ALERT_PROCESS: ORDER_FAILED_ALL_ATTEMPTS | symbol={symbol} | contract={selected_contract.symbol}")
             
             # Send order rejection alert
             if state['alert_manager']:
@@ -1399,7 +1563,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                             'action': 'BUY',
                             'quantity': quantity
                         },
-                        reason="Broker failed to place order"
+                        reason="Broker failed to place BUY order after 3 attempts"
                     )
                 except Exception as e:
                     logger.warning(f"ORDER_REJECTION_ALERT: FAILED | {str(e)}")
@@ -1408,17 +1572,38 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Failed to place options order'
+                'reason': 'Failed to place BUY order after 3 attempts',
+                'stage': 'broker_order_placement',
+                **order_context,
             }
         
-        logger.info(f"ALERT_PROCESS: ORDER_PLACED | order_id={order_id}")
-        
-        # 🔧 CRITICAL FIX: Move BUY confirmation to monitoring loop
-        # DO NOT BLOCK the webhook handler waiting for confirmation!
-        # This was causing 30-second blocking times and TradingView timeouts.
-        
-        # ✅ NEW PATTERN: Add position immediately and let monitoring loop handle confirmation
-        logger.info(f"BUY_ORDER: Placed | order_id={order_id} | {selected_contract.symbol} | confirmation will be monitored in loop")
+        logger.info(f"ALERT_PROCESS: ORDER_PLACED | order_id={order_id} | attempts={_attempt + 1}")
+
+        if OptionsTradingConfig.TRADING_MODE == "LIVE" and state.get('broker'):
+            logger.info(f"BUY_CONFIRMATION: WAITING | {selected_contract.symbol} | order_id={order_id} | timeout=30s")
+            confirmed = state['broker'].wait_for_buy_confirmation(selected_contract.symbol, timeout=30, order_id=order_id)
+            if not confirmed:
+                order_status = state['broker'].get_order_status(order_id) or {}
+                status = order_status.get('status', 'UNKNOWN')
+
+                if status not in {'COMPLETE', 'FILLED', 'FULLY_FILLED'}:
+                    cancel_success = state['broker'].cancel_order(order_id, selected_contract.symbol, order_type='MARKET')
+                    reason_suffix = 'cancelled' if cancel_success else 'manual intervention required'
+                    logger.error(
+                        f"BUY_CONFIRMATION: FAILED | {selected_contract.symbol} | order_id={order_id} | status={status} | {reason_suffix}"
+                    )
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': f'BUY order not confirmed filled (status={status}) - {reason_suffix}',
+                        'stage': 'buy_confirmation',
+                        'order_id': order_id,
+                        **order_context,
+                    }
+                logger.warning(f"BUY_CONFIRMATION: STATUS_RECOVERED_AS_FILLED | {selected_contract.symbol} | order_id={order_id}")
+
+        logger.info(f"BUY_ORDER: Filled | order_id={order_id} | {selected_contract.symbol}")
         
         # Prepare entry Greek data for learning
         entry_greeks_data = {
@@ -1500,34 +1685,25 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # 🔧 CRITICAL: Only increment counter if position was actually added (not rejected as duplicate)
         if not position_added:
             logger.warning(f"ALERT_PROCESS: POSITION_NOT_ADDED | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id} | likely_duplicate")
+            if OptionsTradingConfig.TRADING_MODE == "LIVE":
+                logger.error(f"ALERT_PROCESS: POSITION_TRACKING_FAILED_AFTER_FILL | symbol={symbol} | contract={selected_contract.symbol} | emergency flattening")
+                state['broker'].place_options_order(
+                    symbol=selected_contract.symbol,
+                    action='SELL',
+                    quantity=quantity,
+                    order_type='MARKET',
+                    product_type='INTRADAY',
+                    allow_queue=False,
+                )
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Position not added (likely duplicate)'
+                'reason': 'Position not added (likely duplicate)',
+                'stage': 'position_registration',
+                'order_id': order_id,
+                **order_context,
             }
-
-        # Match CE bot behavior: verify in the background that the broker actually filled the BUY.
-        # Without this, a broker-side rejection in LIVE mode can leave a phantom PE position open.
-        if OptionsTradingConfig.TRADING_MODE == "LIVE" and state.get('broker'):
-            _sym = selected_contract.symbol
-            _broker = state['broker']
-            _mon = state['monitor']
-
-            def _verify_buy():
-                try:
-                    confirmed = _broker.wait_for_buy_confirmation(_sym, timeout=30)
-                    if not confirmed:
-                        logger.error(f"BUY_CONFIRMATION: REJECTED_BY_BROKER | {_sym} | removing phantom position")
-                        _mon.close_position(_sym, 0, "BUY_REJECTED_BY_BROKER")
-                    else:
-                        logger.info(f"BUY_CONFIRMATION: FILLED | {_sym}")
-                except Exception as _e:
-                    logger.warning(f"BUY_CONFIRMATION: ERROR | {_sym} | {str(_e)}")
-
-            import threading as _th
-            _th.Thread(target=_verify_buy, daemon=True, name=f"BuyConfirm_{_sym}").start()
-        
         # 🔧 FIX: Increment daily trade counter ONLY after position is successfully added
         # This ensures we count actual trades, not just order attempts
         new_trade_count = OptionsCapitalConfig.increment_daily_trade_count()
@@ -1546,14 +1722,21 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         return {
             'symbol': symbol,
+            'underlying': underlying,
             'contract': selected_contract.symbol,
             'timestamp': timestamp,
             'status': 'success',
+            'stage': 'position_opened',
             'order_id': order_id,
             'contract_type': contract_type,
             'strike': selected_contract.strike,
             'expiry': expiry,
             'entry_premium': selected_contract.ltp,
+            'quantity': quantity,
+            'actual_cost': round(actual_cost, 2),
+            'budget': OptionsCapitalConfig.CAP_PER_TRADE,
+            'alert_price': alert_price if alert_price > 0 else None,
+            'normalized_action': action,
             'message': f"{processed.get('execution_action', 'BUY')} {contract_type} position opened",
             'neural_ml': neural_ml_metadata  # ADDED: Include in response for debugging
         }
@@ -1564,6 +1747,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'symbol': alert.get('symbol', 'UNKNOWN'),
             'timestamp': datetime.now().isoformat(),
             'status': 'error',
+            'stage': 'exception',
             'error': str(e)
         }
 

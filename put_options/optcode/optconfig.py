@@ -79,6 +79,16 @@ class OptionsCapitalConfig:
     
     # Reserve capital (emergency buffer for options)
     RESERVE_CAPITAL = float(os.getenv("OPTIONS_RESERVE_CAPITAL", "50000"))  # ₹50,000 reserve
+
+    # Dynamic liquidity guard calibration.
+    # As budget rises from 15K to 2L, we require the order to be a smaller share
+    # of both the contract's traded volume and open interest.
+    LIQUIDITY_MIN_BUDGET = float(os.getenv("OPTIONS_LIQUIDITY_MIN_BUDGET", "15000"))
+    LIQUIDITY_MAX_BUDGET = float(os.getenv("OPTIONS_LIQUIDITY_MAX_BUDGET", "200000"))
+    MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET", "0.25"))
+    MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET", "0.10"))
+    MAX_OI_PARTICIPATION_AT_MIN_BUDGET = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION_AT_MIN_BUDGET", "0.10"))
+    MAX_OI_PARTICIPATION_AT_MAX_BUDGET = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION_AT_MAX_BUDGET", "0.03"))
     
     # Commission and charges per trade
     BROKERAGE_PER_TRADE = 15.0  # ₹15 flat brokerage per options order
@@ -129,6 +139,94 @@ class OptionsCapitalConfig:
             quantity = (num_lots - 1) * lot_size if num_lots > 1 else lot_size
         
         return max(lot_size, quantity)
+
+    @classmethod
+    def get_dynamic_liquidity_limits(cls, budget: float) -> Dict[str, float]:
+        """Scale liquidity participation limits based on per-symbol order budget."""
+        floor_budget = min(cls.LIQUIDITY_MIN_BUDGET, cls.LIQUIDITY_MAX_BUDGET)
+        ceil_budget = max(cls.LIQUIDITY_MIN_BUDGET, cls.LIQUIDITY_MAX_BUDGET)
+        effective_budget = min(max(budget, floor_budget), ceil_budget)
+        budget_span = max(ceil_budget - floor_budget, 1.0)
+        budget_ratio = (effective_budget - floor_budget) / budget_span
+
+        max_volume_participation = (
+            cls.MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET +
+            (cls.MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET - cls.MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET) * budget_ratio
+        )
+        max_oi_participation = (
+            cls.MAX_OI_PARTICIPATION_AT_MIN_BUDGET +
+            (cls.MAX_OI_PARTICIPATION_AT_MAX_BUDGET - cls.MAX_OI_PARTICIPATION_AT_MIN_BUDGET) * budget_ratio
+        )
+
+        return {
+            'effective_budget': effective_budget,
+            'budget_ratio': budget_ratio,
+            'max_volume_participation': max(0.01, max_volume_participation),
+            'max_oi_participation': max(0.005, max_oi_participation),
+        }
+
+    @classmethod
+    def evaluate_liquidity_for_order(
+        cls,
+        *,
+        budget: float,
+        quantity: int,
+        premium: float,
+        volume: int,
+        open_interest: int,
+        lot_size: int = 1,
+    ) -> Tuple[bool, str, Dict[str, float]]:
+        """Reject oversized orders when order size is too large for contract liquidity."""
+        if quantity <= 0 or premium <= 0:
+            return False, "Invalid order sizing for liquidity check", {}
+
+        limits = cls.get_dynamic_liquidity_limits(budget)
+        effective_lot_size = max(lot_size, 1)
+        order_lots = quantity / effective_lot_size
+        order_value = quantity * premium
+
+        metrics = {
+            'budget': budget,
+            'effective_budget': limits['effective_budget'],
+            'order_value': order_value,
+            'quantity': quantity,
+            'order_lots': order_lots,
+            'volume': float(volume or 0),
+            'open_interest': float(open_interest or 0),
+            'max_volume_participation': limits['max_volume_participation'],
+            'max_oi_participation': limits['max_oi_participation'],
+        }
+
+        if volume and volume > 0:
+            volume_participation = quantity / max(volume, 1)
+            metrics['volume_participation'] = volume_participation
+            if volume_participation > limits['max_volume_participation']:
+                return (
+                    False,
+                    (
+                        f"Order qty {quantity} is {volume_participation * 100:.1f}% of contract volume {volume:,} "
+                        f"(limit {limits['max_volume_participation'] * 100:.1f}% for budget ₹{budget:,.0f})"
+                    ),
+                    metrics,
+                )
+
+        if open_interest and open_interest > 0:
+            oi_participation = quantity / max(open_interest, 1)
+            metrics['oi_participation'] = oi_participation
+            if oi_participation > limits['max_oi_participation']:
+                return (
+                    False,
+                    (
+                        f"Order qty {quantity} is {oi_participation * 100:.2f}% of OI {open_interest:,} "
+                        f"(limit {limits['max_oi_participation'] * 100:.2f}% for budget ₹{budget:,.0f})"
+                    ),
+                    metrics,
+                )
+
+        if (not volume or volume <= 0) and (not open_interest or open_interest <= 0):
+            return False, "Liquidity data unavailable for contract - refusing entry", metrics
+
+        return True, "Dynamic liquidity check passed", metrics
     
     @classmethod
     def get_available_capital(cls, used_capital: float) -> float:
@@ -297,7 +395,7 @@ class OptionsTradingConfig:
     
     # Risk management - SENTIMENT-DRIVEN: 20% SL with sentiment fade as primary exit signal
     MAX_LOSS_PER_TRADE = float(os.getenv("OPTIONS_MAX_LOSS_PER_TRADE", "5000"))  # Safety limit (emergency exit) - high enough not to interfere with 20% SL
-    STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "20.0"))  # 20% SL (fixed below entry)
+    STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "10.0"))  # 10% hard SL (fixed below entry)
     PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "0"))  # NO PROFIT TARGET - let winners run!
     
     # Number of lots per trade (for scaling trade size)

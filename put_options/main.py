@@ -43,11 +43,12 @@ from optcode.instrument_manager import get_instrument_manager
 
 # ML Learning engine
 try:
-    from optcode.options_learning_engine import SymbolPerformanceTracker
+    from optcode.options_learning_engine import SymbolPerformanceTracker, get_symbol_tracker
     HAS_LEARNING_ENGINE = True
 except ImportError:
     HAS_LEARNING_ENGINE = False
     SymbolPerformanceTracker = None
+    get_symbol_tracker = None
 
 # Live Data Tracking system
 try:
@@ -169,7 +170,7 @@ class OptionsTradingBot:
         if HAS_LEARNING_ENGINE:
             try:
                 options_learning_file = Path(__file__).parent / "data" / "learning" / "symbol_stats.json"
-                self.learning_engine = SymbolPerformanceTracker(symbol_stats_file=options_learning_file)
+                self.learning_engine = get_symbol_tracker(options_learning_file)
                 print(f"✅ Learning engine ready - will track trade outcomes")
                 logger.info(f"BOT_INIT: LEARNING_ENGINE_READY | data_file={options_learning_file}")
             except Exception as e:
@@ -311,6 +312,21 @@ class OptionsTradingBot:
                 self._cleanup_stale_positions()
             except Exception as e:
                 logger.error(f"EOD_FULL_UPDATE: CLEANUP_FAILED | {str(e)}")
+
+            try:
+                self._run_eod_learning_update()
+            except Exception as e:
+                logger.error(f"EOD_FULL_UPDATE: LEARNING_FAILED | {str(e)}")
+
+            if HAS_EOD_BACKUP:
+                try:
+                    logger.info("EOD_BACKUP: START | Backing up and clearing live data")
+                    print(f"\n📦 EOD Backup: Backing up live trading data...")
+                    run_eod_backup()
+                    logger.info("EOD_BACKUP: SUCCESS | Live data backed up and cleared")
+                except Exception as e:
+                    logger.error(f"EOD_BACKUP: FAILED | {str(e)}")
+                    print(f"   ⚠️  EOD backup failed: {str(e)}")
         
         eod_thread = threading.Thread(
             target=eod_async_tasks,
@@ -396,20 +412,6 @@ class OptionsTradingBot:
                     'positions': existing_archive + closed_positions,
                     'last_cleanup': datetime.now().isoformat()
                 }, f, indent=2)
-            
-            # RUN EOD ML LEARNING UPDATE (NEW)
-            self._run_eod_learning_update()
-            
-            # RUN EOD BACKUP AND CLEAR LIVE DATA
-            if HAS_EOD_BACKUP:
-                try:
-                    logger.info("EOD_BACKUP: START | Backing up and clearing live data")
-                    print(f"\n📦 EOD Backup: Backing up live trading data...")
-                    run_eod_backup()
-                    logger.info("EOD_BACKUP: SUCCESS | Live data backed up and cleared")
-                except Exception as e:
-                    logger.error(f"EOD_BACKUP: FAILED | {str(e)}")
-                    print(f"   ⚠️  EOD backup failed: {str(e)}")
             
             # Remove stale positions from active file
             active_positions = [p for p in positions if p not in stale_positions]

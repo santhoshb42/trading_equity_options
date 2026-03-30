@@ -36,7 +36,7 @@ try:
     HAS_TENSORFLOW = True
 except ImportError:
     HAS_TENSORFLOW = False
-    logger.warning("DL_IMPORT: TensorFlow not available - using scikit-learn fallback")
+    # Suppress logging - TensorFlow not required for operations
 
 try:
     import torch

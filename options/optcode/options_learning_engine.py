@@ -81,7 +81,16 @@ class SymbolPerformanceTracker:
             'win_rate_last_10': 0.0,
             'reliability_score': 0.5,
             'confidence_multiplier': 1.0,
-            'last_updated': datetime.now().isoformat()
+            'last_updated': datetime.now().isoformat(),
+            # Probation ladder (updated by EOD aggregator nightly)
+            'probation_status': 'ACTIVE',
+            'probation_blocked_since': None,
+            'probation_next_probe': None,
+            'probation_backoff_days': 7,
+            'probation_streak': 0,
+            'probation_probes_attempted': 0,
+            'probation_probes_won': 0,
+            'probation_last_probe_date': None,
         } for symbol in LearningConfig.SYMBOLS}
         
         self._load_stats()
@@ -116,7 +125,16 @@ class SymbolPerformanceTracker:
                 'win_rate_last_10': 0.0,
                 'reliability_score': 0.5,
                 'confidence_multiplier': 1.0,
-                'last_updated': datetime.now().isoformat()
+                'last_updated': datetime.now().isoformat(),
+                # Probation ladder (updated by EOD aggregator nightly)
+                'probation_status': 'ACTIVE',
+                'probation_blocked_since': None,
+                'probation_next_probe': None,
+                'probation_backoff_days': 7,
+                'probation_streak': 0,
+                'probation_probes_attempted': 0,
+                'probation_probes_won': 0,
+                'probation_last_probe_date': None,
             }
         
         stats = self.symbol_stats[symbol]

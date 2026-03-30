@@ -311,6 +311,21 @@ class OptionsTradingBot:
                 self._cleanup_stale_positions()
             except Exception as e:
                 logger.error(f"EOD_FULL_UPDATE: CLEANUP_FAILED | {str(e)}")
+
+            try:
+                self._run_eod_learning_update()
+            except Exception as e:
+                logger.error(f"EOD_FULL_UPDATE: LEARNING_FAILED | {str(e)}")
+
+            if HAS_EOD_BACKUP:
+                try:
+                    logger.info("EOD_BACKUP: START | Backing up and clearing live data")
+                    print(f"\n📦 EOD Backup: Backing up live trading data...")
+                    run_eod_backup()
+                    logger.info("EOD_BACKUP: SUCCESS | Live data backed up and cleared")
+                except Exception as e:
+                    logger.error(f"EOD_BACKUP: FAILED | {str(e)}")
+                    print(f"   ⚠️  EOD backup failed: {str(e)}")
         
         eod_thread = threading.Thread(
             target=eod_async_tasks,
@@ -396,20 +411,6 @@ class OptionsTradingBot:
                     'positions': existing_archive + closed_positions,
                     'last_cleanup': datetime.now().isoformat()
                 }, f, indent=2)
-            
-            # RUN EOD ML LEARNING UPDATE (NEW)
-            self._run_eod_learning_update()
-            
-            # RUN EOD BACKUP AND CLEAR LIVE DATA
-            if HAS_EOD_BACKUP:
-                try:
-                    logger.info("EOD_BACKUP: START | Backing up and clearing live data")
-                    print(f"\n📦 EOD Backup: Backing up live trading data...")
-                    run_eod_backup()
-                    logger.info("EOD_BACKUP: SUCCESS | Live data backed up and cleared")
-                except Exception as e:
-                    logger.error(f"EOD_BACKUP: FAILED | {str(e)}")
-                    print(f"   ⚠️  EOD backup failed: {str(e)}")
             
             # Remove stale positions from active file
             active_positions = [p for p in positions if p not in stale_positions]

@@ -32,7 +32,7 @@ try:
     HAS_ML = True
 except ImportError:
     HAS_ML = False
-    logger.warning("FAKE_MOVE_DETECTOR: ML modules not available")
+    # ML modules not available - using rules-based fallback
 
 # Trade logging
 try:

@@ -262,6 +262,27 @@ class InstrumentManager:
         
         # Download if within 1 minute window
         return abs((now.hour * 60 + now.minute) - (scheduled_time.hour * 60 + scheduled_time.minute)) < 1
+
+    def should_refresh_on_startup(self) -> bool:
+        """Return True when startup should force a fresh download of instrument.json."""
+        try:
+            if not self.instrument_file.exists():
+                return True
+
+            if self.instrument_file.stat().st_size == 0:
+                return True
+
+            modified_at = datetime.fromtimestamp(self.instrument_file.stat().st_mtime)
+            now = datetime.now()
+            scheduled_time = dt_time(self.download_hour, self.download_minute)
+
+            if modified_at.date() == now.date():
+                return False
+
+            return now.time() >= scheduled_time
+        except Exception as e:
+            logger.warning(f"INSTRUMENT_MGR: STARTUP_REFRESH_CHECK_FAILED | {str(e)}")
+            return False
     
     def start_scheduler(self):
         """Start background download scheduler"""
@@ -342,7 +363,10 @@ def get_instrument_manager(instrument_file: Optional[Path] = None,
             download_script = Path(__file__).parent.parent / "tools" / "inst.py"
         
         _instrument_manager = InstrumentManager(instrument_file, download_script)
-        _instrument_manager.load_from_file()
+        loaded = _instrument_manager.load_from_file()
+        if not loaded or _instrument_manager.should_refresh_on_startup():
+            logger.info("INSTRUMENT_MGR: STARTUP_REFRESH_TRIGGERED")
+            _instrument_manager.download_instruments()
         _instrument_manager.start_scheduler()
     
     return _instrument_manager

@@ -533,6 +533,18 @@ class ComprehensiveEntryFilter:
                     'valid': False,
                     'reason': f"Error: {str(e)}"
                 }
+
+        premium_result = validation_results.get('premium')
+        if premium_result and not premium_result['valid']:
+            failure_reason = premium_result['reason']
+            reason_key = failure_reason.split(':')[0] if ':' in failure_reason else failure_reason
+            self.rejected_by_reason[reason_key] = self.rejected_by_reason.get(reason_key, 0) + 1
+            logger.warning(
+                f"{self.name}: ❌ REJECTED | {symbol} {action} | premium hard gate failed | Reason: {failure_reason}"
+            )
+            pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
+            logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
+            return False, failure_reason, validation_results
         
         # Determine overall result
         if self.require_all_filters:

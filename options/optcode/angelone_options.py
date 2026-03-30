@@ -720,10 +720,6 @@ class AngelOneOptionsBroker:
                 self.auth_rate_limit_detected = False
                 self.auth_retry_count = 0
                 return False
-                print(f"❌ Options broker auth error: {error_str}")
-                self.auth_rate_limit_detected = False
-                self.auth_retry_count = 0
-                return False
     
     def ensure_authenticated(self) -> bool:
         """Check and refresh authentication if needed - called before critical operations"""
@@ -810,12 +806,11 @@ class AngelOneOptionsBroker:
                         continue
                     
                     try:
-                        market_data = self.smart_api.getMarketData("NFO", [token])
+                        market_data = self.smart_api.getMarketData("FULL", {"NFO": [token]})
                         rate_limiter.record_call("pcr_oi", True)
                         
                         if market_data and market_data.get('status'):
-                            item_data = market_data.get('data', {})
-                            oi = int(item_data.get('oi', 0))
+                            oi = self._extract_oi_from_quote_response(market_data)
                             if oi > 0:
                                 total_call_oi += oi
                                 ce_oi_success += 1
@@ -838,12 +833,11 @@ class AngelOneOptionsBroker:
                         continue
                     
                     try:
-                        market_data = self.smart_api.getMarketData("NFO", [token])
+                        market_data = self.smart_api.getMarketData("FULL", {"NFO": [token]})
                         rate_limiter.record_call("pcr_oi", True)
                         
                         if market_data and market_data.get('status'):
-                            item_data = market_data.get('data', {})
-                            oi = int(item_data.get('oi', 0))
+                            oi = self._extract_oi_from_quote_response(market_data)
                             if oi > 0:
                                 total_put_oi += oi
                                 pe_oi_success += 1
@@ -1392,38 +1386,56 @@ class AngelOneOptionsBroker:
             print(f"⚠️ Failed to cache option chain: {str(e)}")
     
     def get_next_expiry(self, underlying: str) -> str:
-        """Get current month's expiry (last Tuesday of month)
+        """Get current month's expiry date string (YYYY-MM-DD).
         
-        Monthly expiry = last Tuesday of current month.
-        This matches what's available in instrument.json from broker.
+        NSE monthly expiry calendar (hardcoded known dates take priority):
+        - March 2026: 30th (NSE changed from last Tuesday)
+        - April  2026: 29th (last Tuesday — verified NSE calendar)
+        - All other months: computed as last Tuesday of that month
         """
+        import calendar
         today = datetime.now().date()
         
-        # Find LAST Tuesday of current month
-        # Start from last day of month and work backwards
-        import calendar
-        last_day = calendar.monthrange(today.year, today.month)[1]
-        last_date = today.replace(day=last_day)
+        # Hardcoded NSE expiry overrides — update monthly as the calendar is published
+        KNOWN_EXPIRIES = {
+            (2026, 3): "2026-03-30",   # NSE changed from Tue to 30th
+            (2026, 4): "2026-04-29",   # Last Tuesday of April 2026 (verified)
+        }
         
-        # Find last Tuesday
-        # Tuesday = 1 in Python's weekday (0=Monday, 1=Tuesday, ... 6=Sunday)
-        days_back = (last_date.weekday() - 1) % 7
-        last_tuesday = last_date - timedelta(days=days_back)
+        year, month = today.year, today.month
+        key = (year, month)
         
-        # If we've passed this month's expiry, use next month's
-        if today > last_tuesday:
-            # Move to next month
-            if today.month == 12:
-                next_month = today.replace(year=today.year + 1, month=1, day=1)
-            else:
-                next_month = today.replace(month=today.month + 1, day=1)
-            
-            last_day = calendar.monthrange(next_month.year, next_month.month)[1]
-            last_date = next_month.replace(day=last_day)
-            days_back = (last_date.weekday() - 1) % 7  # Tuesday = 1
-            last_tuesday = last_date - timedelta(days=days_back)
+        if key in KNOWN_EXPIRIES:
+            expiry_str = KNOWN_EXPIRIES[key]
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            if today <= expiry_date:
+                return expiry_str
+            # Past this month's expiry — fall through to next month
         
-        return last_tuesday.strftime("%Y-%m-%d")
+        # Compute last Tuesday of the current or next month
+        def _last_tuesday(y: int, m: int) -> str:
+            last_day = calendar.monthrange(y, m)[1]
+            last_date = datetime(y, m, last_day).date()
+            # Tuesday = weekday 1
+            days_back = (last_date.weekday() - 1) % 7
+            tue = last_date - timedelta(days=days_back)
+            return tue.strftime("%Y-%m-%d")
+        
+        current_expiry = _last_tuesday(year, month)
+        if today <= datetime.strptime(current_expiry, "%Y-%m-%d").date():
+            return current_expiry
+        
+        # Current month expired — advance to next month
+        if month == 12:
+            year, month = year + 1, 1
+        else:
+            month += 1
+        
+        next_key = (year, month)
+        if next_key in KNOWN_EXPIRIES:
+            return KNOWN_EXPIRIES[next_key]
+        
+        return _last_tuesday(year, month)
     
     def place_options_order(self,
                            symbol: str,  # BANKNIFTY25XXX1900CE
@@ -1431,7 +1443,13 @@ class AngelOneOptionsBroker:
                            quantity: int,  # Lot size
                            price: float = 0,
                            order_type: str = "MARKET",
-                           product_type: str = "INTRADAY") -> Optional[str]:
+                           product_type: str = "INTRADAY",
+                           allow_queue: bool = True) -> Optional[str]:
+        """
+        allow_queue=False: if rate-limited, return None immediately instead of queuing.
+        Use allow_queue=False for SL placement — let retry_failed_sl_orders() handle retries
+        so that we always know the real broker order_id (QUEUED_ markers are never stored).
+        """
         """
         Place options order (CE or PE contract)
         With rate limiting to prevent AngelOne API throttling
@@ -1444,9 +1462,11 @@ class AngelOneOptionsBroker:
         # Get rate limiter instance
         rate_limiter = get_options_rate_limiter()
         
-        # Initialize pending orders tracking for BUY confirmation mechanism
+        # Initialize pending BUY tracking keyed by broker order id.
         if not hasattr(self, 'pending_buy_orders'):
             self.pending_buy_orders = {}
+        if not hasattr(self, 'pending_buy_orders_by_symbol'):
+            self.pending_buy_orders_by_symbol = {}
         
         logger.debug(f"ORDER_PLACE: {symbol} | action={action} qty={quantity} price={price:.2f} type={order_type}")
         
@@ -1458,6 +1478,10 @@ class AngelOneOptionsBroker:
         try:
             # Wait for rate limit permission (with timeout)
             if not rate_limiter.wait_for_call_permission(timeout=30.0):
+                if not allow_queue:
+                    # Caller handles retries (e.g. retry_failed_sl_orders) — never queue SL orders
+                    logger.warning(f"ORDER_PLACE: RATE_LIMITED (no_queue) | {symbol} | returning None")
+                    return None
                 # Rate limited - queue for retry
                 logger.warning(f"ORDER_PLACE: RATE_LIMITED | {symbol} | queuing for retry")
                 print(f"⚠️ Rate limited for {symbol} - queuing for retry...")
@@ -1497,21 +1521,28 @@ class AngelOneOptionsBroker:
                 
                 # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism
                 if action == "BUY":
-                    self.pending_buy_orders[symbol] = {
+                    pending_record = {
                         'order_id': order_id,
+                        'symbol': symbol,
                         'timestamp': time.time(),
                         'quantity': quantity,
                         'price': price,
                         'status': 'PENDING'
                     }
+                    self.pending_buy_orders[order_id] = pending_record
+                    self.pending_buy_orders_by_symbol[symbol] = order_id
                     logger.debug(f"ORDER_TRACKING: Pending BUY tracked (PAPER) | {symbol} | order_id={order_id} | qty={quantity}")
                 
                 return order_id
             
             # LIVE mode: Place actual order to broker
             try:
+                # BUG FIX #2: variety must be "STOPLOSS" for SL orders, "NORMAL" for regular
+                is_sl_order = order_type in ("STOPLOSS_LIMIT", "STOPLOSS_MARKET", "STOPLOSS-LIMIT", "STOPLOSS-MARKET")
+                order_variety = "STOPLOSS" if is_sl_order else "NORMAL"
+
                 order_params = {
-                    "variety": "NORMAL",
+                    "variety": order_variety,
                     "tradingsymbol": symbol,
                     "symboltoken": self.get_instrument_token(symbol, "NFO"),
                     "transactiontype": action,
@@ -1522,13 +1553,17 @@ class AngelOneOptionsBroker:
                     "quantity": str(quantity)
                 }
                 
-                # Set price based on order type
+                # BUG FIX #1: Set price based on order type — STOPLOSS_LIMIT now handled
                 if order_type == "LIMIT" and price > 0:
                     order_params["price"] = str(price)
-                elif order_type == "STOPLOSS_MARKET" and price > 0:
-                    # For STOPLOSS-MARKET, trigger price is set in 'price' field
+                elif order_type in ("STOPLOSS_MARKET", "STOPLOSS-MARKET") and price > 0:
+                    # For STOPLOSS-MARKET, trigger price is set in both fields
                     order_params["price"] = str(price)
                     order_params["triggerprice"] = str(price)
+                elif order_type in ("STOPLOSS_LIMIT", "STOPLOSS-LIMIT") and price > 0:
+                    # BUG FIX #1: For STOPLOSS-LIMIT, both limit price AND trigger price required
+                    order_params["price"] = str(price)          # Limit execution price
+                    order_params["triggerprice"] = str(price)   # Trigger that activates the order
                 
                 response = self.smart_api.placeOrder(order_params)
                 
@@ -1549,13 +1584,16 @@ class AngelOneOptionsBroker:
                     
                     # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism (LIVE mode)
                     if action == "BUY":
-                        self.pending_buy_orders[symbol] = {
+                        pending_record = {
                             'order_id': order_id,
+                            'symbol': symbol,
                             'timestamp': time.time(),
                             'quantity': quantity,
                             'price': price,
                             'status': 'PENDING'
                         }
+                        self.pending_buy_orders[order_id] = pending_record
+                        self.pending_buy_orders_by_symbol[symbol] = order_id
                         logger.debug(f"ORDER_TRACKING: Pending BUY tracked (LIVE) | {symbol} | order_id={order_id} | qty={quantity}")
                     
                     return order_id
@@ -1575,13 +1613,16 @@ class AngelOneOptionsBroker:
                     
                     # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism (LIVE mode - dict response)
                     if action == "BUY":
-                        self.pending_buy_orders[symbol] = {
+                        pending_record = {
                             'order_id': order_id,
+                            'symbol': symbol,
                             'timestamp': time.time(),
                             'quantity': quantity,
                             'price': price,
                             'status': 'PENDING'
                         }
+                        self.pending_buy_orders[order_id] = pending_record
+                        self.pending_buy_orders_by_symbol[symbol] = order_id
                         logger.debug(f"ORDER_TRACKING: Pending BUY tracked (LIVE dict) | {symbol} | order_id={order_id} | qty={quantity}")
                     
                     return order_id
@@ -1678,7 +1719,8 @@ class AngelOneOptionsBroker:
                     order_id: str, 
                     symbol: str, 
                     new_price: float,
-                    quantity: int = 0) -> Optional[str]:
+                    quantity: int = 0,
+                    order_type: str = "STOPLOSS_MARKET") -> Optional[str]:
         """
         Modify an options order (change price)
         With rate limiting to prevent AngelOne API throttling
@@ -1728,13 +1770,21 @@ class AngelOneOptionsBroker:
                     return None
                 
                 # Prepare modify parameters
+                # BUG FIX #3: AngelOne modifyOrder requires ALL original order fields
+                # Missing these causes "missing required parameter" rejection
                 # IMPORTANT: Price must be in multiples of 10 paise (₹0.10)
                 modify_params = {
+                    "variety": "STOPLOSS",          # Required: match original order's variety
                     "orderid": order_id,
-                    "ordertype": "STOPLOSS_MARKET",  # SL orders are STOPLOSS-MARKET type
+                    "ordertype": order_type,          # Match the original SL order type
+                    "tradingsymbol": symbol,         # Required: symbol identifier
+                    "symboltoken": token,            # Required: instrument token
+                    "exchange": "NFO",               # Required: exchange
+                    "producttype": "INTRADAY",       # Required: product type
+                    "duration": "DAY",               # Required: order validity
                     "price": str(new_price),
                     "triggerprice": str(new_price),  # Trigger price = SL price
-                    "quantity": str(quantity) if quantity > 0 else ""
+                    "quantity": str(quantity) if quantity > 0 else "0"
                 }
                 
                 # Call modify order API
@@ -1772,16 +1822,29 @@ class AngelOneOptionsBroker:
             print(f"❌ Error modifying options order: {str(e)}")
             return None
     
-    def cancel_order(self, order_id: str, symbol: str) -> bool:
+    def cancel_order(self, order_id: str, symbol: str, order_type: str = "STOPLOSS_MARKET") -> bool:
         """
         Cancel an options order
         With rate limiting to prevent AngelOne API throttling
+        
+        Args:
+            order_id: Broker order ID to cancel
+            symbol: Option symbol (for logging)
+            order_type: Original order type — CRITICAL for correct variety field.
+                        Defaults to STOPLOSS_LIMIT (most common cancel scenario = canceling SL before exit)
         
         Returns: True on success, False on failure
         """
         rate_limiter = get_options_rate_limiter()
         
         logger.debug(f"CANCEL_ORDER: {symbol} | order_id={order_id}")
+        
+        # FIX: QUEUED_ means the SL order was never actually placed on the broker
+        # (the place_options_order call was rate-limited and queued internally).
+        # There is nothing to cancel on the broker side — just return True.
+        if str(order_id).startswith("QUEUED_"):
+            logger.info(f"CANCEL_ORDER: QUEUED_ORDER_SKIP | {symbol} | order_id={order_id} | no real broker order to cancel")
+            return True
         
         if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
             logger.error(f"CANCEL_ORDER: Not authenticated | {symbol}")
@@ -1790,19 +1853,11 @@ class AngelOneOptionsBroker:
         try:
             # Wait for rate limit permission
             if not rate_limiter.wait_for_call_permission(timeout=30.0):
-                logger.warning(f"CANCEL_ORDER: RATE_LIMITED | {symbol} | queuing for retry")
-                
-                # Create callback for retry
-                def cancel_callback():
-                    return self.cancel_order(order_id, symbol)
-                
-                rate_limiter.queue_request(
-                    request_type=f"cancel_order_{order_id}",
-                    callback=cancel_callback,
-                    args=(),
-                    kwargs={}
-                )
-                return True  # Will retry
+                # FIX: return False (not True) — the cancel has NOT happened yet.
+                # Returning True here would let close_position() proceed with a market SELL
+                # while the SL is still live on the broker, risking a double fill / short.
+                logger.warning(f"CANCEL_ORDER: RATE_LIMITED | {symbol} | returning False to block premature SELL")
+                return False
             
             # Record the API call
             rate_limiter.record_call("cancel_order", True)
@@ -1815,13 +1870,18 @@ class AngelOneOptionsBroker:
             
             # LIVE mode: Call broker API
             try:
-                cancel_params = {
-                    "orderid": order_id,
-                    "variety": "NORMAL"
-                }
-                
-                # Call cancel order API
-                response = self.smart_api.cancelOrder(cancel_params)
+                # BUG FIX #4: variety must match the original order's variety
+                # SL orders were placed with variety="STOPLOSS" — cancel must use same
+                is_sl_order = order_type in ("STOPLOSS_LIMIT", "STOPLOSS_MARKET", "STOPLOSS-LIMIT", "STOPLOSS-MARKET")
+                cancel_variety = "STOPLOSS" if is_sl_order else "NORMAL"
+
+                try:
+                    response = self.smart_api.cancelOrder(order_id, cancel_variety)
+                except TypeError:
+                    response = self.smart_api.cancelOrder({
+                        "orderid": order_id,
+                        "variety": cancel_variety
+                    })
                 
                 # Handle response
                 if isinstance(response, str):
@@ -1854,7 +1914,7 @@ class AngelOneOptionsBroker:
             print(f"❌ Error cancelling options order: {str(e)}")
             return False
     
-    def wait_for_buy_confirmation(self, symbol: str, timeout: int = 30) -> bool:
+    def wait_for_buy_confirmation(self, symbol: str, timeout: int = 30, order_id: Optional[str] = None) -> bool:
         """
         🔧 CRITICAL FIX: Wait for BUY order confirmation before proceeding to SL placement.
         
@@ -1877,18 +1937,32 @@ class AngelOneOptionsBroker:
         Returns:
             True if BUY confirmed and filled, False if timeout/failed/not found
         """
-        if symbol not in self.pending_buy_orders:
+        if not hasattr(self, 'pending_buy_orders'):
+            self.pending_buy_orders = {}
+        if not hasattr(self, 'pending_buy_orders_by_symbol'):
+            self.pending_buy_orders_by_symbol = {}
+
+        resolved_order_id = str(order_id) if order_id else self.pending_buy_orders_by_symbol.get(symbol)
+        if not resolved_order_id:
             logger.warning(f"BUY_CONFIRM: No pending BUY found | {symbol}")
             return False
-        
-        pending_order = self.pending_buy_orders[symbol]
+
+        pending_order = self.pending_buy_orders.get(resolved_order_id)
+        if not pending_order:
+            logger.warning(f"BUY_CONFIRM: Pending BUY record missing | {symbol} | order_id={resolved_order_id}")
+            return False
+
+        tracked_symbol = pending_order.get('symbol', symbol)
         order_id = pending_order.get('order_id')
         quantity = pending_order.get('quantity')
         
         # PAPER MODE: Auto-confirm immediately (no broker confirmation needed)
         if OptionsTradingConfig.TRADING_MODE == "PAPER":
             logger.info(f"BUY_CONFIRM: PAPER MODE | {symbol} | order_id={order_id} | qty={quantity} | AUTO_CONFIRMED")
-            self.pending_buy_orders[symbol]['status'] = 'FILLED'
+            pending_order['status'] = 'FILLED'
+            self.pending_buy_orders.pop(order_id, None)
+            if self.pending_buy_orders_by_symbol.get(tracked_symbol) == order_id:
+                self.pending_buy_orders_by_symbol.pop(tracked_symbol, None)
             return True
         
         # LIVE MODE: Wait for broker confirmation
@@ -1912,15 +1986,19 @@ class AngelOneOptionsBroker:
                         if order_status in ['COMPLETE', 'FILLED', 'FULLY_FILLED']:
                             logger.info(f"BUY_CONFIRM: ORDER_FILLED | {symbol} | order_id={order_id} | status={order_status} | elapsed={time.time() - start_time:.1f}s")
                             
-                            # Mark order as filled and remove from pending
-                            self.pending_buy_orders[symbol]['status'] = 'FILLED'
+                            pending_order['status'] = 'FILLED'
+                            self.pending_buy_orders.pop(order_id, None)
+                            if self.pending_buy_orders_by_symbol.get(tracked_symbol) == order_id:
+                                self.pending_buy_orders_by_symbol.pop(tracked_symbol, None)
                             
                             return True
                         
                         # Check for rejected status
                         elif order_status in ['REJECTED', 'CANCELLED', 'EXPIRED']:
                             logger.error(f"BUY_CONFIRM: ORDER_{order_status} | {symbol} | order_id={order_id}")
-                            del self.pending_buy_orders[symbol]  # Remove from pending
+                            self.pending_buy_orders.pop(order_id, None)
+                            if self.pending_buy_orders_by_symbol.get(tracked_symbol) == order_id:
+                                self.pending_buy_orders_by_symbol.pop(tracked_symbol, None)
                             return False
                         
                         # Still pending - log and wait
@@ -1943,15 +2021,26 @@ class AngelOneOptionsBroker:
         try:
             # Use CE extractor to lookup token
             instruments = self.ce_extractor.instruments
-            if symbol in instruments:
-                return instruments[symbol].get('token', '')
-            
-            # Try with -EQ suffix for equity
+
+            # For NSE equity, always try {SYMBOL}-EQ first.
+            # instrument.json contains BOTH a bare "COFORGE" (BSE, wrong token)
+            # AND "COFORGE-EQ" (NSE, correct token).  Hitting the bare key for
+            # an NSE request would return the BSE token → AB4006 error.
             if exchange == "NSE":
                 eq_symbol = f"{symbol}-EQ"
                 if eq_symbol in instruments:
                     return instruments[eq_symbol].get('token', '')
-            
+                # Fall through to bare symbol only if -EQ not present
+                if symbol in instruments:
+                    entry = instruments[symbol]
+                    if entry.get('exch_seg', '') == 'NSE':
+                        return entry.get('token', '')
+                logger.warning(f"TOKEN_LOOKUP: Symbol not found | {symbol} | exchange={exchange}")
+                return None
+
+            if symbol in instruments:
+                return instruments[symbol].get('token', '')
+
             logger.warning(f"TOKEN_LOOKUP: Symbol not found | {symbol} | exchange={exchange}")
             return None
         except Exception as e:
@@ -2107,6 +2196,25 @@ class AngelOneOptionsBroker:
             rate_limiter = get_options_rate_limiter()
             rate_limiter.record_call("market_data", False)
             return None
+
+    def _extract_oi_from_quote_response(self, market_data: Dict[str, Any]) -> int:
+        """Extract OI from SmartAPI FULL quote response."""
+        fetched = market_data.get('data', {}).get('fetched', []) if market_data else []
+        if not fetched:
+            return 0
+
+        item_data = fetched[0] or {}
+        oi_value = (
+            item_data.get('openInterest')
+            or item_data.get('opnInterest')
+            or item_data.get('oi')
+            or 0
+        )
+
+        try:
+            return int(float(oi_value))
+        except (TypeError, ValueError):
+            return 0
     
     def get_oi_data(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[int]]:
         """
@@ -2141,13 +2249,11 @@ class AngelOneOptionsBroker:
                     
                     # Try getMarketData for full quote with OI
                     try:
-                        market_data = self.smart_api.getMarketData(exchange, [token])
+                        market_data = self.smart_api.getMarketData("FULL", {exchange: [token]})
                         rate_limiter.record_call("oi_fetch", True)
                         
                         if market_data and market_data.get('status'):
-                            item_data = market_data.get('data', {})
-                            # The market data should have oi field
-                            oi = int(item_data.get('oi', 100000))
+                            oi = self._extract_oi_from_quote_response(market_data)
                             oi_map[symbol] = max(oi, 50000)  # Min 50K for validity
                             logger.debug(f"OI_FETCH: SUCCESS | {symbol} | oi={oi}")
                         else:
@@ -2882,7 +2988,13 @@ class AngelOneOptionsBroker:
             rate_limiter.record_call("get_order_book", True)
             logger.info("ORDER_BOOK: Fetching from broker...")
             
-            response = self.smart_api.getOrderBook()
+            order_book_method = getattr(self.smart_api, "getOrderBook", None) or getattr(self.smart_api, "orderBook", None)
+            if not order_book_method:
+                logger.error("ORDER_BOOK: SmartAPI order book method unavailable")
+                rate_limiter.record_call("get_order_book", False)
+                return None
+
+            response = order_book_method()
             
             if response and response.get('status'):
                 orders = response.get('data', [])
@@ -2905,6 +3017,105 @@ class AngelOneOptionsBroker:
             rate_limiter = get_options_rate_limiter()
             rate_limiter.record_call("get_order_book", False)
             return None
+
+    def get_order_status(self, order_id: str) -> Optional[Dict[str, Any]]:
+        """Lookup a single AngelOne order by id and normalize its status fields."""
+        try:
+            order_book = self.get_order_book()
+            if not order_book:
+                return None
+
+            for order in order_book:
+                current_order_id = str(order.get('orderid') or order.get('order_id') or '')
+                if current_order_id != str(order_id):
+                    continue
+
+                status = str(order.get('orderstatus') or order.get('orderstate') or order.get('status') or '').upper()
+
+                def _as_float(*keys: str) -> float:
+                    for key in keys:
+                        value = order.get(key)
+                        if value in (None, ''):
+                            continue
+                        try:
+                            return float(value)
+                        except (TypeError, ValueError):
+                            continue
+                    return 0.0
+
+                def _as_int(*keys: str) -> int:
+                    for key in keys:
+                        value = order.get(key)
+                        if value in (None, ''):
+                            continue
+                        try:
+                            return int(float(value))
+                        except (TypeError, ValueError):
+                            continue
+                    return 0
+
+                return {
+                    'order_id': current_order_id,
+                    'status': status,
+                    'average_price': _as_float('averageprice', 'average_price', 'price'),
+                    'trigger_price': _as_float('triggerprice', 'trigger_price'),
+                    'filled_quantity': _as_int('filledshares', 'filledquantity', 'filled_quantity'),
+                    'raw': order,
+                }
+
+            return None
+        except Exception as e:
+            logger.error(f"ORDER_STATUS: ERROR | order_id={order_id} | {str(e)}")
+            return None
+
+    def cancel_outstanding_orders_for_symbol(self, symbol: str, exclude_order_ids: Optional[List[str]] = None) -> List[str]:
+        """Cancel any still-open broker orders for a closed symbol."""
+        cancelled_order_ids: List[str] = []
+
+        if OptionsTradingConfig.TRADING_MODE == "PAPER":
+            return cancelled_order_ids
+
+        try:
+            order_book = self.get_order_book()
+            if not order_book:
+                logger.warning(f"ORDER_CLEANUP: NO_ORDER_BOOK | {symbol}")
+                return cancelled_order_ids
+
+            excluded = {str(order_id) for order_id in (exclude_order_ids or []) if order_id}
+            terminal_statuses = {
+                'COMPLETE', 'FILLED', 'FULLY_FILLED', 'REJECTED', 'CANCELLED', 'CANCELED', 'EXPIRED'
+            }
+
+            for order in order_book:
+                trading_symbol = str(order.get('tradingsymbol') or order.get('symbol') or '')
+                if trading_symbol != symbol:
+                    continue
+
+                order_id = str(order.get('orderid') or order.get('order_id') or '')
+                if not order_id or order_id in excluded:
+                    continue
+
+                status = str(order.get('orderstatus') or order.get('orderstate') or order.get('status') or '').upper()
+                if status in terminal_statuses:
+                    continue
+
+                order_type = str(order.get('ordertype') or order.get('order_type') or 'MARKET').upper()
+                variety = str(order.get('variety') or '').upper()
+                cancel_order_type = 'STOPLOSS_MARKET' if ('STOPLOSS' in order_type or variety == 'STOPLOSS') else 'MARKET'
+
+                if self.cancel_order(order_id, symbol, order_type=cancel_order_type):
+                    cancelled_order_ids.append(order_id)
+                    logger.warning(f"ORDER_CLEANUP: CANCELLED_STALE_ORDER | {symbol} | order_id={order_id} | status={status}")
+                else:
+                    logger.error(f"ORDER_CLEANUP: CANCEL_FAILED | {symbol} | order_id={order_id} | status={status}")
+
+            if cancelled_order_ids:
+                logger.warning(f"ORDER_CLEANUP: COMPLETED | {symbol} | cancelled={cancelled_order_ids}")
+
+            return cancelled_order_ids
+        except Exception as e:
+            logger.error(f"ORDER_CLEANUP: ERROR | {symbol} | {str(e)}")
+            return cancelled_order_ids
     
     def get_trade_book(self) -> Optional[Dict[str, Any]]:
         """
@@ -2939,7 +3150,13 @@ class AngelOneOptionsBroker:
             rate_limiter.record_call("get_trade_book", True)
             logger.info("TRADE_BOOK: Fetching from broker...")
             
-            response = self.smart_api.getTradeBook()
+            trade_book_method = getattr(self.smart_api, "getTradeBook", None) or getattr(self.smart_api, "tradeBook", None)
+            if not trade_book_method:
+                logger.error("TRADE_BOOK: SmartAPI trade book method unavailable")
+                rate_limiter.record_call("get_trade_book", False)
+                return None
+
+            response = trade_book_method()
             
             if response and response.get('status'):
                 trades = response.get('data', [])

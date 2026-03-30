@@ -299,6 +299,7 @@ class MarketSentiment:
         - PCR < 1.2: OK to buy CE (bearish limit is high, allows entries even in neutral/slightly bearish)
         - PCR > 0.6: OK to buy PE (bullish limit allows entries in neutral/slightly bullish)
         - Long Buildup > ENTRY_THRESHOLD: Adds confidence
+        - FEB 23 FIX: Market strength filter - only enter if Nifty is directionally clear
         
         Returns:
             (is_entry_ok, reason)

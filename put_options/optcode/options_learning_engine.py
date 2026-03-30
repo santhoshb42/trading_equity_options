@@ -20,6 +20,8 @@ import numpy as np
 
 from .optlogging import logger, log_event
 
+PUT_OPTIONS_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -43,9 +45,9 @@ class LearningConfig:
     MIN_CONFIDENCE_REDUCTION = 0.7  # Min 30% confidence reduction
     
     # Data persistence - use learning directory as canonical location
-    SYMBOL_STATS_FILE = "data/learning/symbol_stats.json"  # Canonical location: learning directory
-    TRADE_HISTORY_FILE = "data/trade_history.jsonl"
-    MODEL_PERFORMANCE_FILE = "data/model_performance.json"
+    SYMBOL_STATS_FILE = PUT_OPTIONS_DATA_DIR / "learning" / "symbol_stats.json"  # Canonical location: learning directory
+    TRADE_HISTORY_FILE = PUT_OPTIONS_DATA_DIR / "trade_history.jsonl"
+    MODEL_PERFORMANCE_FILE = PUT_OPTIONS_DATA_DIR / "model_performance.json"
 
 
 # =============================================================================
@@ -273,12 +275,29 @@ class SymbolPerformanceTracker:
                 stats_data = json.load(f)
             
             for symbol, data in stats_data.items():
-                if symbol in self.symbol_stats:
-                    for key, value in data.items():
-                        if key == 'trade_history':
-                            self.symbol_stats[symbol]['trade_history'] = deque(value, maxlen=LearningConfig.LOOKBACK_TRADES)
-                        else:
-                            self.symbol_stats[symbol][key] = value
+                if symbol not in self.symbol_stats:
+                    self.symbol_stats[symbol] = {
+                        'total_trades': 0,
+                        'wins': 0,
+                        'losses': 0,
+                        'total_profit': 0.0,
+                        'avg_profit_per_trade': 0.0,
+                        'avg_win': 0.0,
+                        'avg_loss': 0.0,
+                        'trade_history': deque(maxlen=LearningConfig.LOOKBACK_TRADES),
+                        'recent_form': 'neutral',
+                        'win_rate': 0.0,
+                        'win_rate_last_10': 0.0,
+                        'reliability_score': 0.5,
+                        'confidence_multiplier': 1.0,
+                        'last_updated': datetime.now().isoformat()
+                    }
+
+                for key, value in data.items():
+                    if key == 'trade_history':
+                        self.symbol_stats[symbol]['trade_history'] = deque(value, maxlen=LearningConfig.LOOKBACK_TRADES)
+                    else:
+                        self.symbol_stats[symbol][key] = value
             
             logger.info(f"SYMBOL_TRACKER: STATS_LOADED | {len(stats_data)} symbols")
         except Exception as e:
@@ -408,16 +427,16 @@ class TradeResultRecorder:
 _symbol_tracker = None
 _trade_recorder = None
 
-def get_symbol_tracker() -> SymbolPerformanceTracker:
+def get_symbol_tracker(symbol_stats_file: Optional[Path] = None) -> SymbolPerformanceTracker:
     """Get or create symbol tracker"""
     global _symbol_tracker
     if _symbol_tracker is None:
-        _symbol_tracker = SymbolPerformanceTracker()
+        _symbol_tracker = SymbolPerformanceTracker(symbol_stats_file=symbol_stats_file)
     return _symbol_tracker
 
-def get_trade_recorder() -> TradeResultRecorder:
+def get_trade_recorder(history_file: Optional[Path] = None) -> TradeResultRecorder:
     """Get or create trade recorder"""
     global _trade_recorder
     if _trade_recorder is None:
-        _trade_recorder = TradeResultRecorder()
+        _trade_recorder = TradeResultRecorder(history_file=history_file)
     return _trade_recorder

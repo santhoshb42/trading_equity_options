@@ -889,6 +889,7 @@ class OptionPositionMonitor:
         # The async sentiment-exit thread and the main monitor loop both call close_position(),
         # so without a guard a race can place two SELL orders (creating a naked short).
         import threading as _th
+        self._positions_lock = _th.RLock()
         self._closing_lock = _th.Lock()
         self._closing_symbols: set = set()
         
@@ -911,8 +912,20 @@ class OptionPositionMonitor:
         self._load_positions()
         
         # Re-populate symbol pool with loaded positions
-        for symbol in self.positions.keys():
-            self.symbol_pool.add_symbol(symbol, entry_time=self.positions[symbol].entry_time)
+        for symbol, position in self._snapshot_positions_items():
+            self.symbol_pool.add_symbol(symbol, entry_time=position.entry_time)
+
+    def _get_position(self, symbol: str) -> Optional[OptionPosition]:
+        with self._positions_lock:
+            return self.positions.get(symbol)
+
+    def _snapshot_positions_items(self) -> List[Tuple[str, OptionPosition]]:
+        with self._positions_lock:
+            return list(self.positions.items())
+
+    def _snapshot_positions_values(self) -> List[OptionPosition]:
+        with self._positions_lock:
+            return list(self.positions.values())
     
     def add_position(self,
                     symbol: str,
@@ -953,7 +966,7 @@ class OptionPositionMonitor:
             # 🔧 FIX: Check for duplicate by UNDERLYING symbol, not option contract
             # This prevents multiple positions in the same underlying (e.g., SAIL) even with different strikes
             existing_position_with_same_underlying = None
-            for pos_symbol, pos in self.positions.items():
+            for pos_symbol, pos in self._snapshot_positions_items():
                 if pos.underlying == underlying:
                     existing_position_with_same_underlying = pos
                     break
@@ -1008,7 +1021,8 @@ class OptionPositionMonitor:
                 logger.warning(f"POSITION_INIT: No entry Greeks provided | symbol={symbol} | using defaults")
                 position.capture_entry_greeks(0.5, 0.05, -0.02, 0.1, 20.0)
             
-            self.positions[symbol] = position
+            with self._positions_lock:
+                self.positions[symbol] = position
             
             # 🔧 INITIALIZE HARD SL: use configured SL% from entry premium
             position.hard_sl_price = position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
@@ -1128,10 +1142,10 @@ class OptionPositionMonitor:
                                    greeks: Dict[str, float], iv: float) -> bool:
         """Update position with current market data"""
         try:
-            if symbol not in self.positions:
+            position = self._get_position(symbol)
+            if not position:
                 return False
-            
-            position = self.positions[symbol]
+
             position.update_market_data(current_premium, greeks, iv)
             
             # 🔴 UPDATE LIVE DATA: Update trade market data
@@ -1163,12 +1177,21 @@ class OptionPositionMonitor:
             print(f"❌ Error updating position {symbol}: {str(e)}")
             return False
     
-    def close_position(self, symbol: str, exit_premium: float, exit_reason: str) -> Optional[Dict[str, Any]]:
+    def close_position(
+        self,
+        symbol: str,
+        exit_premium: float,
+        exit_reason: str,
+        *,
+        broker_managed_exit: bool = False,
+        skip_sl_cancel: bool = False,
+        exit_order_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Close option position"""
         try:
             logger.debug(f"POSITION_CLOSE: {symbol} | reason={exit_reason} | premium={exit_premium:.2f}")
             
-            if symbol not in self.positions:
+            if not self._get_position(symbol):
                 logger.warning(f"POSITION_CLOSE: NOT_FOUND | {symbol}")
                 print(f"⚠️ Position {symbol} not found")
                 return None
@@ -1184,7 +1207,14 @@ class OptionPositionMonitor:
                 self._closing_symbols.add(symbol)
             
             try:
-                return self._close_position_inner(symbol, exit_premium, exit_reason)
+                return self._close_position_inner(
+                    symbol,
+                    exit_premium,
+                    exit_reason,
+                    broker_managed_exit=broker_managed_exit,
+                    skip_sl_cancel=skip_sl_cancel,
+                    exit_order_id=exit_order_id,
+                )
             finally:
                 with self._closing_lock:
                     self._closing_symbols.discard(symbol)
@@ -1195,16 +1225,24 @@ class OptionPositionMonitor:
                 self._closing_symbols.discard(symbol)
             return None
     
-    def _close_position_inner(self, symbol: str, exit_premium: float, exit_reason: str):
+    def _close_position_inner(
+        self,
+        symbol: str,
+        exit_premium: float,
+        exit_reason: str,
+        *,
+        broker_managed_exit: bool = False,
+        skip_sl_cancel: bool = False,
+        exit_order_id: Optional[str] = None,
+    ):
         """Inner close logic (called only after the is_closing guard has been acquired)."""
         try:
             logger.debug(f"POSITION_CLOSE: INNER | {symbol} | reason={exit_reason} | premium={exit_premium:.2f}")
             
-            if symbol not in self.positions:
+            position = self._get_position(symbol)
+            if not position:
                 logger.warning(f"POSITION_CLOSE: INNER_NOT_FOUND | {symbol}")
                 return None
-            
-            position = self.positions[symbol]
             
             # CAPTURE EXIT GREEKS for ML learning
             exit_greeks = {
@@ -1215,11 +1253,10 @@ class OptionPositionMonitor:
                 'iv': position.current_iv
             }
             
-            # 🔴 CRITICAL: Cancel SL order on broker BEFORE placing exit SELL.
-            # If we skip this, both the market SELL (placed here) and the broker's open
-            # SL SELL order can fill → two SELLs → net short position.
-            # Retry up to 3 times so a momentary rate-limit doesn't let both fire.
-            if position.sl_order_id and self.broker:
+            original_sl_order_id = position.sl_order_id
+
+            # Cancel the active broker SL only for manual exits.
+            if position.sl_order_id and self.broker and not broker_managed_exit and not skip_sl_cancel:
                 logger.info(f"POSITION_CLOSE: Cancelling SL order | {symbol} | order_id={position.sl_order_id}")
                 cancel_success = False
                 for _cancel_attempt in range(3):
@@ -1239,21 +1276,24 @@ class OptionPositionMonitor:
                              symbol=symbol,
                              sl_order_id=position.sl_order_id,
                              exit_reason=exit_reason)
+                    position.sl_order_id = None
                 else:
-                    logger.error(f"POSITION_CLOSE: SL_CANCEL_FAILED_ALL_ATTEMPTS | {symbol} | order_id={position.sl_order_id} | DOUBLE-FILL RISK - proceeding with SELL anyway")
+                    logger.error(f"POSITION_CLOSE: SL_CANCEL_FAILED_ALL_ATTEMPTS | {symbol} | order_id={position.sl_order_id} | blocking manual SELL to avoid double fill")
                     log_event("SL_CANCEL_FAILED",
-                             f"⚠️ Failed to cancel SL order for {symbol} after 3 attempts - double fill risk",
+                             f"⚠️ Failed to cancel SL order for {symbol} after 3 attempts - manual SELL blocked",
                              symbol=symbol,
                              sl_order_id=position.sl_order_id,
                              exit_reason=exit_reason,
-                             risk="Double fill possible")
-                # Clear sl_order_id regardless - we don't want retry_failed_sl_orders
-                # attempting to place another SL after the position is being closed
+                             risk="Position left open until SL cancel succeeds")
+                    return None
+            elif skip_sl_cancel and position.sl_order_id:
                 position.sl_order_id = None
             
             # 🔴 CRITICAL: Place SELL order to broker in LIVE mode with RETRY LOGIC
             # This ensures position is actually closed on broker, not just locally
-            if self.broker and OptionsTradingConfig.TRADING_MODE == "LIVE":
+            if broker_managed_exit:
+                position.exit_order_id = exit_order_id or original_sl_order_id
+            elif self.broker and OptionsTradingConfig.TRADING_MODE == "LIVE":
                 exit_order_id = None
                 max_retries = 5
                 retry_delays = [1, 2, 4, 8, 16]  # Exponential backoff in seconds
@@ -1269,7 +1309,8 @@ class OptionPositionMonitor:
                             quantity=position.quantity,
                             price=exit_premium,  # Market order at current LTP
                             order_type='MARKET',
-                            product_type='INTRADAY'
+                            product_type='INTRADAY',
+                            allow_queue=False,
                         )
                         
                         if exit_order_id:
@@ -1283,6 +1324,21 @@ class OptionPositionMonitor:
                                      quantity=position.quantity,
                                      exit_reason=exit_reason,
                                      attempt=attempt + 1)
+
+                            fill_status = self._wait_for_exit_fill(exit_order_id, symbol)
+                            if not fill_status:
+                                log_event(
+                                    "EXIT_ORDER_UNCONFIRMED",
+                                    f"⚠️ Exit SELL order not confirmed filled for {symbol} - keeping local position open",
+                                    symbol=symbol,
+                                    order_id=exit_order_id,
+                                    exit_reason=exit_reason,
+                                )
+                                return None
+
+                            confirmed_exit_price = fill_status.get('average_price') or exit_premium
+                            if confirmed_exit_price > 0:
+                                exit_premium = confirmed_exit_price
                             break  # Success - stop retrying
                         
                         # Order failed - check if retryable
@@ -1332,6 +1388,7 @@ class OptionPositionMonitor:
                              final_error=last_error,
                              exit_reason=exit_reason,
                              risk="Position may remain open on broker - manual intervention may be needed")
+                    return None
             
             pnl_info = position.close_position(exit_premium, exit_reason, exit_greeks=exit_greeks)  # ADDED: Pass exit Greeks
             
@@ -1405,10 +1462,26 @@ class OptionPositionMonitor:
             except Exception as e:
                 logger.warning(f"ML_OUTCOME_RECORD_FAILED: {symbol} | {str(e)}")
                 # Don't block position close on ML recording error
+
+            if self.broker and OptionsTradingConfig.TRADING_MODE == "LIVE":
+                try:
+                    cleanup_exclusions = [original_sl_order_id, position.exit_order_id, exit_order_id]
+                    cancelled_orders = self.broker.cancel_outstanding_orders_for_symbol(symbol, cleanup_exclusions)
+                    if cancelled_orders:
+                        log_event(
+                            "ORDER_CLEANUP_EXECUTED",
+                            f"🧹 Cancelled outstanding broker orders after close for {symbol}",
+                            symbol=symbol,
+                            cancelled_order_ids=cancelled_orders,
+                            exit_reason=exit_reason,
+                        )
+                except Exception as cleanup_error:
+                    logger.error(f"POSITION_CLOSE: ORDER_CLEANUP_ERROR | {symbol} | {str(cleanup_error)}")
             
             # Move to history
             self.closed_positions.append(position)
-            del self.positions[symbol]
+            with self._positions_lock:
+                self.positions.pop(symbol, None)
             
             # REMOVE FROM ACTIVE SYMBOL POOL
             self.symbol_pool.remove_symbol(symbol, exit_reason=exit_reason)
@@ -1449,22 +1522,101 @@ class OptionPositionMonitor:
             logger.error(f"POSITION_CLOSE: INNER_ERROR | {symbol} | {str(e)}")
             print(f"❌ Error closing position {symbol}: {str(e)}")
             return None
+
+    def _wait_for_exit_fill(self, order_id: str, symbol: str, timeout: int = 20) -> Optional[Dict[str, Any]]:
+        """Wait for a manual exit order to reach a filled broker state before closing local position state."""
+        if OptionsTradingConfig.TRADING_MODE != "LIVE" or not self.broker or not order_id:
+            return {'order_id': order_id, 'average_price': 0.0, 'status': 'SKIPPED'}
+
+        start_time = time.time()
+        filled_statuses = {'COMPLETE', 'FILLED', 'FULLY_FILLED'}
+        inactive_statuses = {'REJECTED', 'CANCELLED', 'EXPIRED'}
+
+        while time.time() - start_time < timeout:
+            order_status = self.broker.get_order_status(order_id)
+            if not order_status:
+                time.sleep(0.5)
+                continue
+
+            status = str(order_status.get('status', '')).upper()
+            if status in filled_statuses:
+                logger.info(
+                    f"EXIT_FILL_CONFIRMED: {symbol} | order_id={order_id} | status={status} | avg=₹{order_status.get('average_price', 0.0):.2f}"
+                )
+                return order_status
+
+            if status in inactive_statuses:
+                logger.error(f"EXIT_FILL_FAILED: {symbol} | order_id={order_id} | status={status}")
+                return None
+
+            logger.debug(f"EXIT_FILL_WAITING: {symbol} | order_id={order_id} | status={status}")
+            time.sleep(0.5)
+
+        logger.error(f"EXIT_FILL_TIMEOUT: {symbol} | order_id={order_id} | waited={timeout}s")
+        return None
+
+    def _reconcile_broker_stop_exit(self, symbol: str, expected_exit_price: float, exit_reason: str) -> Optional[Dict[str, Any]]:
+        """Finalize local position state only after the broker stop order reaches a terminal state."""
+        position = self._get_position(symbol)
+        if not position:
+            return None
+
+        if OptionsTradingConfig.TRADING_MODE != "LIVE" or not self.broker or not position.sl_order_id:
+            return self.close_position(symbol, expected_exit_price, exit_reason)
+
+        order_status = self.broker.get_order_status(position.sl_order_id)
+        if not order_status:
+            logger.warning(f"BROKER_SL_STATUS: UNKNOWN | {symbol} | order_id={position.sl_order_id} | waiting for broker update")
+            return None
+
+        status = order_status.get('status', '')
+        filled_statuses = {'COMPLETE', 'FILLED', 'FULLY_FILLED'}
+        inactive_statuses = {'REJECTED', 'CANCELLED', 'EXPIRED'}
+
+        if status in filled_statuses:
+            actual_exit_price = order_status.get('average_price') or position.sl_order_price or expected_exit_price
+            logger.info(
+                f"BROKER_SL_FILLED: {symbol} | order_id={position.sl_order_id} | status={status} | exit=₹{actual_exit_price:.2f}"
+            )
+            return self.close_position(
+                symbol,
+                actual_exit_price,
+                exit_reason,
+                broker_managed_exit=True,
+                skip_sl_cancel=True,
+                exit_order_id=position.sl_order_id,
+            )
+
+        if status in inactive_statuses:
+            logger.error(
+                f"BROKER_SL_INACTIVE: {symbol} | order_id={position.sl_order_id} | status={status} | attempting emergency manual exit"
+            )
+            return self.close_position(
+                symbol,
+                position.current_premium if position.current_premium > 0 else expected_exit_price,
+                f"{exit_reason} | BROKER_SL_{status}",
+                skip_sl_cancel=True,
+            )
+
+        logger.info(
+            f"BROKER_SL_PENDING: {symbol} | order_id={position.sl_order_id} | status={status} | waiting for broker fill"
+        )
+        return None
     
     def place_stop_loss_order(self, symbol: str) -> bool:
         """
         Place SL order to broker after BUY (for LIVE mode protection)
         
         Similar to equity bot - ensures broker executes SL even if bot crashes.
-        Uses STOPLOSS-MARKET order type with -20% from entry premium.
+        Uses AngelOne STOPLOSS_MARKET with the configured stop-loss percentage.
         
         Returns:
             True if SL order placed successfully, False otherwise
         """
-        if symbol not in self.positions:
+        position = self._get_position(symbol)
+        if not position:
             logger.warning(f"PLACE_SL: Position not found | {symbol}")
             return False
-        
-        position = self.positions[symbol]
         
         # Skip if SL order already placed
         if position.sl_order_id:
@@ -1478,17 +1630,14 @@ class OptionPositionMonitor:
         logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-{OptionsTradingConfig.STOP_LOSS_PERCENTAGE:.0f}%)")
         
         try:
-            # Place SELL order with STOPLOSS-LIMIT type (avoids slippage)
-            # allow_queue=False: if rate-limited, return None so retry_failed_sl_orders()
-            # handles retries. We MUST know the real broker order_id — storing a QUEUED_
-            # marker means the cancel in close_position() will use a garbage ID and fail,
-            # leaving a live SL on the broker that fires after the exit SELL → SHORT.
+            # Place SELL order with STOPLOSS_MARKET so AngelOne executes the exit as soon as
+            # the trigger is hit. We keep explicit no-queue handling so order_ids are real.
             sl_order_id = self.broker.place_options_order(
                 symbol=symbol,
                 action='SELL',
                 quantity=position.quantity,
                 price=sl_premium,
-                order_type='STOPLOSS_LIMIT',
+                order_type='STOPLOSS_MARKET',
                 product_type='INTRADAY',
                 allow_queue=False  # ❌ NEVER queue SL orders — must have real order_id
             )
@@ -1543,10 +1692,9 @@ class OptionPositionMonitor:
             'strategy': str  # 'adaptive', 'queue', 'ready'
         }
         """
-        if symbol not in self.positions:
+        position = self._get_position(symbol)
+        if not position:
             return {'should_modify': False, 'reason': 'position_not_found', 'strategy': None}
-        
-        position = self.positions[symbol]
         
         # STRATEGY 1: ADAPTIVE MODIFY - Only if SL change > 1% (reduced from 2%)
         # Milestones happen fast, so need lower threshold to catch them
@@ -1599,11 +1747,14 @@ class OptionPositionMonitor:
             logger.warning(f"MODIFY_SL: No broker available | {symbol}")
             return False
         
-        if symbol not in self.positions:
+        if symbol in self._closing_symbols:
+            logger.debug(f"MODIFY_SL: SKIPPED | {symbol} | close already in progress")
+            return False
+
+        position = self._get_position(symbol)
+        if not position:
             logger.warning(f"MODIFY_SL: Position not found | {symbol}")
             return False
-        
-        position = self.positions[symbol]
         
         # Check if we should modify using intelligent strategy
         check_result = self.should_modify_sl(symbol, new_sl_price)
@@ -1623,7 +1774,7 @@ class OptionPositionMonitor:
                 
                 # Queue the modify request
                 def modify_callback():
-                    return self.modify_sl_order(symbol, new_sl_price, order_id)
+                    return self.modify_sl_order(symbol, new_sl_price)
                 
                 rate_limiter.queue_request(
                     request_type=f"modify_sl_{symbol}",
@@ -1636,25 +1787,40 @@ class OptionPositionMonitor:
             position.last_modified_sl_price = new_sl_price
             position.modify_pending = False
             
+            new_sl_price = self._round_to_10_paise(new_sl_price)
+            active_order_id = order_id or position.sl_order_id
+
+            if not active_order_id:
+                logger.warning(f"MODIFY_SL: SKIPPED | {symbol} | no active SL order id")
+                return False
+
+            if order_id and position.sl_order_id and position.sl_order_id != order_id:
+                logger.warning(
+                    f"MODIFY_SL: STALE_ORDER_ID | {symbol} | requested={order_id} | current={position.sl_order_id} | modify skipped"
+                )
+                return False
+
             # Call broker API to actually modify the order (LIVE mode)
-            if OptionsTradingConfig.TRADING_MODE == "LIVE" and order_id:
+            if OptionsTradingConfig.TRADING_MODE == "LIVE":
                 try:
                     result = self.broker.modify_order(
-                        order_id=order_id,
+                        order_id=active_order_id,
                         symbol=symbol,
                         new_price=new_sl_price,
-                        quantity=position.quantity
+                        quantity=position.quantity,
+                        order_type='STOPLOSS_MARKET'
                     )
                     if result and not str(result).startswith("QUEUED_"):
                         # AngelOne's modifyOrder returns a NEW order_id for the modified order.
                         # We MUST update sl_order_id here — cancel_order() in close_position()
                         # uses sl_order_id. If we don't update it, cancel sends the OLD id,
                         # the broker rejects it, and the modified SL stays live → fires → SHORT.
-                        if result != order_id:
-                            logger.info(f"MODIFY_SL: ORDER_ID_UPDATED | {symbol} | old={order_id} | new={result}")
+                        if result != active_order_id:
+                            logger.info(f"MODIFY_SL: ORDER_ID_UPDATED | {symbol} | old={active_order_id} | new={result}")
                         position.sl_order_id = result
+                        position.sl_order_price = new_sl_price
                     elif not result:
-                        logger.warning(f"MODIFY_SL: Broker API failed | {symbol} | order_id={order_id}")
+                        logger.warning(f"MODIFY_SL: Broker API failed | {symbol} | order_id={active_order_id}")
                 except Exception as e:
                     logger.warning(f"MODIFY_SL: Broker API error | {symbol} | {str(e)}")
             
@@ -1695,8 +1861,7 @@ class OptionPositionMonitor:
         stats = {'attempted': 0, 'placed': 0, 'max_retries': 0}
         max_sl_retries = 5
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in self._snapshot_positions_items():
             
             # Skip if already has SL
             if position.sl_order_id:
@@ -1740,13 +1905,14 @@ class OptionPositionMonitor:
                         action='SELL',          # BUG FIX #5: Must be SELL (bot is LONG options)
                         quantity=position.quantity,
                         price=current_sl_price,
-                        order_type='STOPLOSS_LIMIT',   # BUG FIX #6: underscore, matches place_stop_loss_order()
+                        order_type='STOPLOSS_MARKET',
                         product_type='INTRADAY',
                         allow_queue=False  # ❌ NEVER queue SL — must have real order_id
                     )
                     
                     if sl_order_id and not str(sl_order_id).startswith("QUEUED_"):
                         position.sl_order_id = sl_order_id
+                        position.sl_order_price = current_sl_price
                         stats['placed'] += 1
                         logger.info(f"RETRY_SL: SUCCESS | {symbol} | order_id={sl_order_id} | retry_count={position.sl_retry_count}")
                         log_event("RETRY_SL_SUCCESS",
@@ -1783,8 +1949,7 @@ class OptionPositionMonitor:
             logger.debug(f"POSITION_MONITOR: Expiry auto-close disabled | allowing positions to run through expiry")
             return closed
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in self._snapshot_positions_items():
             
             if position.days_to_expiry() <= days_to_close:
                 # Close at current market price (current premium)
@@ -1820,8 +1985,7 @@ class OptionPositionMonitor:
         trailing_buffer = OptionsTradingConfig.TRAILING_BUFFER_PERCENTAGE
         decay_monitor = get_decay_monitor()
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in self._snapshot_positions_items():
             
             # Guard against zero entry premium
             if not position.entry_premium or position.entry_premium <= 0:
@@ -1900,10 +2064,10 @@ class OptionPositionMonitor:
         Exit: When price hits TRIAL SL or hard SL
         """
         closed = []
-        logger.info(f"CHECK_TRIAL_SL: Starting checks for {len(self.positions)} positions")
+        positions = self._snapshot_positions_items()
+        logger.info(f"CHECK_TRIAL_SL: Starting checks for {len(positions)} positions")
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             # Calculate gain % based on PEAK (not current) for TRIAL SL activation
             # This ensures we catch the 10% milestone even if price has pulled back
@@ -2060,9 +2224,9 @@ class OptionPositionMonitor:
                 logger.warning(f"SL_HIT: {symbol} | Type: {sl_type} | SL: ₹{effective_sl:.2f} | "
                              f"Current: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f}")
                 
-                pnl = self.close_position(
+                pnl = self._reconcile_broker_stop_exit(
                     symbol,
-                    effective_sl,  # ✅ FIXED: Close at SL price, not current LTP (prevents slippage loss)
+                    effective_sl,
                     f"{sl_type}_HIT (SL: ₹{effective_sl:.2f})"
                 )
                 
@@ -2074,7 +2238,7 @@ class OptionPositionMonitor:
                              symbol=symbol,
                              sl_type=sl_type,
                              entry_premium=position.entry_premium,
-                             exit_premium=position.current_premium,
+                             exit_premium=round(pnl.get('exit_premium', effective_sl), 2),
                              peak_premium=position.highest_premium,
                              sl_price=round(effective_sl, 2),
                              gain_percent=round(gain_percent, 2),
@@ -2082,7 +2246,7 @@ class OptionPositionMonitor:
                              trial_sl_updates=position.trial_sl_update_count if is_trial_sl_enabled else 0)
                     
                     logger.info(f"SL_EXIT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
-                               f"Exit: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f} | "
+                               f"Exit: ₹{pnl.get('exit_premium', effective_sl):.2f} | Peak: ₹{position.highest_premium:.2f} | "
                                f"PnL: ₹{pnl.get('pnl', 0):.2f} ({gain_percent:.2f}%) | "
                                f"{sl_type} Updates: {position.trial_sl_update_count}")
             else:
@@ -2110,10 +2274,10 @@ class OptionPositionMonitor:
         """
         closed = []
         
-        logger.debug(f"HARD_SL_CHECK: Starting | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"HARD_SL_CHECK: Starting | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             if not position.hard_sl_price:
                 logger.warning(f"HARD_SL_CHECK: {symbol} | No hard SL price set, recalculating from config")
@@ -2128,16 +2292,16 @@ class OptionPositionMonitor:
                            f"SL: ₹{position.hard_sl_price:.2f} | Current: ₹{position.current_premium:.2f} | "
                            f"Loss: {loss_percent:.1f}%")
                 
-                pnl = self.close_position(
+                pnl = self._reconcile_broker_stop_exit(
                     symbol,
-                    position.current_premium,
+                    position.hard_sl_price,
                     f"HARD_SL_HIT (SL: ₹{position.hard_sl_price:.2f})"
                 )
                 
                 if pnl:
                     closed.append(pnl)
                     logger.error(f"HARD_SL_EXIT_EXECUTED: {symbol} | PnL: ₹{pnl.get('pnl', 0):.2f} | "
-                               f"Entry: ₹{position.entry_premium:.2f} | Exit: ₹{position.current_premium:.2f}")
+                               f"Entry: ₹{position.entry_premium:.2f} | Exit: ₹{position.hard_sl_price:.2f}")
             else:
                 # Log hard SL status
                 current_loss_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
@@ -2176,14 +2340,14 @@ class OptionPositionMonitor:
         threshold = SentimentConfig.EARLY_EXIT_MOMENTUM_THRESHOLD / 100.0  # Convert % to decimal
         momentum_loss_trigger = -0.01  # Only exit momentum if already losing 1%+
         
-        logger.info(f"MOMENTUM_REVERSAL_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_MOMENTUM} | threshold={threshold*100:.1f}% | loss_trigger={momentum_loss_trigger*100:.1f}% | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.info(f"MOMENTUM_REVERSAL_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_MOMENTUM} | threshold={threshold*100:.1f}% | loss_trigger={momentum_loss_trigger*100:.1f}% | positions={len(positions)}")
         
         if not SentimentConfig.ENABLE_EARLY_EXIT_MOMENTUM:
             logger.warning("MOMENTUM_REVERSAL_CHECK: Feature DISABLED in config")
             return closed  # Feature disabled
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             # 🔧 SKIP MOMENTUM CHECK IF TRIAL_SL IS ACTIVE
             # Once TRIAL_SL is protecting the profit, momentum checks are unnecessary
@@ -2286,13 +2450,13 @@ class OptionPositionMonitor:
         # Threshold from data analysis
         stale_hold_time_min = 20  # 20 minutes (stale consolidation period) - increased from 15min to allow more trend development
         
-        logger.info(f"STALE_CONSOLIDATION_CHECK: Starting | positions={len(self.positions)} | "
+        positions = self._snapshot_positions_items()
+        logger.info(f"STALE_CONSOLIDATION_CHECK: Starting | positions={len(positions)} | "
                    f"stale_threshold={stale_hold_time_min}min | "
                    f"trial_sl_threshold={trial_sl_threshold:.0f}% | market={market_reason} | "
                    f"exit_condition=trial_sl_enabled=FALSE (peak < {trial_sl_threshold:.0f}%)")
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             # 🔧 SKIP STALE_CONSOLIDATION IF TRIAL_SL IS ACTIVE
             # Once TRIAL_SL is protecting the profit, we don't need stale logic
@@ -2391,12 +2555,12 @@ class OptionPositionMonitor:
         momentum_lookback = 5 * 60   # Look at last 5 minutes
         pnl_threshold = -0.02  # -2% (already losing consolidation)
         
-        logger.info(f"STALE_TIMEOUT_CHECK: Starting | positions={len(self.positions)} | "
+        positions = self._snapshot_positions_items()
+        logger.info(f"STALE_TIMEOUT_CHECK: Starting | positions={len(positions)} | "
                    f"hold_threshold={hold_time_threshold/60:.0f}min | "
                    f"momentum_threshold={momentum_threshold*100:.2f}%")
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             # Calculate time held
             hold_time_sec = (datetime.now() - position.entry_time).total_seconds()
@@ -2540,14 +2704,14 @@ class OptionPositionMonitor:
         closed = []
         threshold = SentimentConfig.EARLY_EXIT_IV_CRASH_THRESHOLD / 100.0  # Convert % to decimal
         
-        logger.info(f"IV_CRASH_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_IV_CRASH} | threshold={threshold*100:.1f}% | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.info(f"IV_CRASH_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_IV_CRASH} | threshold={threshold*100:.1f}% | positions={len(positions)}")
         
         if not SentimentConfig.ENABLE_EARLY_EXIT_IV_CRASH:
             logger.warning("IV_CRASH_CHECK: Feature DISABLED in config")
             return closed  # Feature disabled
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             # Check IV collapse
             if position.entry_iv and position.current_iv:
@@ -2617,14 +2781,14 @@ class OptionPositionMonitor:
         threshold = SentimentConfig.EARLY_EXIT_IV_SPIKE_THRESHOLD / 100.0  # Convert % to decimal
         min_time = SentimentConfig.EARLY_EXIT_IV_SPIKE_MIN_TIME
         
-        logger.info(f"IV_SPIKE_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_IV_SPIKE} | threshold={threshold*100:.1f}% | min_time={min_time}s | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.info(f"IV_SPIKE_CHECK: Starting | enabled={SentimentConfig.ENABLE_EARLY_EXIT_IV_SPIKE} | threshold={threshold*100:.1f}% | min_time={min_time}s | positions={len(positions)}")
         
         if not SentimentConfig.ENABLE_EARLY_EXIT_IV_SPIKE:
             logger.warning("IV_SPIKE_CHECK: Feature DISABLED in config")
             return closed  # Feature disabled
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in positions:
             
             # Check IV spike (opposite of crash)
             if position.entry_iv and position.current_iv:
@@ -2702,8 +2866,7 @@ class OptionPositionMonitor:
         max_loss = OptionsTradingConfig.MAX_LOSS_PER_TRADE  # Safety net only
         decay_monitor = get_decay_monitor()
         
-        for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
+        for symbol, position in self._snapshot_positions_items():
             
             if position.unrealized_pnl < 0:
                 loss_percent = abs((position.unrealized_pnl / (position.entry_premium * position.quantity)) * 100)
@@ -2772,10 +2935,11 @@ class OptionPositionMonitor:
         
         try:
             sentiment_engine = get_market_sentiment()
+            positions = self._snapshot_positions_items()
             
             # BATCH FETCH: Get all PCR and OI data ONCE for all positions
             # This reduces API calls dramatically (1 call per data type instead of N)
-            logger.debug(f"SENTIMENT_BATCH_FETCH: Fetching data for {len(self.positions)} positions")
+            logger.debug(f"SENTIMENT_BATCH_FETCH: Fetching data for {len(positions)} positions")
             
             current_pcr_map = sentiment_engine.fetch_pcr_ratio()  # Call ONCE
             current_buildup_map = sentiment_engine.fetch_oi_buildup('Long Built Up')  # Call ONCE
@@ -2783,8 +2947,7 @@ class OptionPositionMonitor:
             logger.info(f"SENTIMENT_BATCH_FETCH: Got PCR={len(current_pcr_map)} symbols, OI={len(current_buildup_map)} symbols")
             
             # Now check all positions with cached data
-            for symbol in list(self.positions.keys()):
-                position = self.positions[symbol]
+            for symbol, position in positions:
                 
                 # Get underlying from symbol (first part before expiry)
                 underlying = symbol.split('25')[0] if '25' in symbol else symbol.split('24')[0] if '24' in symbol else symbol
@@ -2912,27 +3075,28 @@ class OptionPositionMonitor:
     
     def get_position_summary(self) -> Dict[str, Any]:
         """Get summary of all open positions"""
-        total_unrealized = sum(p.unrealized_pnl for p in self.positions.values())
-        total_quantity = sum(p.quantity for p in self.positions.values())
+        positions = self._snapshot_positions_values()
+        total_unrealized = sum(p.unrealized_pnl for p in positions)
+        total_quantity = sum(p.quantity for p in positions)
         
         # Portfolio Greeks
-        portfolio_delta = sum(p.current_greeks.get('delta', 0) * p.quantity for p in self.positions.values())
-        portfolio_gamma = sum(p.current_greeks.get('gamma', 0) * p.quantity for p in self.positions.values())
-        portfolio_theta = sum(p.current_greeks.get('theta', 0) * p.quantity for p in self.positions.values())
+        portfolio_delta = sum(p.current_greeks.get('delta', 0) * p.quantity for p in positions)
+        portfolio_gamma = sum(p.current_greeks.get('gamma', 0) * p.quantity for p in positions)
+        portfolio_theta = sum(p.current_greeks.get('theta', 0) * p.quantity for p in positions)
         
         return {
-            'open_positions': len(self.positions),
+            'open_positions': len(positions),
             'total_quantity': total_quantity,
             'total_unrealized_pnl': total_unrealized,
             'portfolio_delta': portfolio_delta,
             'portfolio_gamma': portfolio_gamma,
             'portfolio_theta': portfolio_theta,
-            'positions': [p.to_dict() for p in self.positions.values()]
+            'positions': [p.to_dict() for p in positions]
         }
     
     def get_all_positions(self) -> list:
         """Get all open positions as dictionaries for squareoff"""
-        return [p.to_dict() for p in self.positions.values()]
+        return [p.to_dict() for p in self._snapshot_positions_values()]
     
     def get_fake_move_detection_stats(self) -> Dict[str, Any]:
         """Get fake move detection statistics"""
@@ -2968,7 +3132,8 @@ class OptionPositionMonitor:
             logger.warning("REFRESH_LTP: No broker available")
             return refresh_stats
         
-        if not self.positions:
+        positions = self._snapshot_positions_items()
+        if not positions:
             return refresh_stats
         
         # Get active symbols from pool (only currently open positions)
@@ -3024,7 +3189,7 @@ class OptionPositionMonitor:
         # PERFORMANCE OPTIMIZATION: Bulk fetch all underlying LTPs once instead of per-position
         # This prevents repeated API calls when fetching option chains
         # Batch into 50-symbol chunks per broker limit
-        underlying_symbols = list(set(pos.underlying for pos in self.positions.values()))
+        underlying_symbols = list(set(pos.underlying for _, pos in positions))
         underlying_ltps = {}
         if underlying_symbols:
             try:
@@ -3042,10 +3207,10 @@ class OptionPositionMonitor:
         # Process each symbol (only active positions)
         for symbol in all_symbols:
             try:
-                if symbol not in self.positions:
+                position = self._get_position(symbol)
+                if not position:
                     continue
-                
-                position = self.positions[symbol]
+
                 refresh_stats['positions_checked'] += 1
                 
                 # Get LTP from bulk fetch result
@@ -3230,13 +3395,14 @@ class OptionPositionMonitor:
             'errors': []
         }
         
-        if not self.broker or not self.positions:
+        positions = self._snapshot_positions_items()
+        if not self.broker or not positions:
             return greeks_stats
         
-        logger.info(f"REFRESH_GREEKS: Starting | positions={len(self.positions)}")
+        logger.info(f"REFRESH_GREEKS: Starting | positions={len(positions)}")
         
         # Get unique underlying symbols
-        underlying_symbols = set(pos.underlying for pos in self.positions.values())
+        underlying_symbols = set(pos.underlying for _, pos in positions)
         
         # Bulk fetch all underlying LTPs once
         underlying_ltps = {}
@@ -3247,7 +3413,7 @@ class OptionPositionMonitor:
                 logger.warning(f"REFRESH_GREEKS: Underlying bulk fetch failed | {str(e)}")
         
         # Fetch Greeks for each position
-        for symbol, position in self.positions.items():
+        for symbol, position in positions:
             try:
                 greeks_stats['positions_checked'] += 1
                 
@@ -3326,12 +3492,13 @@ class OptionPositionMonitor:
             'errors': []
         }
         
-        if not self.positions:
+        positions = self._snapshot_positions_items()
+        if not positions:
             logger.debug("REFRESH_CANDLES: No positions to monitor")
             return candle_stats
         
         # Get unique underlyings from active positions
-        underlyings = set(pos.underlying for pos in self.positions.values())
+        underlyings = set(pos.underlying for _, pos in positions)
         candle_stats['underlyings'] = sorted(list(underlyings))
         
         logger.info(f"REFRESH_CANDLES: Starting | underlyings={len(underlyings)} | symbols={underlyings}")
@@ -3342,7 +3509,7 @@ class OptionPositionMonitor:
             
             # Record premium movements as candles for fake move detection
             # This gives the momentum filter data about sustained moves
-            for symbol, position in self.positions.items():
+            for symbol, position in positions:
                 try:
                     # Only process if we have valid entry premium
                     if position.entry_premium <= 0:
@@ -3397,12 +3564,11 @@ class OptionPositionMonitor:
         """
         closed = []
         
-        logger.debug(f"GREEKS_CHECK: Starting check_greeks_delta_reversal | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_delta_reversal | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
+        for symbol, position in positions:
             try:
-                position = self.positions[symbol]
-                
                 # Use new confirmation logic with multiple sample checking
                 is_confirmed, delta_change = position.get_delta_trend_confirmed()
                 
@@ -3441,12 +3607,11 @@ class OptionPositionMonitor:
         """
         closed = []
         
-        logger.debug(f"GREEKS_CHECK: Starting check_greeks_gamma_explosion | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_gamma_explosion | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
+        for symbol, position in positions:
             try:
-                position = self.positions[symbol]
-                
                 # Use new status method with both checks
                 is_dangerous, current_gamma, reason = position.get_gamma_status()
                 
@@ -3484,12 +3649,11 @@ class OptionPositionMonitor:
         """
         closed = []
         
-        logger.debug(f"GREEKS_CHECK: Starting check_greeks_theta_acceleration | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_theta_acceleration | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
+        for symbol, position in positions:
             try:
-                position = self.positions[symbol]
-                
                 # Use new status method with directional context
                 is_dangerous, current_theta, reason, pnl_check, delta_check = position.get_theta_status()
                 
@@ -3529,12 +3693,11 @@ class OptionPositionMonitor:
         """
         closed = []
         
-        logger.debug(f"GREEKS_CHECK: Starting check_greeks_vega_crush | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_vega_crush | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
+        for symbol, position in positions:
             try:
-                position = self.positions[symbol]
-                
                 # Use new status method with dynamic threshold
                 is_dangerous, iv_change_pct, reason = position.get_vega_status()
                 
@@ -3576,12 +3739,11 @@ class OptionPositionMonitor:
         """
         closed = []
         
-        logger.debug(f"GREEKS_CHECK: Starting check_greeks_health_score | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"GREEKS_CHECK: Starting check_greeks_health_score | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
+        for symbol, position in positions:
             try:
-                position = self.positions[symbol]
-                
                 # Use new unified status method
                 is_unhealthy, conditions, formatted_str = position.get_health_status()
                 
@@ -3630,12 +3792,11 @@ class OptionPositionMonitor:
             logger.debug("ML_QUALITY_CHECK: ML engine not available")
             return closed
         
-        logger.debug(f"ML_QUALITY_CHECK: Starting ML Greeks quality check | positions={len(self.positions)}")
+        positions = self._snapshot_positions_items()
+        logger.debug(f"ML_QUALITY_CHECK: Starting ML Greeks quality check | positions={len(positions)}")
         
-        for symbol in list(self.positions.keys()):
+        for symbol, position in positions:
             try:
-                position = self.positions[symbol]
-                
                 # Check if Greeks quality has degraded
                 should_exit, reason, ml_score = ml_engine.should_exit_by_ml_quality(
                     position.current_greeks,
@@ -3674,7 +3835,7 @@ class OptionPositionMonitor:
         """
         monitoring_result = {
             'timestamp': datetime.now().isoformat(),
-            'positions_monitored': len(self.positions),
+            'positions_monitored': len(self._snapshot_positions_values()),
             'closed_by_expiry': [],
             'closed_by_profit': [],
             'closed_by_stoploss': [],
@@ -3699,10 +3860,11 @@ class OptionPositionMonitor:
                 self.broker.process_pending_rate_limited_requests()
             
             # CRITICAL: Refresh LTP for all positions before checking exits
-            if len(self.positions) > 0:
+            positions = self._snapshot_positions_values()
+            if positions:
                 refresh_stats = self.refresh_position_ltps()
                 monitoring_result['ltps_refreshed'] = refresh_stats['ltps_updated']
-                logger.info(f"MONITORING: Refreshed LTP for {refresh_stats['ltps_updated']}/{len(self.positions)} positions")
+                logger.info(f"MONITORING: Refreshed LTP for {refresh_stats['ltps_updated']}/{len(positions)} positions")
                 
                 # OPTIMIZATION: Refresh underlying candles for fake move detection
                 candle_stats = self.refresh_underlying_candles()
@@ -3815,7 +3977,8 @@ class OptionPositionMonitor:
                 monitoring_result['rate_limiter_stats'] = self.broker.get_rate_limiter_stats()
             
             total_closed = len(expired) + len(profit_closes) + len(trailing_closes) + len(momentum_closes) + len(stale_closes) + len(sl_closes) + len(sentiment_closes) + len(iv_crash_closes) + len(iv_spike_closes) + len(greeks_delta_closes) + len(greeks_gamma_closes) + len(greeks_theta_closes) + len(greeks_vega_closes) + len(greeks_health_closes) + len(ml_quality_closes)
-            logger.info(f"MONITORING: Checked {len(self.positions)} positions | Closed {total_closed} "
+            open_positions = self._snapshot_positions_values()
+            logger.info(f"MONITORING: Checked {len(open_positions)} positions | Closed {total_closed} "
                        f"(expiry={len(expired)}, profit={len(profit_closes)}, trailing={len(trailing_closes)}, "
                        f"momentum={len(momentum_closes)}, stale={len(stale_closes)}, stoploss={len(sl_closes)}, sentiment={len(sentiment_closes)}, "
                        f"iv_crash={len(iv_crash_closes)}, iv_spike={len(iv_spike_closes)}, "
@@ -3824,11 +3987,12 @@ class OptionPositionMonitor:
                        f"greeks_health={len(greeks_health_closes)}, ml_quality={len(ml_quality_closes)})")
             
             # Log current position state summary
-            if len(self.positions) > 0:
-                total_pnl = sum(p.unrealized_pnl for p in self.positions.values())
-                portfolio_delta = sum(p.current_greeks.get('delta', 0) * p.quantity for p in self.positions.values())
-                portfolio_gamma = sum(p.current_greeks.get('gamma', 0) * p.quantity for p in self.positions.values())
-                logger.debug(f"POSITION_STATE: open={len(self.positions)} | upnl=₹{total_pnl:.2f} | "
+            positions = self._snapshot_positions_values()
+            if positions:
+                total_pnl = sum(p.unrealized_pnl for p in positions)
+                portfolio_delta = sum(p.current_greeks.get('delta', 0) * p.quantity for p in positions)
+                portfolio_gamma = sum(p.current_greeks.get('gamma', 0) * p.quantity for p in positions)
+                logger.debug(f"POSITION_STATE: open={len(positions)} | upnl=₹{total_pnl:.2f} | "
                             f"delta={portfolio_delta:.2f} | gamma={portfolio_gamma:.4f} | interval=10s")
             
         except Exception as e:
@@ -3856,7 +4020,7 @@ class OptionPositionMonitor:
             
             positions_list = [
                 pos.to_dict() 
-                for pos in self.positions.values() 
+                for pos in self._snapshot_positions_values() 
                 if pos.symbol not in STUCK_INTRADAY_SYMBOLS
             ]
             positions_list.sort(key=lambda item: item.get('entry_time', ''))
@@ -3959,13 +4123,14 @@ class OptionPositionMonitor:
                         position.last_updated = datetime.fromisoformat(last_updated_raw)
                     except Exception:
                         pass
-                self.positions[symbol] = position
+                with self._positions_lock:
+                    self.positions[symbol] = position
                 
                 # 🔴 CRITICAL FIX: Add restored positions to symbol pool for LTP refreshing
                 # Without this, refresh_position_ltps() finds no active symbols and skips all updates
                 self.symbol_pool.add_symbol(symbol, entry_time=position.entry_time)
                 
-            logger.info(f"POSITION_LOAD: Loaded {len(self.positions)} positions | Active symbols in pool: {len(self.symbol_pool.get_active_symbols())}")
+            logger.info(f"POSITION_LOAD: Loaded {len(self._snapshot_positions_values())} positions | Active symbols in pool: {len(self.symbol_pool.get_active_symbols())}")
                 
         except Exception as e:
             print(f"⚠️ Error loading positions: {str(e)}")

@@ -24,7 +24,7 @@ ML Features captured per symbol:
 
 import json
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
@@ -128,7 +128,10 @@ class EODLearningAggregator:
                 'exit_reason': trade.get('exit_reason', 'UNKNOWN'),
                 'closed_at': trade.get('closed_at', ''),
                 'quantity': trade.get('quantity', 1),
-                'entry_greeks': trade.get('entry_greeks', {}),  # If available from new implementation
+                'entry_greeks': trade.get('entry_greeks', {}),
+                # Market trend context at entry (Pine Script 7.18-E)
+                'market_trend':   trade.get('market_trend', 'UNKNOWN'),
+                'trend_strength': trade.get('trend_strength'),
             }
             
             trades_by_symbol[base_symbol].append(trade_data)
@@ -309,6 +312,119 @@ class EODLearningAggregator:
                     reliability_score = 0.2
             else:
                 reliability_score = 0.5  # Default for new symbols
+
+            # ----------------------------------------------------------------
+            # PNL BY TREND: aggregate per-symbol performance split by market_trend
+            # Enables future ML to weight position sizing by trend-symbol affinity
+            # e.g. RELIANCE wins 70% on GOOD days → boost GOOD cap multiplier
+            # ----------------------------------------------------------------
+            _trend_buckets = {'GOOD': [], 'NEUTRAL': [], 'BAD': [], 'UNKNOWN': []}
+            for t in all_trades_for_stats:
+                _t = (t.get('market_trend') or 'UNKNOWN').strip().upper()
+                _bucket = _t if _t in _trend_buckets else 'UNKNOWN'
+                _trend_buckets[_bucket].append(t)
+
+            def _trend_stats(bucket_trades):
+                if not bucket_trades:
+                    return {'trades': 0, 'wins': 0, 'win_rate': 0.0,
+                            'total_pnl': 0.0, 'avg_pnl': 0.0}
+                _wins = [t for t in bucket_trades if t['pnl'] > 0]
+                return {
+                    'trades':    len(bucket_trades),
+                    'wins':      len(_wins),
+                    'win_rate':  round(len(_wins) / len(bucket_trades), 4),
+                    'total_pnl': round(sum(t['pnl'] for t in bucket_trades), 2),
+                    'avg_pnl':   round(sum(t['pnl'] for t in bucket_trades) / len(bucket_trades), 2),
+                }
+
+            pnl_by_trend = {k: _trend_stats(v) for k, v in _trend_buckets.items()}
+
+            # best_trend: trend with most trades that has win_rate >= 0.5, else NEUTRAL
+            _candidates = [
+                (k, v) for k, v in pnl_by_trend.items()
+                if k != 'UNKNOWN' and v['trades'] >= 3 and v['win_rate'] >= 0.5
+            ]
+            best_trend = max(_candidates, key=lambda x: x[1]['win_rate'])[0] \
+                if _candidates else 'NEUTRAL'
+
+            # Pre-compute confidence multiplier (used in probation logic below)
+            conf_mult = 1.0 + (reliability_score - 0.5)
+
+            # =================================================================
+            # PROBATION LADDER — never lose data, earn recovery through probes
+            # =================================================================
+            ex = existing_stats.get(symbol, {})
+            prob_status         = ex.get('probation_status', 'ACTIVE')
+            prob_backoff        = ex.get('probation_backoff_days', 7)
+            prob_streak         = ex.get('probation_streak', 0)
+            prob_attempts       = ex.get('probation_probes_attempted', 0)
+            prob_won_count      = ex.get('probation_probes_won', 0)
+            prob_blocked_since  = ex.get('probation_blocked_since', None)
+            prob_next_probe     = ex.get('probation_next_probe', None)
+            prob_last_probe     = ex.get('probation_last_probe_date', None)
+            today_str           = datetime.now().date().isoformat()
+
+            # Detect probe trade: symbol was BLOCKED and new trades happened today
+            # Guard with `today_str != prob_last_probe` to avoid double-processing
+            probe_trade_today = (
+                prob_status == 'BLOCKED'
+                and len(trades) > 0
+                and prob_next_probe is not None
+                and today_str >= prob_next_probe
+                and today_str != prob_last_probe
+            )
+
+            if probe_trade_today:
+                probe_won_today = any(t['pnl'] > 0 for t in trades)
+                prob_attempts  += len(trades)
+                prob_last_probe = today_str
+                if probe_won_today:
+                    prob_won_count += sum(1 for t in trades if t['pnl'] > 0)
+                    prob_streak    += 1
+                    if prob_streak >= 3:
+                        # 3 consecutive probe wins → fully rehabilitated
+                        prob_status  = 'ACTIVE'
+                        prob_backoff = 7   # reset for potential future block
+                        logger.info(f"PROBATION: REHABILITATED | {symbol} | "
+                                    f"3 consecutive probe wins | total_probes={prob_attempts}")
+                    else:
+                        # Good result — next probe in 5 days
+                        next_dt        = datetime.now().date() + timedelta(days=5)
+                        prob_next_probe = next_dt.isoformat()
+                        logger.info(f"PROBATION: PROBE_WIN | {symbol} | "
+                                    f"streak={prob_streak}/3 | next_probe={prob_next_probe}")
+                else:
+                    # Probe failed — reset streak, double the wait (max 56 days)
+                    prob_streak  = 0
+                    prob_backoff = min(prob_backoff * 2, 56)
+                    next_dt        = datetime.now().date() + timedelta(days=prob_backoff)
+                    prob_next_probe = next_dt.isoformat()
+                    logger.info(f"PROBATION: PROBE_LOSS | {symbol} | "
+                                f"backoff={prob_backoff}d | next_probe={prob_next_probe}")
+
+            elif prob_status == 'ACTIVE':
+                # Check if symbol should be freshly blocked
+                if total_trades >= 5 and conf_mult <= 0.7:
+                    prob_status        = 'BLOCKED'
+                    prob_blocked_since = today_str
+                    prob_streak        = 0
+                    if prob_backoff < 7:
+                        prob_backoff = 7
+                    next_dt        = datetime.now().date() + timedelta(days=prob_backoff)
+                    prob_next_probe = next_dt.isoformat()
+                    cur_wr = (len(wins) / total_trades) if total_trades > 0 else 0
+                    logger.info(f"PROBATION: NEWLY_BLOCKED | {symbol} | "
+                                f"WR={cur_wr:.0%} | conf={conf_mult:.1f} | "
+                                f"first_probe={prob_next_probe}")
+
+            elif prob_status == 'BLOCKED':
+                # Auto-recover: if win rate improved strongly without needing probes
+                # (e.g. symbol was in data gap, got re-rated with new history)
+                if total_trades >= 5 and conf_mult > 0.9:
+                    prob_status = 'ACTIVE'
+                    prob_streak = 0
+                    logger.info(f"PROBATION: AUTO_RECOVERED | {symbol} | "
+                                f"conf={conf_mult:.1f} -> ACTIVE")
             
             # Build new trade history from today's trades
             new_trade_history = [
@@ -350,8 +466,18 @@ class EODLearningAggregator:
                 'win_rate_last_10': recent_wins / len(recent_trades) if recent_trades else 0,
                 'recent_form': recent_form,
                 'reliability_score': reliability_score,
-                'confidence_multiplier': 1.0 + (reliability_score - 0.5),  # 0.5 to 1.5 range
-                
+                'confidence_multiplier': conf_mult,
+
+                # Probation ladder state (persisted across days, never erased)
+                'probation_status':          prob_status,       # 'ACTIVE' or 'BLOCKED'
+                'probation_blocked_since':   prob_blocked_since,
+                'probation_next_probe':      prob_next_probe,
+                'probation_backoff_days':    prob_backoff,
+                'probation_streak':          prob_streak,       # consecutive probe wins (3 = ACTIVE)
+                'probation_probes_attempted': prob_attempts,
+                'probation_probes_won':      prob_won_count,
+                'probation_last_probe_date': prob_last_probe,
+
                 # Greeks analysis
                 'entry_greeks_stats': entry_greeks_stats,
                 'current_greeks_stats': current_greeks_stats,
@@ -396,7 +522,12 @@ class EODLearningAggregator:
                 
                 # Exit reasons distribution
                 'exit_reasons': self._count_exit_reasons(trades),
-                
+
+                # Market trend performance split (Pine Script 7.18-E)
+                # ML training: learn which symbols win on which trend days
+                'pnl_by_trend': pnl_by_trend,
+                'best_trend':   best_trend,
+
                 # Trade history with merged data (IMPORTANT: preserves historical data)
                 'trade_history': merged_trade_history,
             }

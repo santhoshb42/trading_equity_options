@@ -303,8 +303,8 @@ No closed trades.
         
         # === SECTION 1: CLOSED TRADES ===
         csv_lines.append("=== CLOSED TRADES (Today) ===")
-        csv_lines.append("Sts | Underlying | Time  | Entry  | Exit   | High   | Qty    | PnL      | PnL%  | Dur   | Reason   | EntD   | EntG   | EntT   | ExD    | ExG    | ExT")
-        csv_lines.append("----+------------+-------+--------+--------+--------+--------+----------+-------+-------+----------+--------+--------+--------+--------+--------+--------")
+        csv_lines.append("Sts | Underlying | Time  | Entry  | Exit   | High   | Low    | Qty    | PnL      | PnL%  | Dur   | Reason   | EntD   | EntG   | EntT   | ExD    | ExG    | ExT")
+        csv_lines.append("----+------------+-------+--------+--------+--------+--------+--------+----------+-------+-------+----------+--------+--------+--------+--------+--------+--------")
         
         # Sort closed trades by close time (most recent first)
         today_closed_sorted = sorted(today_closed, key=lambda x: x.get('closed_at', x.get('exit_time', '')), reverse=True)
@@ -320,6 +320,7 @@ No closed trades.
             entry_prem = trade.get('entry_premium', 0)
             exit_prem = trade.get('exit_premium', 0)
             highest_prem = trade.get('highest_premium', 0)
+            lowest_prem = trade.get('lowest_premium', 0)
             qty = trade.get('quantity', 0)
             pnl = trade.get('pnl', 0)
             pnl_pct = trade.get('pnl_percent', 0)
@@ -363,14 +364,14 @@ No closed trades.
             exit_theta = exit_greeks.get('theta', 0)
             
             # Format with fixed widths matching header
-            line = f"CLS | {underlying:<10} | {entry_time:>5} | {entry_prem:>6.2f} | {exit_prem:>6.2f} | {highest_prem:>6.2f} | {qty:>6d} | {pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8} | {entry_delta:>6.3f} | {entry_gamma:>6.3f} | {entry_theta:>6.2f} | {exit_delta:>6.3f} | {exit_gamma:>6.3f} | {exit_theta:>6.2f}"
+            line = f"CLS | {underlying:<10} | {entry_time:>5} | {entry_prem:>6.2f} | {exit_prem:>6.2f} | {highest_prem:>6.2f} | {lowest_prem:>6.2f} | {qty:>6d} | {pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8} | {entry_delta:>6.3f} | {entry_gamma:>6.3f} | {entry_theta:>6.2f} | {exit_delta:>6.3f} | {exit_gamma:>6.3f} | {exit_theta:>6.2f}"
             csv_lines.append(line)
         
         # === SECTION 2: ONGOING TRADES ===
         csv_lines.append("")
         csv_lines.append("=== ONGOING TRADES (Live) ===")
-        csv_lines.append("Sts | Underlying | Time  | Entry  | Curr   | High   | Qty    | UnPnL    | PnL%  | Dur   | EntD   | EntG   | EntT   | CurD   | CurG   | CurT")
-        csv_lines.append("----+------------+-------+--------+--------+--------+--------+----------+-------+-------+--------+--------+--------+--------+--------+--------")
+        csv_lines.append("Sts | Underlying | Time  | Entry  | Curr   | High   | Low    | Qty    | UnPnL    | PnL%  | Dur   | EntD   | EntG   | EntT   | CurD   | CurG   | CurT")
+        csv_lines.append("----+------------+-------+--------+--------+--------+--------+--------+----------+-------+-------+--------+--------+--------+--------+--------+--------")
         
         # Sort ongoing by entry time (oldest first)
         ongoing_sorted = sorted(ongoing_trades, key=lambda x: x.get('entry_time', ''))
@@ -386,6 +387,7 @@ No closed trades.
             entry_prem = trade.get('entry_premium', 0)
             current_prem = trade.get('current_premium', 0)
             highest_prem = trade.get('highest_premium', 0)
+            lowest_prem = trade.get('lowest_premium', 0)
             qty = trade.get('quantity', 0)
             unrealized_pnl = trade.get('unrealized_pnl', 0)
             pnl_pct = (unrealized_pnl / (entry_prem * qty) * 100) if (entry_prem * qty) > 0 else 0
@@ -414,7 +416,7 @@ No closed trades.
             cur_theta = current_greeks.get('theta', 0)
             
             # Format with fixed widths matching header
-            line = f"OPN | {underlying:<10} | {entry_time:>5} | {entry_prem:>6.2f} | {current_prem:>6.2f} | {highest_prem:>6.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {entry_delta:>6.3f} | {entry_gamma:>6.3f} | {entry_theta:>6.2f} | {cur_delta:>6.3f} | {cur_gamma:>6.3f} | {cur_theta:>6.2f}"
+            line = f"OPN | {underlying:<10} | {entry_time:>5} | {entry_prem:>6.2f} | {current_prem:>6.2f} | {highest_prem:>6.2f} | {lowest_prem:>6.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {entry_delta:>6.3f} | {entry_gamma:>6.3f} | {entry_theta:>6.2f} | {cur_delta:>6.3f} | {cur_gamma:>6.3f} | {cur_theta:>6.2f}"
             csv_lines.append(line)
         
         return "\n".join(csv_lines)

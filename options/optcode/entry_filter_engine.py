@@ -19,6 +19,7 @@ Goal: Reject 50% of alerts to keep only highest-confidence trades (55%+ win rate
 """
 
 import os
+import json
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
@@ -36,7 +37,7 @@ class PremiumValidator:
     
     def __init__(self):
         self.name = "PremiumValidator"
-        self.min_premium = float(os.getenv("ENTRY_FILTER_MIN_PREMIUM", "5.0"))  # Min ₹5 premium
+        self.min_premium = float(os.getenv("ENTRY_FILTER_MIN_PREMIUM", "1.0"))  # Min ₹1 premium (data shows <₹5 trades have better WR than >₹5)
         logger.info(f"{self.name}: Initialized | Min premium: ₹{self.min_premium}")
     
     def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
@@ -412,6 +413,110 @@ class ExpiryValidator:
 
 
 # =============================================================================
+# VALIDATOR 7: SYMBOL REPUTATION (Probation Ladder)
+# =============================================================================
+
+class SymbolReputationValidator:
+    """
+    Hard-gate filter using the probation ladder from symbol_stats.json.
+
+    States:
+      ACTIVE  → trade normally
+      BLOCKED → hard reject UNLESS the probe window has opened
+                  probe window: 1 trade allowed every N days to check for recovery
+                  3 consecutive probe wins → back to ACTIVE
+                  probe loss → backoff doubles (7 → 14 → 28 → 56 days)
+
+    Data is NEVER erased — probation state accumulates alongside win/loss history.
+    The EOD aggregator (eod_learning_aggregator.py) writes probation state nightly.
+    """
+
+    # Block threshold: symbols with conf_mult <= this get probation
+    BLOCK_CONF_THRESHOLD  = 0.7
+    MIN_TRADES_TO_BLOCK   = 5    # need at least 5 trades before blocking
+    STATS_CACHE_TTL_SEC   = 300  # reload file at most every 5 minutes
+
+    def __init__(self, stats_path: str = None):
+        self.name = "SymbolReputationValidator"
+        if stats_path:
+            self._stats_file = Path(stats_path)
+        else:
+            self._stats_file = Path(__file__).parent.parent / "data" / "learning" / "symbol_stats.json"
+        self._cache: Dict = {}
+        self._cache_ts: Optional[datetime] = None
+        logger.info(f"{self.name}: Initialized | stats={self._stats_file}")
+
+    # ------------------------------------------------------------------
+    def _load(self) -> Dict:
+        """Return cached symbol_stats dict, refreshing every 5 minutes."""
+        now = datetime.now()
+        if (
+            self._cache
+            and self._cache_ts
+            and (now - self._cache_ts).total_seconds() < self.STATS_CACHE_TTL_SEC
+        ):
+            return self._cache
+        try:
+            if self._stats_file.exists():
+                with open(self._stats_file) as f:
+                    self._cache = json.load(f)
+                self._cache_ts = now
+                logger.debug(f"{self.name}: Stats reloaded ({len(self._cache)} symbols)")
+        except Exception as exc:
+            logger.warning(f"{self.name}: LOAD_ERROR | {exc}")
+        return self._cache
+
+    # ------------------------------------------------------------------
+    def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
+        symbol = signal.get('symbol', '')
+        if not symbol:
+            return True, "No symbol — skipping reputation check"
+
+        stats = self._load()
+        sym = stats.get(symbol)
+
+        if not sym:
+            return True, f"{symbol} not in learning data — allowing (new symbol)"
+
+        total_trades = sym.get('total_trades', 0)
+        if total_trades < self.MIN_TRADES_TO_BLOCK:
+            return True, f"{symbol} only {total_trades} trades — insufficient history, allowing"
+
+        status      = sym.get('probation_status', 'ACTIVE')
+        conf        = sym.get('confidence_multiplier', 1.0)
+        form        = sym.get('recent_form', 'neutral')
+        next_probe  = sym.get('probation_next_probe')
+        streak      = sym.get('probation_streak', 0)
+        backoff     = sym.get('probation_backoff_days', 7)
+        attempts    = sym.get('probation_probes_attempted', 0)
+        today_str   = datetime.now().date().isoformat()
+
+        if status == 'ACTIVE':
+            return True, (f"{symbol} ACTIVE | conf={conf:.1f} | form={form} | "
+                          f"trades={total_trades}")
+
+        if status == 'BLOCKED':
+            if next_probe and today_str >= next_probe:
+                # Probe window is open — allow exactly 1 trade today
+                return True, (f"{symbol} PROBE_ALLOWED | streak={streak}/3 | "
+                              f"window_opened={next_probe} | total_probes={attempts}")
+            else:
+                days_left = (
+                    (datetime.fromisoformat(next_probe).date()
+                     - datetime.now().date()).days
+                    if next_probe else '?'
+                )
+                return False, (
+                    f"{symbol} BLOCKED (probation) | "
+                    f"next_probe={next_probe} ({days_left}d away) | "
+                    f"streak={streak}/3 | backoff={backoff}d | attempts={attempts}"
+                )
+
+        # Unknown status → allow and log
+        return True, f"{symbol} status={status} — unknown, allowing"
+
+
+# =============================================================================
 # COMPREHENSIVE ENTRY FILTER (Combines All Validators)
 # =============================================================================
 
@@ -425,7 +530,10 @@ class ComprehensiveEntryFilter:
     
     def __init__(self):
         self.name = "ComprehensiveEntryFilter"
-        
+
+        # HARD GATE: runs before all other validators (not part of N/M voting)
+        self.reputation_validator = SymbolReputationValidator()
+
         # Initialize all validators
         self.validators = {
             'premium': PremiumValidator(),  # NEW: Check minimum premium first
@@ -472,12 +580,30 @@ class ComprehensiveEntryFilter:
         self.total_alerts += 1
         symbol = signal.get('symbol', 'UNKNOWN')
         action = signal.get('action', 'UNKNOWN')
-        
+
         logger.info(f"{self.name}: VALIDATE | #{self.total_alerts} | {symbol} | {action}")
-        
+
+        # ---------------------------------------------------------------
+        # HARD GATE 0: Probation / Reputation check
+        # Runs before all other validators — a BLOCKED symbol is rejected
+        # outright regardless of how many other filters pass.
+        # A symbol in its probe window is allowed through (1 trade/window).
+        # ---------------------------------------------------------------
+        rep_ok, rep_reason = self.reputation_validator.validate(signal, market_data)
+        if not rep_ok:
+            reason_key = 'SymbolBlocked_Probation'
+            self.rejected_by_reason[reason_key] = self.rejected_by_reason.get(reason_key, 0) + 1
+            logger.warning(f"{self.name}: ❌ HARD_GATE_REJECTED | {symbol} | {rep_reason}")
+            pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
+            logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
+            return False, rep_reason, {'symbol_reputation': {'valid': False, 'reason': rep_reason}}
+
+        if 'PROBE_ALLOWED' in rep_reason:
+            logger.info(f"{self.name}: 🔬 PROBE_TRADE | {symbol} | {rep_reason}")
+
         validation_results = {}
         passed_count = 0
-        
+
         # Run all validators
         for validator_name, validator in self.validators.items():
             try:
