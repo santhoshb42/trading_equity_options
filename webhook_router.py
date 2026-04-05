@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import threading
+import socket
 from flask import Flask, request, jsonify
 from typing import Dict, Any
 import requests
@@ -409,6 +410,33 @@ def index():
     }), 200
 
 
+def wait_for_port_available(host: str, port: int, timeout_seconds: int = 30, poll_interval: float = 1.0) -> bool:
+    """Wait for the listen port to become free before starting Flask.
+
+    This avoids transient restart races where another process still holds the
+    port for a few seconds and systemd marks the router as failed.
+    """
+    deadline = time.time() + timeout_seconds
+    bind_host = host if host and host != "0.0.0.0" else ""
+
+    while time.time() < deadline:
+        test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            test_socket.bind((bind_host, port))
+            return True
+        except OSError as exc:
+            remaining = max(0, int(deadline - time.time()))
+            logger.warning(
+                f"Router port {port} still busy ({exc}) | retrying for up to {remaining}s"
+            )
+            time.sleep(poll_interval)
+        finally:
+            test_socket.close()
+
+    return False
+
+
 def start_router():
     """Start the webhook router"""
     logger.info(f"\n{'='*70}")
@@ -421,6 +449,11 @@ def start_router():
     logger.info(f"Authentication: {'ENABLED' if ROUTER_SECRET else 'DISABLED'}")
     logger.info(f"Alert routing: INTELLIGENT (CE/PE detection enabled)")
     logger.info(f"{'='*70}\n")
+
+    if not wait_for_port_available(ROUTER_HOST, ROUTER_PORT, timeout_seconds=30):
+        raise RuntimeError(
+            f"Router port {ROUTER_PORT} stayed busy for 30s; aborting startup so systemd can retry"
+        )
     
     try:
         app.run(

@@ -80,6 +80,15 @@ class OptionsCapitalConfig:
     # Reserve capital (emergency buffer for options)
     RESERVE_CAPITAL = float(os.getenv("OPTIONS_RESERVE_CAPITAL", "50000"))  # ₹50,000 reserve
 
+    # Daily loss circuit breaker (% of budget_used for the day)
+    # Set to 0 to disable.
+    DAILY_LOSS_LIMIT_PCT = float(os.getenv("OPTIONS_DAILY_LOSS_LIMIT_PCT", "3.0"))
+    DAILY_CB_MIN_TRADES  = int(os.getenv("OPTIONS_DAILY_CB_MIN_TRADES", "10"))
+
+    # Market trend-aware position sizing.
+    CAP_PER_TRADE_GOOD    = float(os.getenv("OPTIONS_CAP_PER_TRADE_GOOD", "30000"))
+    CAP_PER_TRADE_NEUTRAL = float(os.getenv("OPTIONS_CAP_PER_TRADE_NEUTRAL", "30000"))
+
     # Dynamic liquidity guard calibration.
     # As budget rises from 15K to 2L, we require the order to be a smaller share
     # of both the contract's traded volume and open interest.
@@ -95,6 +104,15 @@ class OptionsCapitalConfig:
     STT_PERCENTAGE = 0.005  # 0.5% STT on sell side (higher for options)
     TRANSACTION_CHARGES = 0.00005  # Higher for options on NSE
     GST_PERCENTAGE = 0.18  # 18% GST on brokerage
+
+    @classmethod
+    def get_cap_for_market_trend(cls, market_trend: str) -> float:
+        t = (market_trend or "").strip().upper()
+        if t == "GOOD":
+            return cls.CAP_PER_TRADE_GOOD
+        if t == "BAD":
+            return 0.0
+        return cls.CAP_PER_TRADE_NEUTRAL
     
     @classmethod
     def calculate_total_charges(cls, trade_value: float) -> float:
@@ -227,6 +245,24 @@ class OptionsCapitalConfig:
             return False, "Liquidity data unavailable for contract - refusing entry", metrics
 
         return True, "Dynamic liquidity check passed", metrics
+
+    @classmethod
+    def get_today_live_summary(cls) -> dict:
+        import json as _json
+        live_data_file = BASE_DIR / "data" / "live_data.json"
+        try:
+            if live_data_file.exists():
+                with open(live_data_file) as f:
+                    s = _json.load(f).get('summary', {})
+                return {
+                    'total_pnl': float(s.get('total_pnl', 0.0)),
+                    'total_pnl_percent': float(s.get('total_pnl_percent', 0.0)),
+                    'budget_used': float(s.get('budget_used', 0.0)),
+                    'trades_today': int(s.get('total_trades_today', 0)),
+                }
+        except Exception:
+            pass
+        return {'total_pnl': 0.0, 'total_pnl_percent': 0.0, 'budget_used': 0.0, 'trades_today': 0}
     
     @classmethod
     def get_available_capital(cls, used_capital: float) -> float:
@@ -317,7 +353,7 @@ class OptionsTradingConfig:
     TRADING_MODE = "PAPER"  # PAPER mode - simulated orders, real data from broker API
     
     # Underlying indexes for options trading (legacy - keep for backward compatibility)
-    UNDERLYING_INDEXES = ["BANKNIFTY", "NIFTY", "FINNIFTY"]  # Preferred underlying indexes
+    UNDERLYING_INDEXES = ["BANKNIFTY", "NIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"]  # Preferred underlying indexes
     
     # F&O Universe - Complete NSE stock list for deriving strikes
     FO_UNIVERSE = [
@@ -327,10 +363,10 @@ class OptionsTradingConfig:
         "AXISBANK", "BAJAJFINSV", "BAJAJ_AUTO", "BAJAJHLDNG", "BAJFINANCE", "BALKRISIND", "BANDHANBNK", "BANKBARODA", 
         "BDL", "BEL", "BHARATFORG", "BHARTIARTL", "BHEL", "BIOCON", "BLUESTARCO", "BOSCHLTD", 
         "BPCL", "BRITANNIA", "BSE", "BSOFT", "CAMS", "CANBK", "CESC", "CGPOWER", 
-        "CHOLAFIN", "CIPLA", "COALINDIA", "COFORGE", "COLPAL", "CONCOR", "CROMPTON", 
+        "CHOLAFIN", "CIPLA", "COCHINSHIP", "COALINDIA", "COFORGE", "COLPAL", "CONCOR", "CROMPTON", 
         "CUMMINSIND", "CYIENT", "DABUR", "DALBHARAT", "DELHIVERY", "DIVISLAB", "DMART", "DIXON", "DLF", 
         "DRREDDY", "EICHERMOT", "ETERNAL", "EXIDEIND", "FEDERALBNK", "FORTIS", "GAIL", "GLENMARK", 
-        "GMRAIRPORT", "GODREJCP", "GODREJPROP", "GRANULES", "GRASIM", "HAL", "HAVELLS", 
+        "GMRAIRPORT", "GODFRYPHLP", "GODREJCP", "GODREJPROP", "GRANULES", "GRASIM", "HAL", "HAVELLS", 
         "HCLTECH", "HDFCAMC", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO", "HFCL", "HINDALCO", 
         "HINDCOPPER", "HINDPETRO", "HINDUNILVR", "HINDZINC", "HUDCO", "ICICIBANK", "ICICIGI", 
         "ICICIPRULI", "IDEA", "IDFCFIRSTB", "IEX", "IIFL", "INDHOTEL", "INDIANB", 
@@ -338,13 +374,13 @@ class OptionsTradingConfig:
         "IREDA", "IRFC", "ITC", "JINDALSTEL", "JIOFIN", "JSWENERGY", "JSWSTEEL", "JUBLFOOD", 
         "KALYANKJIL", "KAYNES", "KEI", "KFINTECH", "KOTAKBANK", "KPITTECH", "LAURUSLABS", "LICHSGFIN", 
         "LODHA", "LT", "LTF", "LTIM", "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", "MANKIND", "MARICO", 
-        "MARUTI", "MAXHEALTH", "MAZDOCK", "MCX", "MFSL", "MGL", "MOTHERSON", "MPHASIS", 
-        "MUTHOOTFIN", "NATIONALUM", "NAUKRI", "NBCC", "NCC", "NESTLEIND", "NHPC", "NMDC", "NTPC", 
+        "MARUTI", "MAXHEALTH", "MAZDOCK", "MCX", "MFSL", "MGL", "MIDCPNIFTY", "MOTHERSON", "MOTILALOFS", "MPHASIS", 
+        "MUTHOOTFIN", "NATIONALUM", "NAUKRI", "NBCC", "NCC", "NESTLEIND", "NHPC", "NIFTYNXT50", "NMDC", "NTPC", 
         "NUVAMA", "NYKAA", "OBEROIRLTY", "OFSS", "ONGC", "PAGEIND", "PAYTM", "PERSISTENT", 
         "PETRONET", "PFC", "PGEL", "PHOENIXLTD", "PIDILITIND", "PIIND", "PNB", "PNBHOUSING", 
         "POLICYBZR", "POLYCAB", "POONAWALLA", "POWERGRID", "POWERINDIA", "PRESTIGE", "PPLPHARMA", "RECLTD", 
         "RELIANCE", "RVNL", "SAIL", "SAMMAANCAP", "SBICARD", "SBILIFE", "SBIN", "SHREECEM", 
-        "SHRIRAMFIN", "SIEMENS", "SJVN", "SOLARINDS", "SONACOMS", "SRF", "SUNPHARMA", "SUPREMEIND", 
+        "SHRIRAMFIN", "SIEMENS", "SJVN", "SOLARINDS", "SONACOMS", "SRF", "SUNPHARMA", "SUPREMEIND", "SENSEX", "BANKEX",
         "SYNGENE", "SWIGGY", "TATACHEM", "TATACOMM", "TATACONSUM", "TATAELXSI", "TATAPOWER", "TATASTEEL", 
         "TATATECH", "TCS", "TECHM", "TIINDIA", "TITAGARH", "TITAN", "TMPV", "TORNTPHARM", 
         "TORNTPOWER", "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO", "UNIONBANK", "UNITDSPR", 

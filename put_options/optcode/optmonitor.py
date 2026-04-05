@@ -216,7 +216,9 @@ class OptionPosition:
                  entry_time: datetime,
                  order_id: str = "",
                  underlying_alert_price: Optional[float] = None,
-                 sector_data: Optional[Dict[str, Any]] = None):
+                 sector_data: Optional[Dict[str, Any]] = None,
+                 market_trend: Optional[str] = None,
+                 trend_strength: Optional[float] = None):
         self.symbol = symbol
         self.underlying = underlying
         self.strike = strike
@@ -243,6 +245,9 @@ class OptionPosition:
             }
         else:
             self.sector_data = sector_data
+
+        self.market_trend = (market_trend or 'NEUTRAL').strip().upper()
+        self.trend_strength = trend_strength
         
         # Current state
         self.current_premium = entry_premium
@@ -935,7 +940,9 @@ class OptionPositionMonitor:
                     order_id: str,
                     underlying_alert_price: Optional[float] = None,
                     entry_greeks: Optional[Dict[str, float]] = None,
-                    sector_data: Optional[Dict[str, Any]] = None) -> bool:
+                    sector_data: Optional[Dict[str, Any]] = None,
+                    market_trend: Optional[str] = None,
+                    trend_strength: Optional[float] = None) -> bool:
         """Add new option position"""
         try:
             # 🔧 CRITICAL FIX: Prevent duplicate position additions from retry logic
@@ -990,7 +997,9 @@ class OptionPositionMonitor:
                 entry_time=datetime.now(),
                 order_id=order_id,
                 underlying_alert_price=underlying_alert_price,
-                sector_data=sector_data
+                sector_data=sector_data,
+                market_trend=market_trend,
+                trend_strength=trend_strength
             )
             
             # DEBUG: Log what sector_data was stored in position
@@ -1422,8 +1431,8 @@ class OptionPositionMonitor:
                     'exit_oi': position.current_oi          # Exit Open Interest
                 }
                 
-                # Record to all systems (NEW: Added symbol_tracker.record_trade)
-                ml_integration.record_daily_trade(trade_outcome)
+                # Record the close once through the ML engine, which also forwards
+                # the trade into the daily integration pipeline.
                 ml_engine.record_closed_trade(trade_outcome)
                 
                 # CRITICAL FIX: Also record to SymbolPerformanceTracker for symbol_stats.json
@@ -1749,7 +1758,7 @@ class OptionPositionMonitor:
             rate_limiter = get_options_rate_limiter()
             
             # Wait for rate limit permission with timeout
-            if not rate_limiter.wait_for_call_permission(timeout=10.0):
+            if not rate_limiter.wait_for_call_permission(timeout=10.0, request_type="modify_sl"):
                 # Rate limited - queue for retry
                 logger.warning(f"MODIFY_SL: RATE_LIMITED | {symbol} | queuing for retry")
                 position.modify_pending = True
@@ -1871,7 +1880,7 @@ class OptionPositionMonitor:
                 rate_limiter = get_options_rate_limiter()
                 
                 # Wait for rate limit permission
-                if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                if not rate_limiter.wait_for_call_permission(timeout=5.0, request_type="place_order"):
                     logger.debug(f"RETRY_SL: RATE_LIMITED | {symbol} | will retry next cycle")
                     position.sl_retry_count -= 1  # Don't count rate limit as a real attempt
                     continue
@@ -3132,47 +3141,38 @@ class OptionPositionMonitor:
                 logger.warning(f"REFRESH_LTP: Batch fetch failed | batch {i//batch_size + 1} | {str(e)}")
         
         logger.info(f"REFRESH_LTP: Bulk fetch complete | batches={len(range(0, len(all_symbols), batch_size))} | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
-        
-        # CRITICAL FIX: If bulk fetch failed (all None), check if broker is authenticated
-        # If not authenticated, log warning about API errors and attempt reconnection
-        if ltps and not any(ltps.values()):
-            logger.error(f"REFRESH_LTP: ALL symbols returned None - likely broker auth/API error | checking broker status")
-            if self.broker and not self.broker.authenticated:
-                logger.error(f"REFRESH_LTP: Broker not authenticated - attempting re-authentication")
-                if self.broker.authenticate(is_retry=True):
-                    logger.info(f"REFRESH_LTP: Re-authentication successful - retrying LTP fetch")
-                    # Retry with batching
-                    ltps = {}
-                    batch_size = 50
-                    for i in range(0, len(all_symbols), batch_size):
-                        batch = all_symbols[i:i+batch_size]
-                        try:
-                            batch_ltps = self.broker.get_ltp_bulk(batch, exchange="NFO")
-                            if batch_ltps:
-                                ltps.update(batch_ltps)
-                        except Exception as e:
-                            logger.warning(f"REFRESH_LTP: RETRY batch {i//batch_size + 1} failed | {str(e)}")
-                    logger.info(f"REFRESH_LTP: RETRY - Bulk fetch complete | results={len([v for v in ltps.values() if v]) if ltps else 0}/{len(all_symbols)}")
-                else:
-                    logger.error(f"REFRESH_LTP: Re-authentication failed - positions will not be updated until broker recovers")
-        
-        # PERFORMANCE OPTIMIZATION: Bulk fetch all underlying LTPs once instead of per-position
-        # This prevents repeated API calls when fetching option chains
-        # Batch into 50-symbol chunks per broker limit
-        underlying_symbols = list(set(pos.underlying for _, pos in positions))
-        underlying_ltps = {}
-        if underlying_symbols:
-            try:
-                batch_size = 50
-                for i in range(0, len(underlying_symbols), batch_size):
-                    batch = underlying_symbols[i:i+batch_size]
-                    batch_ltps = self.broker.get_ltp_bulk(batch, exchange="NSE") or {}
-                    if batch_ltps:
-                        underlying_ltps.update(batch_ltps)
-                logger.debug(f"REFRESH_LTP: Underlying batch fetch | requested={len(underlying_symbols)} | fetched={len([v for v in underlying_ltps.values() if v])}")
-            except Exception as e:
-                logger.warning(f"REFRESH_LTP: Underlying batch fetch failed | {str(e)}")
-                underlying_ltps = {}
+
+        valid_ltps = [value for value in (ltps or {}).values() if value and value > 0]
+        if not valid_ltps:
+            logger.error("REFRESH_LTP: No valid LTPs returned - attempting broker recovery before using cached prices")
+            recovered = False
+            if self.broker:
+                try:
+                    recovered = bool(self.broker._detect_and_fix_invalid_token())
+                except Exception as e:
+                    logger.warning(f"REFRESH_LTP: Token recovery check failed | {str(e)}")
+                if not recovered and not self.broker.authenticated:
+                    logger.error("REFRESH_LTP: Broker not authenticated - attempting re-authentication")
+                    recovered = bool(self.broker.authenticate(is_retry=True))
+
+            if recovered:
+                logger.info("REFRESH_LTP: Broker recovery successful - retrying bulk LTP fetch")
+                ltps = {}
+                for i in range(0, len(all_symbols), batch_size):
+                    batch = all_symbols[i:i+batch_size]
+                    try:
+                        batch_ltps = self.broker.get_ltp_bulk(batch, exchange="NFO")
+                        if batch_ltps:
+                            ltps.update(batch_ltps)
+                    except Exception as e:
+                        logger.warning(f"REFRESH_LTP: RETRY batch {i//batch_size + 1} failed | {str(e)}")
+                valid_ltps = [value for value in (ltps or {}).values() if value and value > 0]
+                logger.info(f"REFRESH_LTP: RETRY - Bulk fetch complete | results={len(valid_ltps)}/{len(all_symbols)}")
+            else:
+                logger.error("REFRESH_LTP: Broker recovery failed - exiting refresh without price updates")
+                refresh_stats['errors'].append('No valid LTPs available after broker recovery')
+                refresh_stats['duration'] = time.time() - start_time
+                return refresh_stats
         
         # Process each symbol (only active positions)
         for symbol in all_symbols:
@@ -3198,99 +3198,27 @@ class OptionPositionMonitor:
                         logger.warning(f"REFRESH_LTP: Failed to fetch LTP for {symbol} and no fallback available")
                         continue
                 
-                # STEP 2: Fetch real Greeks and IV from option chain
-                # Use fallback defaults
-                real_greeks = {
+                # STEP 2: Monitoring path updates premium only.
+                # Entry-time Greeks remain stored on the position, but we do not
+                # refresh or use Greeks during live monitoring.
+                current_greeks = position.current_greeks.copy() if position.current_greeks else {
                     'delta': 0.5,
                     'gamma': 0.05,
                     'theta': -0.02,
                     'vega': 0.1
                 }
-                from .volatility_calculator import get_volatility_calculator
-                vol_calc = get_volatility_calculator()
-                real_iv = vol_calc.get_dynamic_iv(symbol, default_iv=0.25)
-                
-                try:
-                    # USE PRE-FETCHED underlying LTP from bulk fetch (no per-position API calls)
-                    underlying_ltp = underlying_ltps.get(position.underlying)
-                    if underlying_ltp and underlying_ltp > 0:
-                        logger.debug(f"REFRESH_LTP: Got underlying LTP | {position.underlying} | ltp=₹{underlying_ltp:.2f}")
-                    else:
-                        logger.debug(f"REFRESH_LTP: Could not fetch underlying LTP | {position.underlying}")
-                    
-                    # SKIP option chain fetch here - moved to separate 1-minute Greeks refresh
-                    # This keeps the 10-second LTP refresh FAST (only bulk API calls)
-                    option_chain = None
-                    
-                    if option_chain:
-                        # Find contract matching this position's strike and type
-                        contract = option_chain.get_contract(position.strike, position.contract_type)
-                        
-                        logger.debug(f"REFRESH_LTP: Chain search | {symbol} | looking for strike={position.strike} ({type(position.strike).__name__}), type={position.contract_type} | chain has {len(option_chain.contracts)} contracts")
-                        
-                        if contract:
-                            # Use REAL Greeks from broker if available, otherwise use fallbacks
-                            # Check if Greeks were actually fetched (non-zero values)
-                            if (contract.delta != 0.0 or contract.gamma != 0.0 or 
-                                contract.theta != 0.0 or contract.vega != 0.0):
-                                # Contract has real Greeks data
-                                real_greeks = {
-                                    'delta': contract.delta,
-                                    'gamma': contract.gamma,
-                                    'theta': contract.theta,
-                                    'vega': contract.vega
-                                }
-                                from .volatility_calculator import get_volatility_calculator
-                                vol_calc = get_volatility_calculator()
-                                real_iv = contract.iv if contract.iv > 0 else vol_calc.get_dynamic_iv(symbol, default_iv=0.25)
-                                refresh_stats['greeks_updated'] += 1
-                                logger.debug(f"REFRESH_LTP: GREEKS_REAL | {symbol} | delta={contract.delta:.3f} | gamma={contract.gamma:.4f} | theta={contract.theta:.4f} | vega={contract.vega:.3f} | iv={real_iv:.2f}")
-                            else:
-                                # Contract found but no Greeks data (AngelOne API limitation)
-                                # Keep fallback Greeks already set above
-                                logger.debug(f"REFRESH_LTP: GREEKS_FALLBACK | {symbol} | No real Greeks available from broker")
-                            
-                            # Track market liquidity data
-                            position.bid_price = contract.bid if contract.bid > 0 else current_ltp
-                            position.ask_price = contract.ask if contract.ask > 0 else current_ltp
-                            position.volume = contract.volume
-                            position.open_interest = contract.open_interest
-                            
-                            # Track entry IV for IV crush detection
-                            if position.entry_iv is None:
-                                position.entry_iv = real_iv
-                        else:
-                            logger.debug(f"REFRESH_LTP: Contract not found | {symbol} | strike={position.strike} | type={position.contract_type} (using fallback Greeks)")
-                        
-                except Exception as chain_error:
-                    logger.debug(f"REFRESH_LTP: Could not fetch real Greeks | {symbol} | {str(chain_error)} (using fallback)")
-                    # Continue with fallback greeks
-                
-                # STEP 3: Update position with market data
-                # Log Greeks before and after to verify they're changing
-                old_greeks = position.current_greeks.copy() if position.current_greeks else {}
+                current_iv = position.current_iv if position.current_iv is not None else position.entry_iv if position.entry_iv is not None else 0.25
                 
                 self.update_position_market_data(
                     symbol=symbol,
                     current_premium=current_ltp,
-                    greeks=real_greeks,
-                    iv=real_iv
+                    greeks=current_greeks,
+                    iv=current_iv
                 )
-                
-                # Log if Greeks changed
-                new_greeks = position.current_greeks.copy() if position.current_greeks else {}
-                if old_greeks and new_greeks:
-                    delta_change = new_greeks.get('delta', 0) - old_greeks.get('delta', 0)
-                    theta_change = new_greeks.get('theta', 0) - old_greeks.get('theta', 0)
-                    if abs(delta_change) > 0.0001 or abs(theta_change) > 0.0001:
-                        logger.info(f"REFRESH_LTP: GREEKS_CHANGED | {symbol} | D: {old_greeks.get('delta', 0):.4f}→{new_greeks.get('delta', 0):.4f} (Δ={delta_change:+.4f}) | T: {old_greeks.get('theta', 0):.4f}→{new_greeks.get('theta', 0):.4f} (Δ={theta_change:+.4f})")
-                    else:
-                        logger.debug(f"REFRESH_LTP: GREEKS_UNCHANGED | {symbol} | D={new_greeks.get('delta', 0):.4f} | T={new_greeks.get('theta', 0):.4f}")
-                
                 
                 refresh_stats['ltps_updated'] += 1
                 
-                logger.debug(f"REFRESH_LTP: {symbol} | ltp=₹{current_ltp:.2f} | pnl=₹{position.unrealized_pnl:.2f} | delta={real_greeks['delta']:.3f} | oi={position.open_interest}")
+                logger.debug(f"REFRESH_LTP: {symbol} | ltp=₹{current_ltp:.2f} | pnl=₹{position.unrealized_pnl:.2f}")
                 
             except Exception as e:
                 refresh_stats['failed_fetches'] += 1
@@ -3793,6 +3721,12 @@ class OptionPositionMonitor:
                 refresh_stats = self.refresh_position_ltps()
                 monitoring_result['ltps_refreshed'] = refresh_stats['ltps_updated']
                 logger.info(f"MONITORING: Refreshed LTP for {refresh_stats['ltps_updated']}/{len(positions)} positions")
+                if refresh_stats['ltps_updated'] == 0:
+                    monitoring_result['error'] = 'No fresh LTP data available; skipped exit checks'
+                    if self.broker:
+                        monitoring_result['rate_limiter_stats'] = self.broker.get_rate_limiter_stats()
+                    logger.error("MONITORING: No fresh LTP data available - skipping exit checks to avoid stale-price decisions")
+                    return monitoring_result
                 
                 # OPTIMIZATION: Refresh underlying candles for fake move detection
                 candle_stats = self.refresh_underlying_candles()
@@ -3813,15 +3747,10 @@ class OptionPositionMonitor:
             # Track which positions were closed by TRIAL_SL to avoid duplicate momentum check
             trailing_closed_symbols = set(p['symbol'] for p in trailing_closes)
             
-            # ⭐ PRIORITY 1: Greeks-based exit (catches reversal BEFORE momentum loss)
-            # Delta reversal happens first → exit before 10% premium loss occurs
-            logger.info(f"MONITORING: Starting Greeks-based exit checks (PRIORITY 1 - catch early reversals)")
-            
-            greeks_delta_closes = self.check_greeks_delta_reversal()
-            monitoring_result['closed_by_greeks_delta'] = [p['symbol'] for p in greeks_delta_closes]
-            
-            # Track which positions were closed by Greeks to avoid duplicate momentum check
-            greeks_closed_symbols = set(p['symbol'] for p in greeks_delta_closes)
+            # Greeks-based exits disabled during monitoring.
+            greeks_delta_closes = []
+            monitoring_result['closed_by_greeks_delta'] = []
+            greeks_closed_symbols = set()
             
             # ⭐ PRIORITY 2: Momentum reversal (TIER 1 early exit - backup if Greeks missed it)
             # Only check positions NOT already closed by Greeks delta or TRIAL_SL
@@ -3829,9 +3758,6 @@ class OptionPositionMonitor:
             # Filter out any that were already closed by Greeks or TRIAL_SL
             momentum_closes = [p for p in momentum_closes if p['symbol'] not in greeks_closed_symbols and p['symbol'] not in trailing_closed_symbols]
             monitoring_result['closed_by_momentum'] = [p['symbol'] for p in momentum_closes]
-            
-            if greeks_delta_closes:
-                logger.info(f"MONITORING: Greeks delta caught {len(greeks_delta_closes)} reversals BEFORE momentum loss | Avoided {len(greeks_delta_closes)} × 10% loss")
             
             # ⭐ PRIORITY 2.3: Stale consolidation exit (DISABLED)
             # ANALYSIS SHOWS: This exit strategy costs ₹1,22,879 in missed gains (492% worse than HARD_SL)
@@ -3877,28 +3803,17 @@ class OptionPositionMonitor:
             iv_spike_closes = self.check_iv_spike()
             monitoring_result['closed_by_iv_spike'] = [p['symbol'] for p in iv_spike_closes]
             
-            # ⭐ Check other Greeks-based signals (Gamma, Theta, Vega)
-            
-            greeks_gamma_closes = self.check_greeks_gamma_explosion()
-            monitoring_result['closed_by_greeks_gamma'] = [p['symbol'] for p in greeks_gamma_closes if p['symbol'] not in greeks_closed_symbols]
-            greeks_gamma_closes = [p for p in greeks_gamma_closes if p['symbol'] not in greeks_closed_symbols]
-            
-            greeks_theta_closes = self.check_greeks_theta_acceleration()
-            monitoring_result['closed_by_greeks_theta'] = [p['symbol'] for p in greeks_theta_closes if p['symbol'] not in greeks_closed_symbols]
-            greeks_theta_closes = [p for p in greeks_theta_closes if p['symbol'] not in greeks_closed_symbols]
-            
-            greeks_vega_closes = self.check_greeks_vega_crush()
-            monitoring_result['closed_by_greeks_vega'] = [p['symbol'] for p in greeks_vega_closes if p['symbol'] not in greeks_closed_symbols]
-            greeks_vega_closes = [p for p in greeks_vega_closes if p['symbol'] not in greeks_closed_symbols]
-            
-            greeks_health_closes = self.check_greeks_health_score()
-            monitoring_result['closed_by_greeks_health'] = [p['symbol'] for p in greeks_health_closes if p['symbol'] not in greeks_closed_symbols]
-            greeks_health_closes = [p for p in greeks_health_closes if p['symbol'] not in greeks_closed_symbols]
-            
-            # ⭐ NEW: ML-guided Greeks quality exit (uses ML learning to exit early)
-            ml_quality_closes = self.check_ml_greeks_quality()
-            monitoring_result['closed_by_ml_quality'] = [p['symbol'] for p in ml_quality_closes if p['symbol'] not in greeks_closed_symbols]
-            ml_quality_closes = [p for p in ml_quality_closes if p['symbol'] not in greeks_closed_symbols]
+            # Other Greeks-based monitoring exits disabled.
+            greeks_gamma_closes = []
+            monitoring_result['closed_by_greeks_gamma'] = []
+            greeks_theta_closes = []
+            monitoring_result['closed_by_greeks_theta'] = []
+            greeks_vega_closes = []
+            monitoring_result['closed_by_greeks_vega'] = []
+            greeks_health_closes = []
+            monitoring_result['closed_by_greeks_health'] = []
+            ml_quality_closes = []
+            monitoring_result['closed_by_ml_quality'] = []
             
             # Get rate limiter statistics
             if self.broker:

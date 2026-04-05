@@ -710,49 +710,18 @@ def create_options_api_app():
                             logger.debug(f"Could not parse entry time for {symbol}: {str(time_err)}")
                             pass
                     
-                    # Place exit order (market order)
-                    exit_order = state['broker'].place_options_order(
-                        symbol=symbol,  # Use full symbol, not 'contract'
-                        action="SELL",
-                        quantity=quantity,
-                        price=0  # Market order
-                    )
-                    
-                    if exit_order:
-                        # Calculate PnL (for CALL options: sell premium - buy premium)
-                        pnl = (current_ltp - entry_premium) * quantity
+                    # Use monitor.close_position() as the single exit path.
+                    # In LIVE mode close_position() cancels the SL order first, then places the
+                    # SELL with 5-attempt retry — calling broker.place_options_order() directly
+                    # here as well caused a double SELL on the broker in LIVE mode.
+                    pnl_result = monitor.close_position(symbol, current_ltp, "EOD_SQUAREOFF")
+
+                    if pnl_result:
+                        # Use PnL returned by close_position (correctly accounts for quantity/lot size)
+                        pnl = pnl_result.get('pnl', (current_ltp - entry_premium) * quantity)
                         total_pnl += pnl
                         closed_count += 1
-                        
-                        # CRITICAL: Mark position as closed in monitor to update exit_time and exit_premium
-                        # This ensures the position gets removed in cleanup
-                        monitor.close_position(symbol, current_ltp, "EOD_SQUAREOFF")
-                        
-                        # LEARNING ENGINE: Record trade outcome for ML pattern learning
-                        if state.get('learning_engine') and HAS_LEARNING_ENGINE:
-                            try:
-                                # Extract symbol name (remove -EQ suffix if present)
-                                base_symbol = symbol.split('-')[0] if '-' in symbol else symbol
-                                # Check if it's a win (positive PnL)
-                                is_win = pnl > 0
-                                # Get Greeks from position object if available
-                                entry_greeks = pos.get('entry_greeks', {})
-                                exit_greeks = pos.get('exit_greeks', {})
-                                contract_type = pos.get('contract_type', 'CE')
-                                action = pos.get('action', 'BUY')
-                                # Record to learning engine
-                                # Note: entry_greeks, exit_greeks stored separately in position data
-                                state['learning_engine'].record_trade(
-                                    symbol=base_symbol,
-                                    won=is_win,
-                                    profit=pnl,
-                                    predicted_prob=0.5,  # Default if ML prediction not available
-                                    trading_mode=OptionsTradingConfig.TRADING_MODE
-                                )
-                                logger.debug(f"LEARNING_ENGINE: TRADE_RECORDED | {base_symbol} | won={is_win} | pnl=₹{pnl:.2f} | Greeks: {bool(entry_greeks)}")
-                            except Exception as learn_err:
-                                logger.warning(f"LEARNING_ENGINE_RECORD_ERROR: {symbol} | {str(learn_err)}")
-                        
+
                         if is_stagnant:
                             stagnant_count += 1
                             log_event("EOD_STAGNANT_POSITION_CLOSED", 
@@ -765,7 +734,7 @@ def create_options_api_app():
                                      f"✅ Closed {symbol} | Gain: {gain_percent:.2f}% | PnL: ₹{pnl:.2f}",
                                      symbol=symbol, contract=contract, gain_percent=round(gain_percent, 2), pnl=round(pnl, 2))
                     else:
-                        errors.append(f"{symbol}: Failed to place exit order")
+                        errors.append(f"{symbol}: Failed to close position")
                         log_event("EOD_POSITION_CLOSE_FAILED", f"❌ Failed to close {symbol}",
                                  symbol=symbol, contract=contract)
                 except Exception as pos_err:
@@ -921,6 +890,20 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         underlying = processed['underlying']
         action = processed['action']
         alert_price = float(alert.get('price', 0) or 0)
+
+        # If no price in alert, fetch live spot price from broker for correct ATM selection
+        # (critical for large-value indices like SENSEX where wrong ATM = wrong contract)
+        if alert_price <= 0:
+            try:
+                broker = state['broker']
+                cash_exch = broker._get_underlying_cash_exchange(underlying) if hasattr(broker, '_get_underlying_cash_exchange') else 'NSE'
+                spot = broker.get_ltp(underlying, cash_exch)
+                if spot and spot > 0:
+                    alert_price = spot
+                    logger.debug(f"ALERT_PROCESS: SPOT_FETCHED | {underlying} | spot=₹{alert_price:.2f} (no price in alert)")
+            except Exception as _e:
+                logger.debug(f"ALERT_PROCESS: SPOT_FETCH_FAILED | {underlying} | {_e} | proceeding with alert_price=0")
+
         base_context = {
             'underlying': underlying,
             'normalized_action': action,
@@ -928,6 +911,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         }
         
         logger.debug(f"ALERT_PROCESS: MAPPED | underlying={underlying} | action={action}")
+
+        market_trend = str(alert.get('market_trend', 'NEUTRAL')).strip().upper()
         
         # NEW: Check market sentiment (PCR + OI Buildup) for entry decision
         from .market_sentiment import get_market_sentiment
@@ -980,9 +965,25 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 # Don't reject - allow trading even if sentiment data is missing
                 pass
         
+        cap_this_trade = OptionsCapitalConfig.get_cap_for_market_trend(market_trend)
+        if cap_this_trade == 0.0:
+            logger.warning(
+                f"ALERT_PROCESS: BAD_MARKET_TREND_REJECTED | symbol={symbol} | market_trend={market_trend}"
+            )
+            log_alert(alert=alert, status='bad_market_trend_rejected', details={'market_trend': market_trend})
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': 'BAD market trend - no new PE entries',
+                'stage': 'market_trend_gate',
+                'market_trend': market_trend,
+                **base_context,
+            }
+
         # Fetch option chain
         available_capital = OptionsCapitalConfig.get_available_capital(0)
-        if available_capital < OptionsCapitalConfig.CAP_PER_TRADE:
+        if available_capital < cap_this_trade:
             logger.warning(f"ALERT_PROCESS: INSUFFICIENT_CAPITAL | symbol={symbol} | available={available_capital:.2f}")
             return {
                 'symbol': symbol,
@@ -990,7 +991,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'status': 'rejected',
                 'reason': 'Insufficient capital',
                 'stage': 'capital_check',
-                'budget': OptionsCapitalConfig.CAP_PER_TRADE,
+                'budget': cap_this_trade,
                 **base_context,
             }
         
@@ -1024,6 +1025,38 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'trades_today': daily_trade_count,
             'max_trades': OptionsCapitalConfig.MAX_TRADES_PER_DAY
         })
+
+        pct_limit = OptionsCapitalConfig.DAILY_LOSS_LIMIT_PCT
+        min_trades = OptionsCapitalConfig.DAILY_CB_MIN_TRADES
+        if pct_limit > 0:
+            live = OptionsCapitalConfig.get_today_live_summary()
+            trades_today = live['trades_today']
+            total_pnl_percent = live['total_pnl_percent']
+            total_pnl = live['total_pnl']
+            budget_used = live['budget_used']
+            if trades_today >= min_trades and total_pnl_percent <= -pct_limit:
+                logger.warning(
+                    f"ALERT_PROCESS: DAILY_LOSS_CIRCUIT_BREAKER | symbol={symbol} | total_pnl_percent={total_pnl_percent:.2f}%"
+                )
+                log_alert(alert=alert, status='circuit_breaker_rejected', details={
+                    'total_pnl': round(total_pnl, 2),
+                    'total_pnl_percent': round(total_pnl_percent, 2),
+                    'limit_pct': pct_limit,
+                    'budget_used': round(budget_used, 2),
+                    'trades_today': trades_today,
+                })
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': (
+                        f'Daily loss circuit breaker: {total_pnl_percent:.2f}% ≤ -{pct_limit}% '
+                        f'(₹{total_pnl:.0f} on ₹{budget_used:.0f} deployed)'
+                    ),
+                    'stage': 'daily_loss_circuit_breaker',
+                    'budget': round(budget_used, 2),
+                    **base_context,
+                }
         
         # Check position slots
         summary = state['monitor'].get_position_summary()
@@ -1457,7 +1490,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # With lot_size=1: quantity = capital / premium (direct contract count)
         quantity = OptionsCapitalConfig.calculate_quantity_for_capital(
             premium=selected_contract.ltp,
-            capital=OptionsCapitalConfig.CAP_PER_TRADE,
+            capital=cap_this_trade,
             lot_size=1
         )
         
@@ -1470,12 +1503,13 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # Calculate actual cost and utilization percentage
         # quantity is already in contracts (lot_size=1), so cost = quantity * premium
         actual_cost = quantity * selected_contract.ltp
-        utilization_pct = (actual_cost / OptionsCapitalConfig.CAP_PER_TRADE) * 100 if OptionsCapitalConfig.CAP_PER_TRADE > 0 else 0
+        utilization_pct = (actual_cost / cap_this_trade) * 100 if cap_this_trade > 0 else 0
         order_context = {
             **contract_context,
             'quantity': quantity,
             'actual_cost': round(actual_cost, 2),
-            'budget': OptionsCapitalConfig.CAP_PER_TRADE,
+            'budget': cap_this_trade,
+            'market_trend': market_trend,
         }
 
         liquidity_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
@@ -1486,7 +1520,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         selected_contract.open_interest = live_oi
 
         liquidity_ok, liquidity_reason, liquidity_metrics = OptionsCapitalConfig.evaluate_liquidity_for_order(
-            budget=OptionsCapitalConfig.CAP_PER_TRADE,
+            budget=cap_this_trade,
             quantity=quantity,
             premium=selected_contract.ltp,
             volume=live_volume,
@@ -1496,7 +1530,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
 
         logger.info(
             f"ALERT_PROCESS: LIQUIDITY_CHECK | contract={selected_contract.symbol} | qty={quantity} "
-            f"| budget=₹{OptionsCapitalConfig.CAP_PER_TRADE:.0f} | volume={live_volume:,} | oi={live_oi:,} | result={liquidity_ok}"
+            f"| budget=₹{cap_this_trade:.0f} | volume={live_volume:,} | oi={live_oi:,} | result={liquidity_ok}"
         )
 
         if not liquidity_ok:
@@ -1514,7 +1548,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 **order_context,
             }
         
-        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} | budget=₹{OptionsCapitalConfig.CAP_PER_TRADE} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
+        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} | budget=₹{cap_this_trade} | market_trend={market_trend} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
         
         logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | premium=₹{selected_contract.ltp:.2f}")
         
@@ -1679,7 +1713,9 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             order_id=order_id,
             underlying_alert_price=alert_price if alert_price > 0 else None,
             entry_greeks=entry_greeks_data,  # ADDED: Pass entry Greeks
-            sector_data=sector_data  # ADDED: Pass sector strength data
+            sector_data=sector_data,
+            market_trend=market_trend,
+            trend_strength=float(alert.get('trend_strength', 0) or 0)
         )
         
         # 🔧 CRITICAL: Only increment counter if position was actually added (not rejected as duplicate)

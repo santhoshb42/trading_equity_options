@@ -10,6 +10,7 @@ Validates TradingView alerts for options trading:
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -180,12 +181,17 @@ class OptionsSignalValidator:
             # Build processed signal for options
             # 🔧 FIX: Respect explicit contract_type from alert if provided, else derive from action
             alert_contract_type = alert.get('contract_type', '').upper()
-            if alert_contract_type in ['CE', 'PE']:
-                recommended_contract = alert_contract_type
-                logger.debug(f"SIGNAL_VALIDATE: CONTRACT_TYPE_FROM_ALERT | symbol={symbol} | contract={recommended_contract}")
+            if alert_contract_type and alert_contract_type != 'PE':
+                message = f"PE only strategy: contract_type {alert_contract_type} rejected"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                log_signal_validation(symbol, False, message, action=raw_action, contract_type=alert_contract_type)
+                return False, message, None
+
+            recommended_contract = 'PE'
+            if alert_contract_type == 'PE':
+                logger.debug(f"SIGNAL_VALIDATE: CONTRACT_TYPE_FROM_ALERT | symbol={symbol} | contract=PE")
             else:
-                recommended_contract = OptionsSignalValidator._get_contract_type(action)
-                logger.debug(f"SIGNAL_VALIDATE: CONTRACT_TYPE_FROM_ACTION | symbol={symbol} | action={action} | contract={recommended_contract}")
+                logger.debug(f"SIGNAL_VALIDATE: CONTRACT_TYPE_FORCED | symbol={symbol} | action={action} | contract=PE")
             
             processed_signal = {
                 'underlying': underlying,
@@ -240,9 +246,10 @@ class OptionsSignalValidator:
         if symbol_upper in TV_SYMBOL_REMAP:
             symbol_upper = TV_SYMBOL_REMAP[symbol_upper]
         
-        # Check if it's already an index
-        for underlying in OptionsTradingConfig.UNDERLYING_INDEXES:
-            if underlying in symbol_upper:
+        # Check if it's already a supported index.
+        # Match the longest configured underlyings first so NIFTYNXT50 does not collapse to NIFTY.
+        for underlying in sorted(OptionsTradingConfig.UNDERLYING_INDEXES, key=len, reverse=True):
+            if re.search(rf'{re.escape(underlying)}(?:$|[^A-Z]|\d)', symbol_upper):
                 return underlying
         
         # Accept ALL symbols as potential F&O stocks
@@ -316,13 +323,13 @@ class OptionsSignalValidator:
         """Check if expiry is valid for trading"""
         logger.debug(f"EXPIRY_CHECK: START | days_to_expiry={days_to_expiry}")
         
-        # Avoid very short-term options (last day)
-        if days_to_expiry < 1:
-            message = "Option expires today - too short"
+        # Reject only already-expired contracts. Expiry-day entries are allowed.
+        if days_to_expiry < 0:
+            message = "Option already expired"
             logger.warning(f"EXPIRY_CHECK: REJECTED | {message} | days={days_to_expiry}")
             return False, message
         
-        logger.debug(f"EXPIRY_CHECK: DURATION_OK | days={days_to_expiry} >= 1")
+        logger.debug(f"EXPIRY_CHECK: DURATION_OK | days={days_to_expiry} >= 0")
         
         # Also avoid very long-term (monthly if we prefer weekly)
         if OptionsTradingConfig.PREFER_WEEKLY and days_to_expiry > 14:
