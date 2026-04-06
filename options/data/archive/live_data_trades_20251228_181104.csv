@@ -1,5 +1,0 @@
-Trade ID     | Symbol                    | Action | Quantity | Status   | Entry Premium   | Entry Value     | Alert Price  | Current Premium | Current Value   | Highest Premium | Unrealized PNL  | Unrealized PNL %
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-TRADE_001    | BANKNIFTY25DEC1900CE      | BUY    | 1        | OPEN     | 150.50          | 150.50          | 48500        | 165.25          | 165.25          | 170.00          | 14.75           | 9.80%
-TRADE_002    | NIFTY25DEC23000CE         | BUY    | 1        | OPEN     | 85.75           | 85.75           | 23150        | 92.50           | 92.50           | 95.00           | 6.75            | 7.87%
-TRADE_003    | BANKNIFTY25DEC1800CE      | BUY    | 1        | CLOSED   | 200.00          | 200.00          | 48200        | 200.00          | 200.00          | 200.00          | 0.00            | 0.00%

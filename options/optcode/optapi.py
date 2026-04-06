@@ -722,31 +722,6 @@ def create_options_api_app():
                         total_pnl += pnl
                         closed_count += 1
                         
-                        # LEARNING ENGINE: Record trade outcome for ML pattern learning
-                        if state.get('learning_engine') and HAS_LEARNING_ENGINE:
-                            try:
-                                # Extract symbol name (remove -EQ suffix if present)
-                                base_symbol = symbol.split('-')[0] if '-' in symbol else symbol
-                                # Check if it's a win (positive PnL)
-                                is_win = pnl > 0
-                                # Get Greeks from position object if available
-                                entry_greeks = pos.get('entry_greeks', {})
-                                exit_greeks = pos.get('exit_greeks', {})
-                                contract_type = pos.get('contract_type', 'CE')
-                                action = pos.get('action', 'BUY')
-                                # Record to learning engine
-                                # Note: entry_greeks, exit_greeks stored separately in position data
-                                state['learning_engine'].record_trade(
-                                    symbol=base_symbol,
-                                    won=is_win,
-                                    profit=pnl,
-                                    predicted_prob=0.5,  # Default if ML prediction not available
-                                    trading_mode=OptionsTradingConfig.TRADING_MODE
-                                )
-                                logger.debug(f"LEARNING_ENGINE: TRADE_RECORDED | {base_symbol} | won={is_win} | pnl=₹{pnl:.2f} | Greeks: {bool(entry_greeks)}")
-                            except Exception as learn_err:
-                                logger.warning(f"LEARNING_ENGINE_RECORD_ERROR: {symbol} | {str(learn_err)}")
-                        
                         if is_stagnant:
                             stagnant_count += 1
                             log_event("EOD_STAGNANT_POSITION_CLOSED", 
@@ -916,6 +891,20 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         underlying = processed['underlying']
         action = processed['action']
         alert_price = float(alert.get('price', 0) or 0)
+
+        # If no price in alert, fetch live spot price from broker for correct ATM selection
+        # (critical for large-value indices like SENSEX where wrong ATM = wrong contract)
+        if alert_price <= 0:
+            try:
+                broker = state['broker']
+                cash_exch = broker._get_underlying_cash_exchange(underlying) if hasattr(broker, '_get_underlying_cash_exchange') else 'NSE'
+                spot = broker.get_ltp(underlying, cash_exch)
+                if spot and spot > 0:
+                    alert_price = spot
+                    logger.debug(f"ALERT_PROCESS: SPOT_FETCHED | {underlying} | spot=₹{alert_price:.2f} (no price in alert)")
+            except Exception as _e:
+                logger.debug(f"ALERT_PROCESS: SPOT_FETCH_FAILED | {underlying} | {_e} | proceeding with alert_price=0")
+
         base_context = {
             'underlying': underlying,
             'normalized_action': action,

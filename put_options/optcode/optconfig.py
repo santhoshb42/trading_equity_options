@@ -86,7 +86,9 @@ class OptionsCapitalConfig:
     DAILY_CB_MIN_TRADES  = int(os.getenv("OPTIONS_DAILY_CB_MIN_TRADES", "10"))
 
     # Market trend-aware position sizing.
+    # For PE (puts): BAD market = good entry, GOOD market = bad entry
     CAP_PER_TRADE_GOOD    = float(os.getenv("OPTIONS_CAP_PER_TRADE_GOOD", "30000"))
+    CAP_PER_TRADE_BAD     = float(os.getenv("OPTIONS_CAP_PER_TRADE_BAD", "30000"))    # PE uses this
     CAP_PER_TRADE_NEUTRAL = float(os.getenv("OPTIONS_CAP_PER_TRADE_NEUTRAL", "30000"))
 
     # Dynamic liquidity guard calibration.
@@ -107,11 +109,18 @@ class OptionsCapitalConfig:
 
     @classmethod
     def get_cap_for_market_trend(cls, market_trend: str) -> float:
+        """PE position sizing by market trend.
+        
+        For PE (puts/bearish strategy):
+        - BAD/bearish market → Allow (good entry for puts)
+        - GOOD/bullish market → Block (bad entry for puts)  
+        - NEUTRAL → Allow at neutral cap
+        """
         t = (market_trend or "").strip().upper()
         if t == "GOOD":
-            return cls.CAP_PER_TRADE_GOOD
+            return 0.0                      # No PE entries in GOOD (bullish) market
         if t == "BAD":
-            return 0.0
+            return cls.CAP_PER_TRADE_BAD    # Allow PE in BAD (bearish) market
         return cls.CAP_PER_TRADE_NEUTRAL
     
     @classmethod

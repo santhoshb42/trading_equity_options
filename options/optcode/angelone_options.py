@@ -276,36 +276,24 @@ class OptionChain:
             logger.warning(f"ATM: Insufficient contracts CE={len(ce_contracts)} PE={len(pe_contracts)}")
             return None
         
-        # Extract strike from symbol for all contracts
-        # Symbol format: SYMBOL+DDMMMYY+STRIKE+CE/PE (e.g., AMBER30DEC257100CE)
-        def extract_strike_from_symbol(contract):
-            """Extract numeric strike from symbol using pattern matching
-            
-            Format: {SYMBOL}{DD}{MMM}{YY}{STRIKE}{CE|PE}
-            Example: AMBER30DEC257100CE → strike 7100
-            Pattern: ([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)
-            """
-            symbol = contract.symbol
-            
-            import re
-            # Match pattern: SYMBOL + DD + MMM + YY + STRIKE + CE/PE
-            pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$'
-            match = re.match(pattern, symbol)
-            
-            if match:
-                strike_str = match.group(5)  # Group 5 is the STRIKE
-                try:
-                    return int(strike_str)
-                except:
-                    return 0
-            return 0
+        # Use contract.strike directly — already set correctly for both NSE and BFO formats.
+        # Avoids symbol-regex parsing which fails for BFO format (e.g. SENSEX2640973000CE).
+        def get_strike(contract):
+            s = getattr(contract, 'strike', None)
+            if s and s > 0:
+                return float(s)
+            return 0.0
         
         # Build lists of (contract, strike) tuples
-        ce_with_strikes = [(c, extract_strike_from_symbol(c)) for c in ce_contracts]
-        pe_with_strikes = [(c, extract_strike_from_symbol(c)) for c in pe_contracts]
+        ce_with_strikes = [(c, get_strike(c)) for c in ce_contracts]
+        pe_with_strikes = [(c, get_strike(c)) for c in pe_contracts]
+        
+        # Filter out any with zero strike (shouldn't happen but defensive)
+        ce_with_strikes = [(c, s) for c, s in ce_with_strikes if s > 0]
+        pe_with_strikes = [(c, s) for c, s in pe_with_strikes if s > 0]
         
         if not ce_with_strikes or not pe_with_strikes:
-            logger.warning(f"ATM: Could not extract strikes from symbols")
+            logger.warning(f"ATM: Could not resolve strikes from contracts")
             return None
         
         # Find available strikes
@@ -783,10 +771,11 @@ class AngelOneOptionsBroker:
             for contract_data in contracts_data:
                 symbol = contract_data['symbol']
                 ct = contract_data.get('contract_type', '')
+                exch_seg = contract_data.get('exch_seg', self._get_underlying_derivatives_exchange(underlying))
                 if ct == 'CE':
-                    ce_symbols.append(symbol)
+                    ce_symbols.append((symbol, exch_seg))
                 elif ct == 'PE':
-                    pe_symbols.append(symbol)
+                    pe_symbols.append((symbol, exch_seg))
             
             logger.info(f"PCR_CHAIN: {underlying} | Found {len(ce_symbols)} CE + {len(pe_symbols)} PE contracts")
             
@@ -796,9 +785,9 @@ class AngelOneOptionsBroker:
             
             # Fetch CE OI
             ce_oi_success = 0
-            for ce_symbol in ce_symbols:
+            for ce_symbol, ce_exchange in ce_symbols:
                 try:
-                    token = self.get_instrument_token(ce_symbol, "NFO")
+                    token = self.get_instrument_token(ce_symbol, ce_exchange)
                     if not token:
                         continue
                     
@@ -806,7 +795,7 @@ class AngelOneOptionsBroker:
                         continue
                     
                     try:
-                        market_data = self.smart_api.getMarketData("FULL", {"NFO": [token]})
+                        market_data = self.smart_api.getMarketData("FULL", {ce_exchange: [token]})
                         rate_limiter.record_call("pcr_oi", True)
                         
                         if market_data and market_data.get('status'):
@@ -823,9 +812,9 @@ class AngelOneOptionsBroker:
             
             # Fetch PE OI
             pe_oi_success = 0
-            for pe_symbol in pe_symbols:
+            for pe_symbol, pe_exchange in pe_symbols:
                 try:
-                    token = self.get_instrument_token(pe_symbol, "NFO")
+                    token = self.get_instrument_token(pe_symbol, pe_exchange)
                     if not token:
                         continue
                     
@@ -833,7 +822,7 @@ class AngelOneOptionsBroker:
                         continue
                     
                     try:
-                        market_data = self.smart_api.getMarketData("FULL", {"NFO": [token]})
+                        market_data = self.smart_api.getMarketData("FULL", {pe_exchange: [token]})
                         rate_limiter.record_call("pcr_oi", True)
                         
                         if market_data and market_data.get('status'):
@@ -913,7 +902,7 @@ class AngelOneOptionsBroker:
             logger.info(f"CHAIN_FETCH: Fetching fresh Greeks | {underlying} {expiry} | cache_enabled={should_use_cache} | mode={OptionsTradingConfig.TRADING_MODE}")
             
             # Wait for rate limit permission (with timeout)
-            if not rate_limiter.wait_for_call_permission(timeout=30.0):
+            if not rate_limiter.wait_for_call_permission(timeout=30.0, request_type="place_order"):
                 logger.warning(f"CHAIN_FETCH: RATE_LIMITED | {underlying} | queuing for retry")
                 print(f"⚠️ Rate limited for option chain {underlying} - queuing for retry...")
                 
@@ -981,9 +970,20 @@ class AngelOneOptionsBroker:
         # This provides real strikes, symbols, tokens - essential for trading
         # Then we fetch LTP, Greeks, IV from broker for ATM contracts ONLY
         
+        # If current_price not provided, fetch from broker to ensure correct ATM selection
+        # (especially important for indices like SENSEX where strike range is huge)
+        if not current_price:
+            try:
+                spot_ltp = self.get_ltp(underlying, self._get_underlying_cash_exchange(underlying))
+                if spot_ltp and spot_ltp > 0:
+                    current_price = spot_ltp
+                    logger.debug(f"CHAIN_FETCH: Fetched current spot price for {underlying} = ₹{current_price:.2f}")
+            except Exception as e:
+                logger.debug(f"CHAIN_FETCH: Could not fetch spot price for {underlying}: {str(e)}")
+        
         # Load real contracts from instrument.json
         extractor = InstrumentCEExtractor()
-        contracts_data = extractor.build_real_option_chain(underlying, expiry, center_price=None)
+        contracts_data = extractor.build_real_option_chain(underlying, expiry, center_price=current_price)
         
         if not contracts_data:
             logger.warning(f"CHAIN_FETCH: {underlying} NOT in F&O - no real contracts available")
@@ -995,18 +995,9 @@ class AngelOneOptionsBroker:
         # OPTIMIZATION: Extract all available strikes and find ATM
         all_strikes = set()
         for cd in contracts_data:
-            symbol = cd['symbol']
-            # Extract strike from symbol (e.g., TECHM30DEC251600CE -> 1600)
-            import re
-            pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$'
-            match = re.match(pattern, symbol)
-            if match:
-                strike_str = match.group(5)
-                try:
-                    strike = int(strike_str)
-                    all_strikes.add(strike)
-                except ValueError:
-                    pass
+            strike = cd.get('strike')
+            if strike is not None:
+                all_strikes.add(strike)
         
         # Find ATM strike (nearest to current_price or middle of range)
         atm_strike = None
@@ -1032,32 +1023,27 @@ class AngelOneOptionsBroker:
         
         # Filter to ATM ± range (so we have options for strike selection)
         # For CALL options, we need at least 1-2 strikes above ATM for OTM selection
-        # Use dynamic range based on symbol's strike step
+        # Use dynamic range based on strike size (critical for SENSEX with million-value strikes)
         atm_contracts_data_filtered = []
         strikes_set = set()
         
-        # Determine strike step for this symbol (50 for indices, 100 for most stocks)
-        strike_range = 100  # Default: covers ±1 strike for 100-point symbols
-        if underlying in ['NIFTY', 'BANKNIFTY']:
-            strike_range = 150  # ±150 covers 3 strikes for 50-point symbols
+        # Calculate strike range dynamically based on ATM value
+        # For large strikes (millions like SENSEX=6500000), use percentage
+        # For small strikes (100-5000), use absolute difference
+        if atm_strike > 10000:
+            # Large strikes (indices): use 1% of ATM value as range
+            strike_range = max(atm_strike * 0.01, 1000)  # At least 1000 for boundary cases
         else:
-            strike_range = 150  # ±150 covers 1-2 strikes safely
+            # Small strikes (stocks): use absolute range
+            strike_range = 200  # ±200 covers ±2 strikes for 100-point symbols
         
         for cd in atm_contracts_data:
-            symbol = cd['symbol']
-            import re
-            pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$'
-            match = re.match(pattern, symbol)
-            if match:
-                strike_str = match.group(5)
-                try:
-                    strike = int(strike_str)
-                    # Include ATM ± range (gives CE a choice of higher strikes for OTM)
-                    if abs(strike - atm_strike) <= strike_range:
-                        atm_contracts_data_filtered.append(cd)
-                        strikes_set.add(strike)
-                except ValueError:
-                    pass
+            strike = cd.get('strike')
+            if strike is None:
+                continue
+            if abs(strike - atm_strike) <= strike_range:
+                atm_contracts_data_filtered.append(cd)
+                strikes_set.add(strike)
         
         logger.info(f"CHAIN_FETCH: Optimized fetch | {underlying} | ATM_strike={atm_strike} | fetching={len(atm_contracts_data_filtered)} contracts (±20 range: {sorted(strikes_set)}) (instead of {len(contracts_data)})")
         
@@ -1068,7 +1054,12 @@ class AngelOneOptionsBroker:
         if self.authenticated and all_symbols:
             logger.debug(f"CHAIN_FETCH: Fetching LTPs for {len(all_symbols)} ATM contracts (CE+PE) | {underlying}")
             try:
-                ltps = self.get_ltp_bulk(all_symbols, exchange="NFO")
+                contract_exchanges = {
+                    str(cd.get('exch_seg', self._get_underlying_derivatives_exchange(underlying))).upper()
+                    for cd in atm_contracts_data_filtered
+                }
+                ltp_exchange = next(iter(contract_exchanges)) if contract_exchanges else self._get_underlying_derivatives_exchange(underlying)
+                ltps = self.get_ltp_bulk(all_symbols, exchange=ltp_exchange)
                 fetched_count = len([v for v in ltps.values() if v and v > 0])
                 logger.debug(f"CHAIN_FETCH: ATM LTP fetch completed | {fetched_count}/{len(all_symbols)} | {underlying}")
             except Exception as e:
@@ -1077,18 +1068,7 @@ class AngelOneOptionsBroker:
         # Add ONLY ATM contracts to chain (2 contracts: 1 CE + 1 PE)
         for contract_data in atm_contracts_data_filtered:
             symbol = contract_data['symbol']
-            import re
-            pattern = r'^([A-Z]+)(\d{2})([A-Z]{3})(\d{2})(\d+)(CE|PE)$'
-            match = re.match(pattern, symbol)
-            
-            if match:
-                strike_str = match.group(5)
-                try:
-                    strike = int(strike_str)
-                except ValueError:
-                    strike = 0
-            else:
-                strike = 0
+            strike = contract_data.get('strike') or 0
             
             contract = OptionContract(
                 underlying=contract_data['underlying'],
@@ -1384,43 +1364,106 @@ class AngelOneOptionsBroker:
                 json.dump(chain.to_dict(), f, indent=2)
         except Exception as e:
             print(f"⚠️ Failed to cache option chain: {str(e)}")
+
+    @staticmethod
+    def _get_underlying_derivatives_exchange(underlying: str) -> str:
+        clean_underlying = (underlying or "").upper().rstrip('0123456789')
+        if clean_underlying in {"SENSEX", "BANKEX"}:
+            return "BFO"
+        return "NFO"
+
+    @staticmethod
+    def _get_underlying_cash_exchange(underlying: str) -> str:
+        clean_underlying = (underlying or "").upper().rstrip('0123456789')
+        if clean_underlying in {"SENSEX", "BANKEX"}:
+            return "BSE"
+        return "NSE"
+
+    @staticmethod
+    def _should_use_weekly_expiry(underlying: str) -> bool:
+        clean_underlying = (underlying or "").upper().rstrip('0123456789')
+        return clean_underlying == "SENSEX" or "NIFTY" in clean_underlying
+
+    @classmethod
+    def _select_preferred_expiry(cls, underlying: str, available_expiries):
+        sorted_expiries = sorted(available_expiries)
+        if not sorted_expiries:
+            return None
+
+        if cls._should_use_weekly_expiry(underlying):
+            return sorted_expiries[0]
+
+        first_month = (sorted_expiries[0].year, sorted_expiries[0].month)
+        monthly_expiries = [
+            expiry_date for expiry_date in sorted_expiries
+            if (expiry_date.year, expiry_date.month) == first_month
+        ]
+        return monthly_expiries[-1]
     
     def get_next_expiry(self, underlying: str) -> str:
-        """Get current month's expiry date string (YYYY-MM-DD).
-        
-        NSE monthly expiry calendar (hardcoded known dates take priority):
-        - March 2026: 30th (NSE changed from last Tuesday)
-        - April  2026: 29th (last Tuesday — verified NSE calendar)
-        - All other months: computed as last Tuesday of that month
+        """Get the next tradable expiry for an underlying as YYYY-MM-DD.
+
+        Prefer the actual expiries present in instrument.json because stock-option
+        expiries can differ from simple calendar rules. Fall back to the legacy
+        monthly calendar logic only when instrument data is unavailable.
         """
         import calendar
         today = datetime.now().date()
-        
-        # Hardcoded NSE expiry overrides — update monthly as the calendar is published
-        KNOWN_EXPIRIES = {
-            (2026, 3): "2026-03-30",   # NSE changed from Tue to 30th
-            (2026, 4): "2026-04-29",   # Last Tuesday of April 2026 (verified)
-        }
+
+        underlying_clean = (underlying or "").rstrip('0123456789')
+        extractor = getattr(self, 'ce_extractor', None)
+
+        if extractor and getattr(extractor, 'all_instruments', None):
+            derivatives_exchange = self._get_underlying_derivatives_exchange(underlying_clean)
+            available_expiries = set()
+            for item in extractor.all_instruments:
+                if item.get('exch_seg') != derivatives_exchange:
+                    continue
+
+                instrument_type = str(item.get('instrumenttype', ''))
+                if not instrument_type.startswith('OPT'):
+                    continue
+
+                instrument_name = str(item.get('name', ''))
+                instrument_symbol = str(item.get('symbol', ''))
+                if instrument_name != underlying_clean and not instrument_symbol.startswith(underlying_clean):
+                    continue
+
+                expiry_raw = str(item.get('expiry', '')).strip().upper()
+                if not expiry_raw:
+                    continue
+
+                try:
+                    expiry_date = datetime.strptime(expiry_raw, '%d%b%Y').date()
+                except ValueError:
+                    continue
+
+                if expiry_date >= today:
+                    available_expiries.add(expiry_date)
+
+            preferred_expiry = self._select_preferred_expiry(underlying_clean, available_expiries)
+            if preferred_expiry:
+                return preferred_expiry.strftime('%Y-%m-%d')
         
         year, month = today.year, today.month
-        key = (year, month)
         
-        if key in KNOWN_EXPIRIES:
-            expiry_str = KNOWN_EXPIRIES[key]
-            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-            if today <= expiry_date:
-                return expiry_str
-            # Past this month's expiry — fall through to next month
-        
+        def _next_thursday(reference_date) -> str:
+            days_ahead = 3 - reference_date.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+            return (reference_date + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
         # Compute last Tuesday of the current or next month
         def _last_tuesday(y: int, m: int) -> str:
             last_day = calendar.monthrange(y, m)[1]
             last_date = datetime(y, m, last_day).date()
-            # Tuesday = weekday 1
             days_back = (last_date.weekday() - 1) % 7
             tue = last_date - timedelta(days=days_back)
             return tue.strftime("%Y-%m-%d")
-        
+
+        if self._should_use_weekly_expiry(underlying_clean):
+            return _next_thursday(today)
+
         current_expiry = _last_tuesday(year, month)
         if today <= datetime.strptime(current_expiry, "%Y-%m-%d").date():
             return current_expiry
@@ -1430,11 +1473,7 @@ class AngelOneOptionsBroker:
             year, month = year + 1, 1
         else:
             month += 1
-        
-        next_key = (year, month)
-        if next_key in KNOWN_EXPIRIES:
-            return KNOWN_EXPIRIES[next_key]
-        
+
         return _last_tuesday(year, month)
     
     def place_options_order(self,
@@ -1477,7 +1516,7 @@ class AngelOneOptionsBroker:
         
         try:
             # Wait for rate limit permission (with timeout)
-            if not rate_limiter.wait_for_call_permission(timeout=30.0):
+            if not rate_limiter.wait_for_call_permission(timeout=30.0, request_type="close_position"):
                 if not allow_queue:
                     # Caller handles retries (e.g. retry_failed_sl_orders) — never queue SL orders
                     logger.warning(f"ORDER_PLACE: RATE_LIMITED (no_queue) | {symbol} | returning None")
@@ -1541,12 +1580,13 @@ class AngelOneOptionsBroker:
                 is_sl_order = order_type in ("STOPLOSS_LIMIT", "STOPLOSS_MARKET", "STOPLOSS-LIMIT", "STOPLOSS-MARKET")
                 order_variety = "STOPLOSS" if is_sl_order else "NORMAL"
 
+                derivatives_exchange = self._get_underlying_derivatives_exchange(symbol)
                 order_params = {
                     "variety": order_variety,
                     "tradingsymbol": symbol,
-                    "symboltoken": self.get_instrument_token(symbol, "NFO"),
+                    "symboltoken": self.get_instrument_token(symbol, derivatives_exchange),
                     "transactiontype": action,
-                    "exchange": "NFO",
+                    "exchange": derivatives_exchange,
                     "ordertype": order_type,
                     "producttype": product_type,
                     "duration": "DAY",
@@ -1677,7 +1717,7 @@ class AngelOneOptionsBroker:
             rate_limiter = get_options_rate_limiter()
             
             # Wait for rate limit permission
-            if not rate_limiter.wait_for_call_permission(timeout=30.0):
+            if not rate_limiter.wait_for_call_permission(timeout=30.0, request_type="modify_order"):
                 logger.warning(f"CLOSE_POSITION: RATE_LIMITED | {symbol} | queuing for retry")
                 print(f"⚠️ Rate limited for closing {symbol} - queuing for retry...")
                 
@@ -1764,7 +1804,8 @@ class AngelOneOptionsBroker:
             # LIVE mode: Call broker API
             try:
                 # Get instrument token
-                token = self.get_instrument_token(symbol, "NFO")
+                derivatives_exchange = self._get_underlying_derivatives_exchange(symbol)
+                token = self.get_instrument_token(symbol, derivatives_exchange)
                 if not token:
                     logger.error(f"MODIFY_ORDER: No token found | {symbol}")
                     return None
@@ -1779,7 +1820,7 @@ class AngelOneOptionsBroker:
                     "ordertype": order_type,          # Match the original SL order type
                     "tradingsymbol": symbol,         # Required: symbol identifier
                     "symboltoken": token,            # Required: instrument token
-                    "exchange": "NFO",               # Required: exchange
+                    "exchange": derivatives_exchange,   # Required: exchange
                     "producttype": "INTRADAY",       # Required: product type
                     "duration": "DAY",               # Required: order validity
                     "price": str(new_price),
@@ -2369,7 +2410,7 @@ class AngelOneOptionsBroker:
                         batch_tokens = [symbol_to_token[sym] for sym in batch_symbols]
                         
                         # Wait for rate limiter (1 RPS for /quote endpoint)
-                        if not rate_limiter.wait_for_call_permission(timeout=3.0):
+                        if not rate_limiter.wait_for_call_permission(timeout=3.0, request_type="bulk_ltp_quote"):
                             logger.warning(f"BULK_MARKET_DATA: Rate limited on batch {batch_idx//batch_size}")
                             failed_symbols.extend(batch_symbols)
                             continue
@@ -2588,7 +2629,10 @@ class AngelOneOptionsBroker:
         """
         try:
             # Get historical data for underlying
-            historical_data = self.get_historical_data(symbol, interval="FIVE_MINUTE", days_back=2)
+            resolved_exchange = exchange or self._get_underlying_cash_exchange(symbol)
+            if exchange == "NSE":
+                resolved_exchange = self._get_underlying_cash_exchange(symbol)
+            historical_data = self.get_historical_data(symbol, interval="FIVE_MINUTE", days_back=2, exchange=resolved_exchange)
             
             if not historical_data or len(historical_data) < max(period_rsi, period_atr) + 1:
                 logger.warning(f"INDICATORS: Insufficient data for {symbol}")
@@ -2708,7 +2752,7 @@ class AngelOneOptionsBroker:
             return {}
     
     def get_historical_data(self, symbol: str, interval: str = "FIVE_MINUTE", 
-                           days_back: int = 2) -> Optional[List[Dict[str, Any]]]:
+                           days_back: int = 2, exchange: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """
         Get historical candlestick data for a symbol.
         
@@ -2729,7 +2773,8 @@ class AngelOneOptionsBroker:
                 logger.warning(f"HISTORICAL: Not authenticated for {symbol}")
                 return self._get_mock_historical_data(symbol, days_back)
             
-            token = self.get_instrument_token(symbol, exchange="NSE")
+            resolved_exchange = exchange or self._get_underlying_cash_exchange(symbol)
+            token = self.get_instrument_token(symbol, exchange=resolved_exchange)
             if not token:
                 logger.warning(f"HISTORICAL: Token not found for {symbol}")
                 return None
@@ -2749,7 +2794,7 @@ class AngelOneOptionsBroker:
                 return self._get_mock_historical_data(symbol, days_back)
             
             historic_params = {
-                "exchange": "NSE",
+                "exchange": resolved_exchange,
                 "symboltoken": token,
                 "interval": interval,
                 "fromdate": from_date,

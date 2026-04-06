@@ -1,9 +1,9 @@
-Last Updated: 2026-02-20 13:18:29
+Last Updated: 2026-04-06 11:47:35
 
 === CLOSED TRADES (Today) ===
-Sts | Underlying | Time  | Entry  | Exit   | High   | Qty    | PnL      | PnL%  | Dur   | Reason   | EntD   | EntG   | EntT   | ExD    | ExG    | ExT
-----+------------+-------+--------+--------+--------+--------+----------+-------+-------+----------+--------+--------+--------+--------+--------+--------
+Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit     | High     | Qty    | PnL      | PnL%  | Dur   | Reason
+----+------------+--------------------------+-----------+-------+----------+----------+----------+--------+----------+-------+-------+----------
 
 === ONGOING TRADES (Live) ===
-Sts | Underlying | Time  | Entry  | Curr   | High   | Qty    | UnPnL    | PnL%  | Dur   | EntD   | EntG   | EntT   | CurD   | CurG   | CurT
-----+------------+-------+--------+--------+--------+--------+----------+-------+-------+--------+--------+--------+--------+--------+--------
+Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Curr     | High     | Qty    | UnPnL    | PnL%  | Dur
+----+------------+--------------------------+-----------+-------+----------+----------+----------+--------+----------+-------+-------

@@ -21,6 +21,8 @@ from typing import List, Dict, Optional, Tuple
 
 from .optlogging import logger, log_event
 
+BFO_INDEX_UNDERLYINGS = {"SENSEX", "BANKEX"}
+
 # =============================================================================
 # Instrument Manager
 # =============================================================================
@@ -137,8 +139,12 @@ class InstrumentManager:
         logger.debug(f"INSTRUMENT_MGR: LOT_SIZE_NOT_FOUND | symbol={symbol} | using default=1")
         return 1
     
-    def get_strikes_for_underlying(self, underlying: str, exch_seg="NFO", 
-                                   instrument_types=("OPTSTK", "FUTSTK")) -> List[Dict]:
+    def _default_exch_seg_for_underlying(self, underlying: str) -> str:
+        clean_underlying = (underlying or "").upper().rstrip('0123456789')
+        return "BFO" if clean_underlying in BFO_INDEX_UNDERLYINGS else "NFO"
+
+    def get_strikes_for_underlying(self, underlying: str, exch_seg=None,
+                                   instrument_types=("OPTSTK", "FUTSTK", "OPTIDX", "FUTIDX")) -> List[Dict]:
         """
         Get all strikes for an underlying stock
         
@@ -151,18 +157,19 @@ class InstrumentManager:
             List of contracts
         """
         strikes = []
+        resolved_exch_seg = exch_seg or self._default_exch_seg_for_underlying(underlying)
         
         for inst in self.instruments:
             if (inst.get('name') == underlying and 
-                inst.get('exch_seg') == exch_seg and 
+                inst.get('exch_seg') == resolved_exch_seg and 
                 inst.get('instrumenttype') in instrument_types):
                 strikes.append(inst)
         
         return strikes
     
     def get_strikes_for_underlying_and_expiry(self, underlying: str, expiry: str,
-                                              exch_seg="NFO", 
-                                              instrument_types=("OPTSTK", "FUTSTK")) -> List[Dict]:
+                                              exch_seg=None,
+                                              instrument_types=("OPTSTK", "FUTSTK", "OPTIDX", "FUTIDX")) -> List[Dict]:
         """
         Get strikes for a specific underlying and expiry
         
@@ -176,11 +183,12 @@ class InstrumentManager:
             List of contracts
         """
         strikes = []
+        resolved_exch_seg = exch_seg or self._default_exch_seg_for_underlying(underlying)
         
         for inst in self.instruments:
             if (inst.get('name') == underlying and 
                 inst.get('expiry') == expiry and
-                inst.get('exch_seg') == exch_seg and 
+                inst.get('exch_seg') == resolved_exch_seg and 
                 inst.get('instrumenttype') in instrument_types):
                 strikes.append(inst)
         
@@ -325,10 +333,10 @@ class InstrumentManager:
     
     def get_stats(self) -> Dict:
         """Get manager statistics"""
-        # Count F&O stocks
+        # Count F&O underlyings across supported derivative segments.
         fo_stocks = set()
         for inst in self.instruments:
-            if inst.get('exch_seg') == 'NFO' and inst.get('instrumenttype') in ('OPTSTK', 'FUTSTK'):
+            if inst.get('exch_seg') in ('NFO', 'BFO') and inst.get('instrumenttype') in ('OPTSTK', 'FUTSTK', 'OPTIDX', 'FUTIDX'):
                 name = inst.get('name')
                 if name:
                     fo_stocks.add(name)

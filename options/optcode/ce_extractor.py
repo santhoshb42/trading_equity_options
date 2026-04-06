@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
-from .optconfig import BASE_DIR
+from .optconfig import BASE_DIR, OptionsTradingConfig
 from .optlogging import logger
 
 # =============================================================================
@@ -42,7 +42,11 @@ class OptionSymbolFormat:
     LOT_SIZES = {
         'BANKNIFTY': 40,
         'NIFTY': 100,
-        'FINNIFTY': 40
+        'FINNIFTY': 40,
+        'MIDCPNIFTY': 120,
+        'NIFTYNXT50': 25,
+        'SENSEX': 20,
+        'BANKEX': 30,
     }
     
     # Month mapping
@@ -158,6 +162,10 @@ class OptionChainGenerator:
             'BANKNIFTY': 47000,
             'NIFTY': 23500,
             'FINNIFTY': 22000,
+            'MIDCPNIFTY': 12000,
+            'NIFTYNXT50': 56000,
+            'SENSEX': 67000,
+            'BANKEX': 56000,
         }
         
         # Dynamic strike intervals based on price range
@@ -167,6 +175,10 @@ class OptionChainGenerator:
             'BANKNIFTY': 100,
             'NIFTY': 50,
             'FINNIFTY': 100,
+            'MIDCPNIFTY': 25,
+            'NIFTYNXT50': 100,
+            'SENSEX': 100,
+            'BANKEX': 100,
         }
     
     def _get_strike_interval(self, underlying: str, price: float) -> int:
@@ -316,50 +328,59 @@ class InstrumentCEExtractor:
         Returns: List of matching contracts (typically 3-4 strikes) OR None if not found
         """
         contracts = []
-        
+
         # Strip trailing digits (e.g., POWERINDIA3 -> POWERINDIA)
         underlying_clean = underlying.rstrip('0123456789')
-        
-        # Convert expiry to broker format: DDMMMYY (e.g., 30DEC25)
+
         from datetime import datetime
         expiry_date = datetime.strptime(expiry, '%Y-%m-%d')
-        expiry_pattern = expiry_date.strftime('%d%b%y').upper()  # e.g., "30DEC25"
-        
-        # Build grep pattern: SYMBOL+DDMMMYY (e.g., "TECHM30DEC251600CE")
-        search_pattern = f"{underlying_clean}{expiry_pattern}"
-        
-        logger.debug(f"Grepping for: {search_pattern}")
-        
-        # Search all_instruments for matching symbols
+        expiry_pattern = expiry_date.strftime('%d%b%Y').upper()
+
+        logger.debug(f"Searching instrument master | underlying={underlying_clean} | expiry={expiry_pattern}")
+
         for instrument in self.all_instruments:
-            symbol = instrument.get('symbol', '')
-            
-            # Simple grep: does symbol contain our exact pattern?
-            if search_pattern in symbol and symbol.endswith(('CE', 'PE')):
-                # Extract contract type
-                contract_type = symbol[-2:]
-                
-                contract = {
-                    'symbol': symbol,
-                    'underlying': underlying_clean,
-                    'expiry': expiry,
-                    'contract_type': contract_type,
-                    'strike': None,  # Will be extracted from symbol when needed
-                    'atm': False,
-                    'token': instrument.get('token'),
-                    'exch_seg': instrument.get('exch_seg', 'NFO')
-                }
-                contracts.append(contract)
-        
-        # Sort by symbol
-        contracts = sorted(contracts, key=lambda x: x['symbol'])
-        
+            symbol = str(instrument.get('symbol', ''))
+            if not symbol.endswith(('CE', 'PE')):
+                continue
+            if str(instrument.get('name', '')).upper() != underlying_clean.upper():
+                continue
+            if str(instrument.get('expiry', '')).strip().upper() != expiry_pattern:
+                continue
+            instrument_type = str(instrument.get('instrumenttype', ''))
+            if not instrument_type.startswith('OPT'):
+                continue
+
+            contract_type = symbol[-2:]
+            strike = None
+            try:
+                strike_value = float(instrument.get('strike', 0))
+                if strike_value > 0:
+                    strike = strike_value / 100.0
+                    if strike.is_integer():
+                        strike = int(strike)
+            except (TypeError, ValueError):
+                strike = None
+
+            contract = {
+                'symbol': symbol,
+                'underlying': underlying_clean,
+                'expiry': expiry,
+                'contract_type': contract_type,
+                'strike': strike,
+                'atm': False,
+                'token': instrument.get('token'),
+                'exch_seg': instrument.get('exch_seg', 'NFO')
+            }
+            contracts.append(contract)
+
+        contracts = sorted(contracts, key=lambda x: (x['strike'] is None, x['strike'], x['symbol']))
+
         if contracts:
-            logger.info(f"✅ Found {len(contracts)} contracts for {search_pattern} (grep: {underlying_clean}{expiry_pattern})")
+            logger.info(f"✅ Found {len(contracts)} contracts for {underlying_clean} {expiry_pattern}")
             logger.debug(f"Contracts: {[c['symbol'] for c in contracts[:10]]}")
             return contracts
         else:
-            logger.warning(f"⚠️ NO contracts found for {search_pattern}")
+            logger.warning(f"⚠️ NO contracts found for {underlying_clean} {expiry_pattern}")
             return None
     
     def build_ce_pe_map(self, underlyings: List[str] = None) -> Dict[str, List[Dict]]:
@@ -372,7 +393,7 @@ class InstrumentCEExtractor:
         Returns: Dict mapping underlying to list of CE/PE contracts
         """
         if underlyings is None:
-            underlyings = ['BANKNIFTY', 'NIFTY', 'FINNIFTY']
+            underlyings = list(OptionsTradingConfig.UNDERLYING_INDEXES)
         
         ce_pe_map = {}
         
@@ -398,12 +419,10 @@ class InstrumentCEExtractor:
         return ce_pe_map
     
     def _get_next_weekly_expiry(self) -> str:
-        """Get next Wednesday (weekly option expiry)"""
+        """Get next Thursday weekly expiry."""
         today = datetime.now().date()
-        
-        # Find next Wednesday (2 = Wednesday in Python's weekday)
-        # But NSE weekly options expire on Wednesday, so we need next Thursday actually
-        # Standard: BANKNIFTY/NIFTY weekly expires on Thursday (3 = Thursday)
+
+        # Supported weekly index expiries in this bot are treated as Thursday expiries.
         days_ahead = 3 - today.weekday()
         if days_ahead <= 0:  # Already passed this week
             days_ahead += 7

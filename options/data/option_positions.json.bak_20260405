@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-04-05T12:39:30.981409",
+  "positions": [
+    {
+      "symbol": "SENSEX2640972300CE",
+      "underlying": "SENSEX",
+      "strike": 72300,
+      "expiry": "2026-04-09",
+      "contract_type": "CE",
+      "action": "BUY",
+      "quantity": 17,
+      "entry_premium": 1709.7,
+      "entry_premium_total": 29064.9,
+      "entry_time": "2026-04-05T12:21:52.026908",
+      "entry_greeks": {
+        "delta": 0.7424524463193215,
+        "gamma": 0.0001942361880472741,
+        "theta": -98.12991614613986,
+        "vega": 21.455474658429548,
+        "iv": 0.25
+      },
+      "entry_delta": 0.7424524463193215,
+      "entry_gamma": 0.0001942361880472741,
+      "entry_theta": -98.12991614613986,
+      "entry_vega": 21.455474658429548,
+      "entry_iv": 0.25,
+      "greeks_history_length": 20,
+      "order_id": "OPT_1775371912_SENSEX2640972300CE_BUY",
+      "current_premium": 1709.7,
+      "current_premium_total": 29064.9,
+      "current_greeks": {
+        "delta": 0.5,
+        "gamma": 0.05,
+        "theta": -0.02,
+        "vega": 0.1
+      },
+      "current_iv": 0.25,
+      "unrealized_pnl": 0.0,
+      "highest_premium": 1709.7,
+      "days_to_expiry": 4,
+      "last_updated": "2026-04-05T12:39:30.981239",
+      "underlying_alert_price": null,
+      "exit_greeks": {
+        "delta": 0.5,
+        "gamma": 0.05,
+        "theta": -0.02,
+        "vega": 0.1,
+        "iv": 20.0
+      },
+      "sl_order_id": "OPT_1775371912_SENSEX2640972300CE_SELL",
+      "sl_order_price": 1538.7,
+      "trailing_sl_activated": false,
+      "last_trailing_sl_price": null,
+      "trailing_sl_activation_time": null,
+      "trailing_sl_update_count": 0,
+      "hard_sl_price": 1538.73,
+      "trial_sl_enabled": false,
+      "trial_sl_price": null,
+      "trial_sl_activation_time": null,
+      "trial_sl_update_count": 0,
+      "exit_premium": null,
+      "exit_time": null,
+      "sector": "UNKNOWN",
+      "sector_rsi": null,
+      "sector_performance": null,
+      "sector_participation": null,
+      "sector_bullish": null,
+      "sector_check": "PASS"
+    }
+  ]
+}

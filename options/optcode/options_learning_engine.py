@@ -28,7 +28,7 @@ class LearningConfig:
     """Configuration for learning engine"""
     
     # Performance tracking
-    SYMBOLS = ['BANKNIFTY', 'NIFTY', 'FINNIFTY']
+    SYMBOLS = ['BANKNIFTY', 'NIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX']
     LOOKBACK_TRADES = 50  # Remember last 50 trades per symbol
     DECAY_DAYS = 30  # Time decay for older trades
     

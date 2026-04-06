@@ -13,15 +13,103 @@ for automatic retry when rate limited.
 
 import time
 import threading
+import json
+import os
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from collections import deque
+import fcntl
 
 from .optlogging import logger, log_event
 
 # AngelOne rate limits for options trading
 REQUESTS_PER_SECOND = 8  # Conservative for options
 REQUESTS_PER_MINUTE = 180
+SHARED_RATE_LIMIT_STATE_FILE = "/tmp/angelone_options_shared_rate_limit.json"
+
+# Reserve a slice of capacity for trading-critical operations so low-value
+# background work cannot starve live trading and position protection.
+CRITICAL_SECOND_RESERVE = 2
+CRITICAL_MINUTE_RESERVE = 30
+
+CRITICAL_REQUEST_PREFIXES = (
+    "place_order",
+    "close_position",
+    "modify_order",
+    "modify_sl",
+    "cancel_order",
+    "bulk_ltp_quote",
+    "ltp_fetch",
+)
+
+
+def _normalize_request_type(request_type: Optional[str]) -> str:
+    return (request_type or "api_call").lower()
+
+
+def is_critical_request(request_type: Optional[str]) -> bool:
+    normalized = _normalize_request_type(request_type)
+    return normalized.startswith(CRITICAL_REQUEST_PREFIXES)
+
+
+class SharedRateLimiterState:
+    """Cross-process rate gate for a shared AngelOne API key."""
+
+    def __init__(self, state_file: str = SHARED_RATE_LIMIT_STATE_FILE):
+        self.state_file = state_file
+        os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+        if not os.path.exists(self.state_file):
+            with open(self.state_file, 'w', encoding='ascii') as handle:
+                json.dump({'second_calls': [], 'minute_calls': [], 'updated_at': 0}, handle)
+
+    def try_acquire_slot(self, request_type: str) -> tuple[bool, str]:
+        now = time.time()
+        critical = is_critical_request(request_type)
+
+        with open(self.state_file, 'a+', encoding='ascii') as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            handle.seek(0)
+            raw = handle.read().strip()
+
+            try:
+                state = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                state = {}
+
+            second_calls = [ts for ts in state.get('second_calls', []) if now - ts < 1.0]
+            minute_calls = [ts for ts in state.get('minute_calls', []) if now - ts < 60.0]
+
+            if len(second_calls) >= REQUESTS_PER_SECOND:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False, f"Shared rate limit: {REQUESTS_PER_SECOND} calls/second exceeded"
+
+            if len(minute_calls) >= REQUESTS_PER_MINUTE:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False, f"Shared rate limit: {REQUESTS_PER_MINUTE} calls/minute exceeded"
+
+            if not critical:
+                if len(second_calls) >= REQUESTS_PER_SECOND - CRITICAL_SECOND_RESERVE:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    return False, f"Shared per-second reserve held for critical requests ({request_type})"
+                if len(minute_calls) >= REQUESTS_PER_MINUTE - CRITICAL_MINUTE_RESERVE:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    return False, f"Shared per-minute reserve held for critical requests ({request_type})"
+
+            second_calls.append(now)
+            minute_calls.append(now)
+
+            handle.seek(0)
+            handle.truncate()
+            json.dump({
+                'second_calls': second_calls,
+                'minute_calls': minute_calls,
+                'updated_at': now,
+            }, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+        return True, "OK"
 
 
 class RequestQueue:
@@ -39,19 +127,25 @@ class RequestQueue:
         """Add a request to the queue with retry logic"""
         if kwargs is None:
             kwargs = {}
+        critical = is_critical_request(request_type)
         
         with self.lock:
-            self.queue.append({
+            request = {
                 'type': request_type,
                 'callback': callback,
                 'args': args,
                 'kwargs': kwargs,
                 'retries': 0,
-                'created_at': time.time()
-            })
+                'created_at': time.time(),
+                'critical': critical,
+            }
+            if critical:
+                self.queue.appendleft(request)
+            else:
+                self.queue.append(request)
         
-        log_event("REQUEST_QUEUE", f"Request queued: {request_type}", queue_size=len(self.queue))
-        logger.info(f"REQUEST_QUEUE: Queued {request_type} (queue size: {len(self.queue)})")
+        log_event("REQUEST_QUEUE", f"Request queued: {request_type}", queue_size=len(self.queue), critical=critical)
+        logger.info(f"REQUEST_QUEUE: Queued {request_type} (queue size: {len(self.queue)} | critical={critical})")
     
     def process_queue(self, rate_limiter):
         """Process queued requests with exponential backoff"""
@@ -76,7 +170,7 @@ class RequestQueue:
                     continue
                 
                 # Try to execute request
-                can_call, _ = rate_limiter.can_make_call()
+                can_call, _ = rate_limiter.can_make_call(request['type'])
                 if can_call:
                     try:
                         result = request['callback'](*request['args'], **request['kwargs'])
@@ -320,6 +414,7 @@ class OptionsRateLimiter:
         self.wait_time_total = 0.0
         
         self.lock = threading.Lock()
+        self.shared_state = SharedRateLimiterState()
         
         log_event("RATE_LIMITER", "Options rate limiter initialized",
                  rps_limit=self.rps_limit, rpm_limit=self.rpm_limit)
@@ -345,7 +440,7 @@ class OptionsRateLimiter:
         
         self.last_cleanup = now
     
-    def can_make_call(self) -> tuple[bool, str]:
+    def can_make_call(self, request_type: str = "api_call") -> tuple[bool, str]:
         """
         Check if we can make an API call without violating limits
         
@@ -354,8 +449,17 @@ class OptionsRateLimiter:
         """
         with self.lock:
             self._cleanup_history()
+            critical = is_critical_request(request_type)
+
+            if not critical:
+                self.second_bucket._refill()
+                self.minute_bucket._refill()
+                if self.second_bucket.tokens <= CRITICAL_SECOND_RESERVE:
+                    return False, f"Reserved per-second capacity held for critical requests ({request_type})"
+                if self.minute_bucket.tokens <= CRITICAL_MINUTE_RESERVE:
+                    return False, f"Reserved per-minute capacity held for critical requests ({request_type})"
             
-            # Check if we have tokens in both buckets
+            # Check local process buckets first
             if not self.second_bucket.consume(1):
                 return False, f"Rate limit: {self.rps_limit} calls/second exceeded"
             
@@ -365,9 +469,15 @@ class OptionsRateLimiter:
                                               self.second_bucket.tokens + 1)
                 return False, f"Rate limit: {self.rpm_limit} calls/minute exceeded"
             
+            shared_ok, shared_reason = self.shared_state.try_acquire_slot(request_type)
+            if not shared_ok:
+                self.second_bucket.tokens = min(self.second_bucket.capacity, self.second_bucket.tokens + 1)
+                self.minute_bucket.tokens = min(self.minute_bucket.capacity, self.minute_bucket.tokens + 1)
+                return False, shared_reason
+
             return True, "OK"
     
-    def wait_for_call_permission(self, timeout: float = 30.0) -> bool:
+    def wait_for_call_permission(self, timeout: float = 30.0, request_type: str = "api_call") -> bool:
         """
         Wait until we can make an API call with adaptive backoff
         
@@ -396,7 +506,7 @@ class OptionsRateLimiter:
                                  adaptive_delay_ms=round(adaptive_delay * 1000, 1))
                         logger.warning(f"RATE_LIMITER: High utilization {current_utilization:.1f}% - adding adaptive backoff")
             
-            can_call, reason = self.can_make_call()
+            can_call, reason = self.can_make_call(request_type)
             if can_call:
                 # Add adaptive delay before returning
                 if adaptive_delay > 0:
@@ -413,8 +523,8 @@ class OptionsRateLimiter:
             time.sleep(min(wait_time + adaptive_delay, 0.1))
         
         self.blocked_calls += 1
-        log_event("RATE_LIMITER", f"⛔ Call blocked due to timeout: {reason}")
-        logger.error(f"RATE_LIMITER: Call blocked due to timeout: {reason}")
+        log_event("RATE_LIMITER", f"⛔ Call blocked due to timeout: {reason}", request_type=request_type)
+        logger.error(f"RATE_LIMITER: Call blocked due to timeout: {reason} | request_type={request_type}")
         return False
     
     def queue_request(self, request_type: str, callback, args: tuple = (), kwargs: dict = None):

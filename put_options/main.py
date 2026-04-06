@@ -501,7 +501,7 @@ class OptionsTradingBot:
             print(f"   ❌ Learning update failed: {str(e)}")
     
     def _record_closed_positions_to_learning(self, closed_positions_list, exit_reason):
-        """Record closed positions to learning engine for ML training"""
+        """Record closed positions to auxiliary learning systems after local close."""
         if not closed_positions_list:
             return
         
@@ -512,25 +512,10 @@ class OptionsTradingBot:
             for pos in closed_positions_list:
                 symbol = pos.get('symbol', 'UNKNOWN')
                 pnl = pos.get('pnl', 0)
-                is_win = pnl > 0
                 
                 # Extract underlying from option symbol (BANKNIFTY25DEC24000CE -> BANKNIFTY)
-                # This ensures learning persists across contract expirations
+                # This keeps auxiliary learning keyed to the underlying.
                 underlying = extract_underlying_from_symbol(symbol)
-                
-                # Record to learning engine using underlying
-                if self.learning_engine:
-                    try:
-                        self.learning_engine.record_trade(
-                            symbol=underlying,  # Use underlying, not full contract symbol!
-                            won=is_win,
-                            profit=pnl,
-                            predicted_prob=0.5,
-                            trading_mode=OptionsTradingConfig.TRADING_MODE
-                        )
-                        logger.debug(f"LEARNING: TRADE_RECORDED | {underlying} | exit={exit_reason} | won={is_win} | pnl=₹{pnl:.2f}")
-                    except Exception as e:
-                        logger.warning(f"LEARNING: RECORD_ERROR | {str(e)}")
                 
                 # NEW: Record to Neural ML outcome recorder
                 if self.trade_outcome_recorder and HAS_NEURAL_ML:
@@ -624,33 +609,25 @@ class OptionsTradingBot:
                             time.sleep(current_interval)
                             continue
                     
-                    # GREEKS REFRESH: Every 60 seconds (expensive chain fetches)
-                    # ⭐ ASYNC: Run in background thread to NOT block monitoring loop
-                    # Critical fix: Greeks fetch was blocking main loop for 20+ seconds
-                    current_time = time.time()
-                    if current_time - last_greeks_refresh >= 60.0:
-                        last_greeks_refresh = current_time
-                        # Start Greeks refresh in background thread (non-blocking)
-                        def background_greeks_refresh():
-                            try:
-                                start_time = time.time()
-                                logger.debug(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC | starting background fetch | time={start_time}")
-                                greeks_stats = self.monitor.refresh_position_greeks()
-                                duration = time.time() - start_time
-                                if greeks_stats and greeks_stats.get('greeks_updated', 0) > 0:
-                                    logger.info(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC | completed | updated={greeks_stats['greeks_updated']}/{len(self.monitor.positions)} | duration={duration:.2f}s")
-                                else:
-                                    logger.info(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC | completed | no updates | duration={duration:.2f}s")
-                            except Exception as e:
-                                logger.warning(f"POSITION_MONITOR: GREEKS_REFRESH_ASYNC_ERROR | {str(e)}")
-                        
-                        # Spawn background thread (daemon=True so it doesn't block shutdown)
-                        greeks_thread = threading.Thread(target=background_greeks_refresh, daemon=True, name="GreeksRefreshAsync")
-                        greeks_thread.start()
+                    # Greeks refresh disabled during monitoring.
+                    # Entry-time Greeks are still captured for entry filtering,
+                    # but live position monitoring uses premium/LTP-driven logic only.
                     
                     # Only check exits if we successfully refreshed at least some LTPs
                     if not ltps_refreshed:
                         logger.debug(f"POSITION_MONITOR: No LTPs refreshed, skipping exit checks")
+                        # Still write CSV/live data even when skipping exit checks
+                        if HAS_LIVE_DATA and self.live_data_tracker:
+                            try:
+                                self.live_data_tracker.save()
+                                if self.live_data_formatter:
+                                    csv_data = self.live_data_formatter.generate_csv()
+                                    csv_file = Path('/root/santhosh/trading/put_options/data/live_data_trades.csv')
+                                    with open(csv_file, 'w') as f:
+                                        f.write(csv_data)
+                                    logger.debug("POSITION_MONITOR: CSV_UPDATED")
+                            except Exception as _live_err:
+                                pass
                         time.sleep(current_interval)
                         continue
                     
@@ -1060,15 +1037,8 @@ class OptionsTradingBot:
             logger.warning("INSTRUMENT_REFRESH: MANAGER_NOT_READY")
     
     def _start_csv_updater_service(self):
-        """Start background service to keep live_data_trades.csv fresh"""
-        try:
-            from optcode.csv_updater import start_csv_update_service
-            start_csv_update_service()
-            print("   ✅ CSV updater service started (updates every 30 seconds)")
-            logger.info("CSV_UPDATER: SERVICE_STARTED")
-        except Exception as e:
-            logger.warning(f"CSV_UPDATER: FAILED_TO_START | {str(e)}")
-            print(f"   ⚠️  CSV updater service failed to start: {str(e)}")
+        """Disabled: position monitor already writes CSV every 3-5s"""
+        logger.debug("CSV_UPDATER: SERVICE_DISABLED (position monitor handles writes)")
     
     def _refresh_instruments_now(self):
         """Refresh instruments from broker immediately (legacy, not used)"""

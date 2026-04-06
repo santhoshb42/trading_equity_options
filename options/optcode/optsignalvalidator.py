@@ -10,6 +10,7 @@ Validates TradingView alerts for options trading:
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -195,9 +196,10 @@ class OptionsSignalValidator:
         if symbol_upper in TV_SYMBOL_REMAP:
             symbol_upper = TV_SYMBOL_REMAP[symbol_upper]
 
-        # Check if it's already an index
-        for underlying in OptionsTradingConfig.UNDERLYING_INDEXES:
-            if underlying in symbol_upper:
+        # Check if it's already a supported index.
+        # Match the longest configured underlyings first so NIFTYNXT50 does not collapse to NIFTY.
+        for underlying in sorted(OptionsTradingConfig.UNDERLYING_INDEXES, key=len, reverse=True):
+            if re.search(rf'{re.escape(underlying)}(?:$|[^A-Z]|\d)', symbol_upper):
                 return underlying
         
         # Accept ALL symbols as potential F&O stocks
@@ -263,13 +265,13 @@ class OptionsSignalValidator:
         """Check if expiry is valid for trading"""
         logger.debug(f"EXPIRY_CHECK: START | days_to_expiry={days_to_expiry}")
         
-        # Avoid very short-term options (last day)
-        if days_to_expiry < 1:
-            message = "Option expires today - too short"
+        # Reject only already-expired contracts. Expiry-day entries are allowed.
+        if days_to_expiry < 0:
+            message = "Option already expired"
             logger.warning(f"EXPIRY_CHECK: REJECTED | {message} | days={days_to_expiry}")
             return False, message
         
-        logger.debug(f"EXPIRY_CHECK: DURATION_OK | days={days_to_expiry} >= 1")
+        logger.debug(f"EXPIRY_CHECK: DURATION_OK | days={days_to_expiry} >= 0")
         
         # Also avoid very long-term (monthly if we prefer weekly)
         if OptionsTradingConfig.PREFER_WEEKLY and days_to_expiry > 14:

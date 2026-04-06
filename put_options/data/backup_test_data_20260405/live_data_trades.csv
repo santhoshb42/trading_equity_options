@@ -1,0 +1,10 @@
+Last Updated: 2026-04-05 12:48:55
+
+=== CLOSED TRADES (Today) ===
+Sts | Underlying | Time  | Entry  | Exit   | High   | Qty    | PnL      | PnL%  | Dur   | Reason   | EntD   | EntG   | EntT   | ExD    | ExG    | ExT
+----+------------+-------+--------+--------+--------+--------+----------+-------+-------+----------+--------+--------+--------+--------+--------+--------
+CLS | NIFTY      | 11:56 | 582.95 | 582.95 | 582.95 |     51 |      0.0 |   0.0 |   15m | STALE_CONSOLIDATION (Peak +0.0%, Stale 15min) | -0.492 |  0.001 | -58.65 |  0.500 |  0.050 |  -0.02
+
+=== ONGOING TRADES (Live) ===
+Sts | Underlying | Time  | Entry  | Curr   | High   | Qty    | UnPnL    | PnL%  | Dur   | EntD   | EntG   | EntT   | CurD   | CurG   | CurT
+----+------------+-------+--------+--------+--------+--------+----------+-------+-------+--------+--------+--------+--------+--------+--------

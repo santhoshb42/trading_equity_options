@@ -1,97 +1,151 @@
 //@version=6
-indicator("Sniper 10:30–11:15 Late Bloomers Paper Trade", overlay=true)
+indicator("Sniper 7.31-E – Pullback + Momentum Hybrid", overlay=true)
 
 //──────── INPUTS ────────
-emaShort = input.int(9, "EMA Short")
-emaLong  = input.int(20, "EMA Long")
-rsiLen   = input.int(14)
-atrLen   = input.int(14)
-volLen   = input.int(20)
+emaShort = input.int(9)
+emaLong = input.int(20)
+rsiLen = input.int(14)
+atrLen = input.int(14)
+volLen = input.int(20)
 
-// Liberal parameters (intentional for late bloomers)
-minRsi   = input.float(50.0, "Min RSI")
-maxRsi   = input.float(80.0, "Max RSI")
-minAtrPc = input.float(0.05, "Min ATR %")
-minBody  = input.float(0.40, "Min Body Ratio")
+minRsi = input.float(58.0)
+maxRsi = input.float(85.0)
+minAtrPc = input.float(0.06)
+minBody = input.float(0.45)
+maxPullbackDepth = input.float(0.8)
 
 //──────── CORE ────────
-ema9  = ta.ema(close, emaShort)
+ema9 = ta.ema(close, emaShort)
 ema20 = ta.ema(close, emaLong)
-vwap  = ta.vwap(hlc3)
-
-rsi   = ta.rsi(close, rsiLen)
-atr   = ta.atr(atrLen)
+vwap = ta.vwap(hlc3)
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
 atrPc = atr / close * 100.0
 
 body = math.abs(close - open)
-range = math.max(high - low, 0.0001)
-bodyRatio = body / range
-
+barRange = math.max(high - low, 0.0)
+bodyRatio = barRange == 0.0 ? 0.0 : body / barRange
 volAvg = ta.sma(volume, volLen)
 
-//──────── TIME CONTROL (10:30-11:15 WINDOW) ────────
-// IST = GMT+5:30, so 10:30 IST = 05:00 GMT
+//──────── TIME ────────
 barCloseTime = time + timeframe.multiplier * 60000
-tradeStart = timestamp("GMT+5:30", year, month, dayofmonth, 10, 30)
-tradeEnd   = timestamp("GMT+5:30", year, month, dayofmonth, 11, 15)
+tradeStart = timestamp("GMT+5:30", year, month, dayofmonth, 9, 30)
+tradeEnd = timestamp("GMT+5:30", year, month, dayofmonth, 11, 30)
 inTradeWindow = barCloseTime >= tradeStart and barCloseTime <= tradeEnd
 
-//──────── DAILY CONTEXT (PDC = Previous Day Close) ────────
+//──────── DAILY CONTEXT ────────
 pdc = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
 pdcConfirm = close > pdc
 
-//──────── FILTERS (LIBERAL FOR LATE BLOOMERS) ────────
-fTrend  = close > vwap and close > ema9    // Price above trend
-fRSI    = rsi >= minRsi and rsi <= maxRsi  // Momentum (50-80)
-fATR    = atrPc >= minAtrPc                // Volatility present
-fVolume = volume > volAvg * 1.10 or volume > volume[1]  // Volume confirmation
-fBody   = bodyRatio >= minBody              // Real body (not wick)
+//──────── FILTERS ────────
+fAboveMA = close > ema9 and close > ema20 and close > vwap
+fRSI = rsi >= minRsi and rsi <= maxRsi
+fATR = atrPc >= minAtrPc
+fVolume = volume > volAvg * 1.15 or volume > volume[1] * 1.05
+fBody = bodyRatio >= minBody
 
-//──────── FINAL CONDITION ────────
-allFilters =
-     fTrend and
-     fRSI and
-     fATR and
-     fVolume and
-     fBody and
-     pdcConfirm and
-     inTradeWindow
+//──────── BREAKOUT CONTEXT ────────
+allFilters = fAboveMA and fRSI and fATR and fVolume and fBody and pdcConfirm and inTradeWindow
+breakout = allFilters
+recentBreakout = ta.barssince(breakout) <= 7
 
-// Edge trigger (single alert per move)
-edgeTrigger = allFilters and not allFilters[1]
+//──────── TREND STRENGTH ────────
+emaSpread = (ema9 - ema20) / ema20 * 100
+strongTrend = emaSpread > 0.15
 
-//──────── SCORE (FOR PAYLOAD) ────────
+vwapDistance = (close - vwap) / vwap * 100
+healthyMomentum = vwapDistance > 0.2
+
+rsiHolding = rsi > 55
+
+trendHealthy = strongTrend and healthyMomentum and rsiHolding
+
+//════════════════════════════════════
+// 🔵 PULLBACK ENTRY
+//════════════════════════════════════
+pullback = close > ema20 and close <= ema9
+recentPullback = ta.barssince(pullback) <= 3
+
+higherLow = ta.lowest(low, 3) > ta.lowest(low, 6)
+aboveVWAP = close > vwap
+
+strongBullCandle = close > open and bodyRatio > 0.5
+reclaim = close > ema9 and strongBullCandle
+
+pullbackVolumeAtSignal = ta.valuewhen(pullback, volume, 0)
+pullbackVol = volume > volAvg or pullbackVolumeAtSignal > volAvg
+
+pullbackDepth = (ema9 - close) / ema9 * 100
+pullbackDepthAtEntry = ta.valuewhen(pullback, pullbackDepth, 0)
+validDepth = pullbackDepthAtEntry >= 0 and pullbackDepthAtEntry <= maxPullbackDepth
+
+pullbackEntry = recentBreakout and recentPullback and reclaim and higherLow and aboveVWAP and pullbackVol and validDepth and trendHealthy and inTradeWindow
+pullbackTrigger = pullbackEntry and not pullbackEntry[1]
+
+//════════════════════════════════════
+// 🔴 MOMENTUM ENTRY
+//════════════════════════════════════
+strongMomentumCandle = close > open and bodyRatio > 0.6
+momentumEntry = breakout and strongMomentumCandle and trendHealthy and inTradeWindow
+momentumTrigger = momentumEntry and not momentumEntry[1]
+
+//════════════════════════════════════
+// 🎯 FINAL TRIGGER
+//════════════════════════════════════
+finalTrigger = pullbackTrigger or momentumTrigger
+
+entryType = pullbackTrigger ? "PULLBACK" : momentumTrigger ? "MOMENTUM" : "NONE"
+
+//════════════════════════════════════
+// 📊 SCORE
+//════════════════════════════════════
 score = 0.0
-score += fTrend  ? 20 : 0
-score += fRSI    ? 20 : 0
-score += fATR    ? 20 : 0
-score += fVolume ? 20 : 0
-score += fBody   ? 20 : 0
+score += fAboveMA ? 12.5 : 0
+score += fRSI ? 12.5 : 0
+score += fATR ? 12.5 : 0
+score += fVolume ? 12.5 : 0
+score += fBody ? 12.5 : 0
+score += pdcConfirm ? 12.5 : 0
 
-confidence = edgeTrigger ? math.min(95, 60 + score * 0.35) : 0
+confidence = finalTrigger ? math.min(95.0, 75.0 + score * 0.4) : 0.0
 
-//──────── PAYLOAD WEBHOOK (JSON FORMAT FOR BOT) ────────
-// Send structured JSON that webhook router and bot can parse
-alertMessage = "{\"symbol\": \"" + syminfo.ticker + "\", \"action\": \"BUY\", \"price\": " + str.tostring(close) + ", \"confidence\": " + str.tostring(confidence) + ", \"score\": " + str.tostring(score) + ", \"rsi\": " + str.tostring(rsi) + ", \"atr_percent\": " + str.tostring(atrPc) + ", \"volume\": " + str.tostring(volume) + ", \"ema9\": " + str.tostring(ema9) + ", \"ema20\": " + str.tostring(ema20) + ", \"vwap\": " + str.tostring(vwap) + ", \"time_window\": \"10:30-11:15\", \"alert_type\": \"LATE_BLOOMER_TRIGGER\"}"
+//════════════════════════════════════
+// 📈 NIFTY TREND
+//════════════════════════════════════
+nClose = request.security("NSE:NIFTY", "5", close)
+nPrevClose = request.security("NSE:NIFTY", "D", close[1])
 
-//──────── ALERT (ONCE PER BAR, OPTIMIZED FOR 10:30-11:15) ────────
-// Send JSON payload that webhook router expects
-if edgeTrigger and inTradeWindow
-    alert(alertMessage, alert.freq_once_per_bar_close)
+dayChange = nPrevClose > 0 ? (nClose - nPrevClose) / nPrevClose * 100 : 0.0
 
-//──────── VISUALS ────────
-plot(ema9, color=color.yellow, linewidth=2, title="EMA 9")
-plot(ema20, color=color.orange, linewidth=2, title="EMA 20")
-plot(vwap, color=color.blue, linewidth=2, title="VWAP")
+marketTrend = "NEUTRAL"
 
-plotshape(edgeTrigger, title="Late Bloomer Trigger",
-     style=shape.labelup,
-     location=location.belowbar,
-     color=color.new(color.lime, 0),
-     text="BLOOM",
-     textcolor=color.black,
-     size=size.small)
+if dayChange > 0.4
+    marketTrend := "GOOD"
+else if dayChange < -0.2
+    marketTrend := "BAD"
+else
+    marketTrend := "NEUTRAL"
 
-//──────── DEBUG INFO (COMMENT OUT FOR LIVE) ────────
-// plot(score, title="Score", color=color.purple, linewidth=1)
-// plotchar(inTradeWindow ? 1 : 0, title="In Window", char="W", location=location.top, color=color.white)
+//════════════════════════════════════
+// 📦 JSON ALERT
+//════════════════════════════════════
+fmt(x) => str.tostring(x, format.mintick)
+
+jsonMsg = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"entry_type\":\"" + entryType + "\",\"price\":\"" + fmt(close) + "\",\"score\":\"" + fmt(score) + "\",\"confidence\":\"" + fmt(confidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(emaSpread) + "\",\"momentum_score\":\"" + fmt(vwapDistance) + "\"}"
+
+//════════════════════════════════════
+// 🔔 ALERT CONTROL
+//════════════════════════════════════
+var bool alertedToday = false
+alertedToday := ta.change(time("D")) != 0 ? false : alertedToday
+
+if finalTrigger and not alertedToday
+    alertedToday := true
+    alert(jsonMsg, alert.freq_once_per_bar_close)
+
+//════════════════════════════════════
+// 📊 PLOTS
+//════════════════════════════════════
+plot(ema9, color=color.yellow)
+plot(ema20, color=color.orange)
+plot(vwap, color=color.blue)
