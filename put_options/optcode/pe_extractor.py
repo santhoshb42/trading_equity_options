@@ -45,8 +45,6 @@ class OptionSymbolFormat:
         'FINNIFTY': 40,
         'MIDCPNIFTY': 120,
         'NIFTYNXT50': 25,
-        'SENSEX': 20,
-        'BANKEX': 30,
     }
     
     # Month mapping
@@ -164,8 +162,6 @@ class OptionChainGenerator:
             'FINNIFTY': 22000,
             'MIDCPNIFTY': 12000,
             'NIFTYNXT50': 56000,
-            'SENSEX': 67000,
-            'BANKEX': 56000,
         }
         
         # Dynamic strike intervals based on price range
@@ -177,8 +173,6 @@ class OptionChainGenerator:
             'FINNIFTY': 100,
             'MIDCPNIFTY': 25,
             'NIFTYNXT50': 100,
-            'SENSEX': 100,
-            'BANKEX': 100,
         }
     
     def _get_strike_interval(self, underlying: str, price: float) -> int:

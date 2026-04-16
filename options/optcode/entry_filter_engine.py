@@ -466,6 +466,31 @@ class SymbolReputationValidator:
             logger.warning(f"{self.name}: LOAD_ERROR | {exc}")
         return self._cache
 
+    def get_symbol_snapshot(self, symbol: str) -> Dict[str, Any]:
+        """Return the exact probation/reputation state used for trade-time decisions."""
+        stats = self._load()
+        sym = stats.get(symbol, {})
+        today_str = datetime.now().date().isoformat()
+        next_probe = sym.get('probation_next_probe')
+
+        return {
+            'symbol': symbol,
+            'stats_last_updated': sym.get('last_updated'),
+            'total_trades': sym.get('total_trades', 0),
+            'confidence_multiplier': sym.get('confidence_multiplier', 1.0),
+            'recent_form': sym.get('recent_form', 'neutral'),
+            'probation_status': sym.get('probation_status', 'UNKNOWN'),
+            'probation_blocked_since': sym.get('probation_blocked_since'),
+            'probation_next_probe': next_probe,
+            'probation_streak': sym.get('probation_streak', 0),
+            'probation_backoff_days': sym.get('probation_backoff_days', 7),
+            'probation_probes_attempted': sym.get('probation_probes_attempted', 0),
+            'probation_probes_won': sym.get('probation_probes_won', 0),
+            'probation_last_probe_date': sym.get('probation_last_probe_date'),
+            'probe_window_open': bool(next_probe and today_str >= next_probe),
+            'evaluated_at': datetime.now().isoformat(),
+        }
+
     # ------------------------------------------------------------------
     def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
         symbol = signal.get('symbol', '')
@@ -589,6 +614,7 @@ class ComprehensiveEntryFilter:
         # outright regardless of how many other filters pass.
         # A symbol in its probe window is allowed through (1 trade/window).
         # ---------------------------------------------------------------
+        rep_snapshot = self.reputation_validator.get_symbol_snapshot(symbol)
         rep_ok, rep_reason = self.reputation_validator.validate(signal, market_data)
         if not rep_ok:
             reason_key = 'SymbolBlocked_Probation'
@@ -596,12 +622,24 @@ class ComprehensiveEntryFilter:
             logger.warning(f"{self.name}: ❌ HARD_GATE_REJECTED | {symbol} | {rep_reason}")
             pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
             logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
-            return False, rep_reason, {'symbol_reputation': {'valid': False, 'reason': rep_reason}}
+            return False, rep_reason, {
+                'symbol_reputation': {
+                    'valid': False,
+                    'reason': rep_reason,
+                    'snapshot': rep_snapshot,
+                }
+            }
 
         if 'PROBE_ALLOWED' in rep_reason:
             logger.info(f"{self.name}: 🔬 PROBE_TRADE | {symbol} | {rep_reason}")
 
-        validation_results = {}
+        validation_results = {
+            'symbol_reputation': {
+                'valid': True,
+                'reason': rep_reason,
+                'snapshot': rep_snapshot,
+            }
+        }
         passed_count = 0
 
         # Run all validators

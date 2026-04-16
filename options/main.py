@@ -554,6 +554,11 @@ class OptionsTradingBot:
     
     def _start_position_monitor(self):
         """Start position monitoring thread with adaptive IV-aware intervals"""
+        # Semaphore(1): caps concurrent SentimentCheckAsync threads to 1.
+        # Without this, slow sentiment API calls accumulate unbounded daemon threads
+        # when the monitoring cycle fires faster than the check completes.
+        _sentiment_sem = threading.Semaphore(1)
+
         def monitor_positions():
             print("📍 Position Monitor Thread: Starting")
             print(f"   ⏱️ Monitoring interval: {MonitoringConfig.MONITOR_INTERVAL_SECONDS}s (Fast: {MonitoringConfig.MONITOR_INTERVAL_FAST}s, Slow: {MonitoringConfig.MONITOR_INTERVAL_SLOW}s)")
@@ -614,21 +619,25 @@ class OptionsTradingBot:
                     
                     # Only check exits if we successfully refreshed at least some LTPs
                     if not ltps_refreshed:
-                        logger.debug(f"POSITION_MONITOR: No LTPs refreshed, skipping exit checks")
+                        if not getattr(self, '_ltp_skip_logged', False):
+                            logger.debug("POSITION_MONITOR: No LTPs refreshed, skipping exit checks")
+                            self._ltp_skip_logged = True
                         # Still write CSV/live data even when skipping exit checks
                         if HAS_LIVE_DATA and self.live_data_tracker:
                             try:
                                 self.live_data_tracker.save()
                                 if self.live_data_formatter:
                                     csv_data = self.live_data_formatter.generate_csv()
-                                    csv_file = Path('/root/santhosh/trading/options/data/live_data_trades.csv')
-                                    with open(csv_file, 'w') as f:
-                                        f.write(csv_data)
-                                    logger.debug("POSITION_MONITOR: CSV_UPDATED")
+                                    if csv_data != getattr(self, '_last_live_csv_payload', None):
+                                        csv_file = Path('/root/santhosh/trading/options/data/live_data_trades.csv')
+                                        with open(csv_file, 'w') as f:
+                                            f.write(csv_data)
+                                        self._last_live_csv_payload = csv_data
                             except Exception as _live_err:
                                 pass
                         time.sleep(current_interval)
                         continue
+                    self._ltp_skip_logged = False
                     
                     # Check and close expired positions
                     expired = self.monitor.check_expiry_close()
@@ -883,7 +892,12 @@ class OptionsTradingBot:
                     if should_check_sentiment:
                         self.monitor.last_sentiment_check_time = datetime.now()
                         # Start sentiment check in background thread (non-blocking)
+                        # Semaphore(1) caps concurrent sentiment threads to 1 — avoids
+                        # unbounded thread accumulation when the sentiment API is slow.
                         def background_sentiment_check():
+                            if not _sentiment_sem.acquire(blocking=False):
+                                logger.debug("POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | skipped — previous check still running")
+                                return
                             try:
                                 start_time = time.time()
                                 logger.debug(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | starting background fetch")
@@ -920,6 +934,8 @@ class OptionsTradingBot:
                                     logger.debug(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | completed | no exits | duration={duration:.2f}s")
                             except Exception as e:
                                 logger.warning(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC_ERROR | {str(e)}")
+                            finally:
+                                _sentiment_sem.release()
                         
                         # Spawn background thread (daemon=True so it doesn't block shutdown)
                         sentiment_thread = threading.Thread(target=background_sentiment_check, daemon=True, name="SentimentCheckAsync")
@@ -992,15 +1008,15 @@ class OptionsTradingBot:
                     if HAS_LIVE_DATA and self.live_data_tracker:
                         try:
                             self.live_data_tracker.save()
-                            logger.debug("POSITION_MONITOR: LIVE_DATA_SAVED")
                             
                             # Also update CSV file (for Excel viewing)
                             if self.live_data_formatter:
                                 csv_data = self.live_data_formatter.generate_csv()
-                                csv_file = Path('/root/santhosh/trading/options/data/live_data_trades.csv')
-                                with open(csv_file, 'w') as f:
-                                    f.write(csv_data)
-                                logger.debug("POSITION_MONITOR: CSV_UPDATED")
+                                if csv_data != getattr(self, '_last_live_csv_payload', None):
+                                    csv_file = Path('/root/santhosh/trading/options/data/live_data_trades.csv')
+                                    with open(csv_file, 'w') as f:
+                                        f.write(csv_data)
+                                    self._last_live_csv_payload = csv_data
                         except Exception as live_err:
                             logger.debug(f"POSITION_MONITOR: LIVE_DATA_SAVE_FAILED | {str(live_err)}")
                     

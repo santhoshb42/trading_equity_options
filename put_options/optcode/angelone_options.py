@@ -278,8 +278,8 @@ class OptionChain:
             logger.warning(f"ATM: Insufficient contracts CE={len(ce_contracts)} PE={len(pe_contracts)}")
             return None
         
-        # Use contract.strike directly — already set correctly for both NSE and BFO formats.
-        # Avoids symbol-regex parsing which fails for BFO format (e.g. SENSEX2640973000CE).
+        # Use contract.strike directly — already normalized in instrument metadata.
+        # Avoids brittle symbol-regex parsing for alternate broker symbol layouts.
         def get_strike(contract):
             s = getattr(contract, 'strike', None)
             if s and s > 0:
@@ -989,7 +989,7 @@ class AngelOneOptionsBroker:
         # Then we fetch LTP, Greeks, IV from broker for ATM contracts ONLY
         
         # If current_price not provided, fetch from broker to ensure correct ATM selection
-        # (especially important for indices like SENSEX where strike range is huge)
+        # (especially important for index contracts where strike range is large)
         if not current_price:
             try:
                 spot_ltp = self.get_ltp(underlying, self._get_underlying_cash_exchange(underlying))
@@ -1041,12 +1041,12 @@ class AngelOneOptionsBroker:
         
         # Filter to ATM ± range (so we have options for strike selection)
         # For CALL options, we need at least 1-2 strikes above ATM for OTM selection
-        # Use dynamic range based on strike size (critical for SENSEX with million-value strikes)
+        # Use dynamic range based on strike size for large index strikes.
         atm_contracts_data_filtered = []
         strikes_set = set()
         
         # Calculate strike range dynamically based on ATM value
-        # For large strikes (millions like SENSEX=6500000), use percentage
+        # For large strikes, use a percentage-based window.
         # For small strikes (100-5000), use absolute difference
         if atm_strike > 10000:
             # Large strikes (indices): use 1% of ATM value as range
@@ -1342,22 +1342,16 @@ class AngelOneOptionsBroker:
 
     @staticmethod
     def _get_underlying_derivatives_exchange(underlying: str) -> str:
-        clean_underlying = (underlying or "").upper().rstrip('0123456789')
-        if clean_underlying in {"SENSEX", "BANKEX"}:
-            return "BFO"
         return "NFO"
 
     @staticmethod
     def _get_underlying_cash_exchange(underlying: str) -> str:
-        clean_underlying = (underlying or "").upper().rstrip('0123456789')
-        if clean_underlying in {"SENSEX", "BANKEX"}:
-            return "BSE"
         return "NSE"
 
     @staticmethod
     def _should_use_weekly_expiry(underlying: str) -> bool:
         clean_underlying = (underlying or "").upper().rstrip('0123456789')
-        return clean_underlying == "SENSEX" or "NIFTY" in clean_underlying
+        return "NIFTY" in clean_underlying
 
     @classmethod
     def _select_preferred_expiry(cls, underlying: str, available_expiries):
@@ -1555,6 +1549,7 @@ class AngelOneOptionsBroker:
                     "ordertype": order_type,
                     "producttype": product_type,
                     "duration": "DAY",
+                    "price": "0",       # Required by AngelOne API even for MARKET orders
                     "quantity": str(quantity)
                 }
                 
@@ -1777,6 +1772,10 @@ class AngelOneOptionsBroker:
                 
                 # Prepare modify parameters.
                 # AngelOne modifyOrder requires the original order variety and fields.
+                # CRITICAL: For STOPLOSS_MARKET orders, ONLY set triggerprice.
+                # Setting "price" alongside "triggerprice" converts it to STOPLOSS_LIMIT
+                # (filled at exactly that price, not at market). Equity bot has this fix.
+                is_sl_market = order_type in ("STOPLOSS_MARKET", "STOPLOSS-MARKET")
                 modify_params = {
                     "variety": "STOPLOSS",
                     "orderid": order_id,
@@ -1786,11 +1785,13 @@ class AngelOneOptionsBroker:
                     "exchange": derivatives_exchange,
                     "producttype": "INTRADAY",
                     "duration": "DAY",
-                    "price": str(new_price),
                     "triggerprice": str(new_price),
                     "quantity": str(quantity) if quantity > 0 else "0"
                 }
-                
+                if not is_sl_market:
+                    # STOPLOSS_LIMIT needs explicit limit price too
+                    modify_params["price"] = str(new_price)
+
                 # Call modify order API
                 response = self.smart_api.modifyOrder(modify_params)
                 
@@ -1970,7 +1971,9 @@ class AngelOneOptionsBroker:
                 # Find the BUY order in order book
                 for order in order_book:
                     if order.get('orderid') == order_id or order.get('order_id') == order_id:
-                        order_status = order.get('orderstatus', '').upper()
+                        order_status = str(
+                            order.get('orderstatus') or order.get('orderstate') or order.get('status') or ''
+                        ).upper()
                         
                         # Check for filled status
                         if order_status in ['COMPLETE', 'FILLED', 'FULLY_FILLED']:
@@ -2002,8 +2005,14 @@ class AngelOneOptionsBroker:
                 logger.warning(f"BUY_CONFIRM: CHECK_ERROR | {symbol} | {str(e)}")
                 time.sleep(0.5)
         
-        # Timeout reached
-        logger.error(f"BUY_CONFIRM: TIMEOUT | {symbol} | order_id={order_id} | waited {timeout}s")
+        # Timeout reached — attempt to cancel the order so it doesn't fill untracked
+        logger.error(f"BUY_CONFIRM: TIMEOUT | {symbol} | order_id={order_id} | waited {timeout}s | attempting cancel")
+        if order_id:
+            try:
+                self.smart_api.cancelOrder(order_id, "NORMAL")
+                logger.warning(f"BUY_CONFIRM: CANCEL_SENT | {symbol} | order_id={order_id} | prevents untracked open position")
+            except Exception as ce:
+                logger.error(f"BUY_CONFIRM: CANCEL_FAILED | {symbol} | order_id={order_id} | {str(ce)} | MANUAL CHECK REQUIRED")
         return False
     
     def get_instrument_token(self, symbol: str, exchange: str = "NFO") -> Optional[str]:
@@ -2146,12 +2155,51 @@ class AngelOneOptionsBroker:
                 logger.warning(f"MARKET_DATA: No token found | {symbol}")
                 return None
             
-            # Fetch market data from AngelOne (using getMarketData or similar API)
-            rate_limiter.record_call("market_data", True)
-            
-            # Note: SmartAPI doesn't have direct getMarketData, use ltpData as fallback
+            try:
+                full_quote = self.smart_api.getMarketData("FULL", {exchange: [token]})
+                quote_item = self._extract_full_quote_item(full_quote)
+                if quote_item:
+                    ltp = self._safe_float(
+                        quote_item.get('ltp'),
+                        quote_item.get('lastTradedPrice'),
+                        quote_item.get('last_traded_price')
+                    )
+                    bid = self._extract_best_buy_price(quote_item)
+                    ask = self._extract_best_sell_price(quote_item)
+                    volume = self._safe_int(
+                        quote_item.get('volume'),
+                        quote_item.get('tradeVolume'),
+                        quote_item.get('tradedVolume'),
+                        quote_item.get('volumeTradedToday')
+                    )
+                    open_interest = self._extract_oi_from_quote_response(full_quote)
+                    spread_abs = max(ask - bid, 0.0) if bid > 0 and ask > 0 else 0.0
+                    spread_pct = (spread_abs / ltp * 100.0) if ltp > 0 and spread_abs >= 0 else None
+
+                    market_data = {
+                        'ltp': ltp,
+                        'open': self._safe_float(quote_item.get('open')),
+                        'high': self._safe_float(quote_item.get('high')),
+                        'low': self._safe_float(quote_item.get('low')),
+                        'close': self._safe_float(quote_item.get('close')),
+                        'volume': volume,
+                        'open_interest': open_interest,
+                        'bid': bid,
+                        'ask': ask,
+                        'bid_ask_spread': spread_abs,
+                        'bid_ask_spread_pct': spread_pct,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    rate_limiter.record_call("market_data", True)
+                    logger.debug(
+                        f"MARKET_DATA: SUCCESS | {symbol} | ltp=₹{ltp:.2f} | oi={open_interest} | bid={bid:.2f} | ask={ask:.2f}"
+                    )
+                    return market_data
+            except Exception as full_quote_err:
+                logger.debug(f"MARKET_DATA: FULL_QUOTE_FAILED | {symbol} | {str(full_quote_err)}")
+
             ltp_data = self.smart_api.ltpData(exchange, symbol, token)
-            
+
             if ltp_data and ltp_data.get('status'):
                 data = ltp_data['data']
                 market_data = {
@@ -2161,14 +2209,20 @@ class AngelOneOptionsBroker:
                     'low': float(data.get('low', 0)),
                     'close': float(data.get('close', 0)),
                     'volume': int(data.get('volume', 0)),
+                    'open_interest': 0,
+                    'bid': 0.0,
+                    'ask': 0.0,
+                    'bid_ask_spread': None,
+                    'bid_ask_spread_pct': None,
                     'timestamp': datetime.now().isoformat()
                 }
-                logger.debug(f"MARKET_DATA: SUCCESS | {symbol} | ltp=₹{market_data['ltp']:.2f}")
+                logger.debug(f"MARKET_DATA: LTP_ONLY | {symbol} | ltp=₹{market_data['ltp']:.2f}")
+                rate_limiter.record_call("market_data", True)
                 return market_data
-            else:
-                logger.warning(f"MARKET_DATA: FAILED | {symbol}")
-                rate_limiter.record_call("market_data", False)
-                return None
+
+            logger.warning(f"MARKET_DATA: FAILED | {symbol}")
+            rate_limiter.record_call("market_data", False)
+            return None
             
         except Exception as e:
             logger.error(f"MARKET_DATA: ERROR | {symbol} | {str(e)}")
@@ -2178,11 +2232,10 @@ class AngelOneOptionsBroker:
 
     def _extract_oi_from_quote_response(self, market_data: Dict[str, Any]) -> int:
         """Extract OI from SmartAPI FULL quote response."""
-        fetched = market_data.get('data', {}).get('fetched', []) if market_data else []
-        if not fetched:
+        item_data = self._extract_full_quote_item(market_data)
+        if not item_data:
             return 0
 
-        item_data = fetched[0] or {}
         oi_value = (
             item_data.get('openInterest')
             or item_data.get('opnInterest')
@@ -2194,6 +2247,71 @@ class AngelOneOptionsBroker:
             return int(float(oi_value))
         except (TypeError, ValueError):
             return 0
+
+    def _extract_full_quote_item(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the first fetched FULL-quote item from SmartAPI response."""
+        fetched = market_data.get('data', {}).get('fetched', []) if market_data else []
+        if not fetched:
+            return {}
+        return fetched[0] or {}
+
+    def _safe_float(self, *values: Any) -> float:
+        for value in values:
+            if value in (None, ''):
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    def _safe_int(self, *values: Any) -> int:
+        for value in values:
+            if value in (None, ''):
+                continue
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    def _extract_best_buy_price(self, item_data: Dict[str, Any]) -> float:
+        price = self._safe_float(
+            item_data.get('bestBuyPrice'),
+            item_data.get('bestbuyprice'),
+            item_data.get('bidPrice'),
+            item_data.get('bidprice'),
+        )
+        if price > 0:
+            return price
+        depth = item_data.get('depth') or {}
+        if isinstance(depth, dict):
+            buy_depth = depth.get('buy') or []
+            if isinstance(buy_depth, list) and buy_depth:
+                return self._safe_float(buy_depth[0].get('price'))
+        best5buy = item_data.get('best5buy') or item_data.get('bestFiveBuy') or item_data.get('buyDepth') or []
+        if isinstance(best5buy, list) and best5buy:
+            return self._safe_float(best5buy[0].get('price'))
+        return 0.0
+
+    def _extract_best_sell_price(self, item_data: Dict[str, Any]) -> float:
+        price = self._safe_float(
+            item_data.get('bestSellPrice'),
+            item_data.get('bestsellprice'),
+            item_data.get('askPrice'),
+            item_data.get('askprice'),
+        )
+        if price > 0:
+            return price
+        depth = item_data.get('depth') or {}
+        if isinstance(depth, dict):
+            sell_depth = depth.get('sell') or []
+            if isinstance(sell_depth, list) and sell_depth:
+                return self._safe_float(sell_depth[0].get('price'))
+        best5sell = item_data.get('best5sell') or item_data.get('bestFiveSell') or item_data.get('sellDepth') or []
+        if isinstance(best5sell, list) and best5sell:
+            return self._safe_float(best5sell[0].get('price'))
+        return 0.0
     
     def get_oi_data(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[int]]:
         """
@@ -2217,13 +2335,13 @@ class AngelOneOptionsBroker:
                     token = self.get_instrument_token(symbol, exchange)
                     if not token:
                         logger.warning(f"OI_FETCH: No token | {symbol}")
-                        oi_map[symbol] = 100000  # Mock default OI for liquid contracts
+                        oi_map[symbol] = None
                         continue
                     
                     # Wait for rate limit
                     if not rate_limiter.wait_for_call_permission(timeout=5.0):
                         logger.warning(f"OI_FETCH: RATE_LIMITED | {symbol}")
-                        oi_map[symbol] = 100000  # Use default on rate limit
+                        oi_map[symbol] = None
                         continue
                     
                     # Try getMarketData for full quote with OI
@@ -2233,27 +2351,25 @@ class AngelOneOptionsBroker:
                         
                         if market_data and market_data.get('status'):
                             oi = self._extract_oi_from_quote_response(market_data)
-                            oi_map[symbol] = max(oi, 50000)  # Min 50K for validity
+                            oi_map[symbol] = oi if oi > 0 else None
                             logger.debug(f"OI_FETCH: SUCCESS | {symbol} | oi={oi}")
                         else:
                             logger.warning(f"OI_FETCH: NO DATA | {symbol}")
-                            oi_map[symbol] = 100000
+                            oi_map[symbol] = None
                     except Exception as e:
-                        # If getMarketData fails, use sensible default based on liquidity
-                        logger.debug(f"OI_FETCH: Fallback for {symbol} | {str(e)}")
-                        oi_map[symbol] = 100000  # Default liquid OI
+                        logger.debug(f"OI_FETCH: FAILED | {symbol} | {str(e)}")
+                        oi_map[symbol] = None
                         rate_limiter.record_call("oi_fetch", False)
                 
                 except Exception as symbol_err:
                     logger.warning(f"OI_FETCH: ERROR for {symbol} | {str(symbol_err)}")
-                    oi_map[symbol] = 100000  # Default fallback
+                    oi_map[symbol] = None
             
             return oi_map
         
         except Exception as e:
             logger.error(f"OI_FETCH: BATCH ERROR | {str(e)}")
-            # Return reasonable defaults for all symbols
-            return {symbol: 100000 for symbol in symbols}
+            return {symbol: None for symbol in symbols}
     
     def get_ltp_bulk(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[float]]:
         """
@@ -3142,7 +3258,9 @@ class AngelOneOptionsBroker:
             response = trade_book_method()
             
             if response and response.get('status'):
-                trades = response.get('data', [])
+                trades = response.get('data') or []
+                if not isinstance(trades, list):
+                    trades = []
                 logger.info(f"TRADE_BOOK: Retrieved {len(trades)} executed trades from broker")
                 
                 # Build trade summary (count BUY vs SELL to find net positions)
@@ -3175,7 +3293,7 @@ class AngelOneOptionsBroker:
                 return None
         
         except Exception as e:
-            logger.error(f"TRADE_BOOK: ERROR | {str(e)}")
+            logger.error(f"TRADE_BOOK: ERROR | {str(e)} | response_type={type(response).__name__ if 'response' in locals() else 'unknown'}")
             rate_limiter = get_options_rate_limiter()
             rate_limiter.record_call("get_trade_book", False)
             return None

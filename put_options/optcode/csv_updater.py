@@ -8,7 +8,9 @@ Runs independently every 30 seconds to refresh the file.
 import threading
 import time
 from pathlib import Path
-from datetime import datetime
+
+
+_last_csv_payload = None
 
 def start_csv_update_service():
     """Start background thread that updates CSV every 30 seconds"""
@@ -24,10 +26,14 @@ def start_csv_update_service():
                 
                 formatter = get_table_formatter()
                 csv_data = formatter.generate_csv()
+                global _last_csv_payload
+                if csv_data == _last_csv_payload:
+                    continue
                 
                 csv_file = Path('/root/santhosh/trading/put_options/data/live_data_trades.csv')
                 with open(csv_file, 'w') as f:
                     f.write(csv_data)
+                _last_csv_payload = csv_data
                 
                 # Log timestamp
                 from .optlogging import logger

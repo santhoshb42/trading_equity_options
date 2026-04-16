@@ -254,6 +254,7 @@ class OptionPosition:
         # Current state
         self.current_premium = entry_premium
         self.highest_premium = entry_premium  # Track highest premium for trailing exit
+        self.lowest_premium = entry_premium   # Track lowest premium for reporting and loss analysis
         self.current_greeks = {
             'delta': 0.5,
             'gamma': 0.05,
@@ -356,6 +357,8 @@ class OptionPosition:
         # Track highest premium reached (for trailing exit)
         if current_premium > self.highest_premium:
             self.highest_premium = current_premium
+        if current_premium < self.lowest_premium:
+            self.lowest_premium = current_premium
         
         self.current_greeks = greeks
         self.current_iv = iv
@@ -443,6 +446,7 @@ class OptionPosition:
             'action': self.action,
             # 🔴 IMPORTANT: Add trailing SL tracking for PNL analysis
             'highest_premium': self.highest_premium,
+            'lowest_premium': self.lowest_premium,
             'trial_sl_enabled': self.trial_sl_enabled,
             'trial_sl_price': self.trial_sl_price,
             'trial_sl_updates': self.trial_sl_update_count,
@@ -838,6 +842,7 @@ class OptionPosition:
             'current_iv': self.current_iv,
             'unrealized_pnl': self.unrealized_pnl,
             'highest_premium': self.highest_premium,
+            'lowest_premium': self.lowest_premium,
             'days_to_expiry': self.days_to_expiry(),
             'last_updated': self.last_updated.isoformat() if isinstance(self.last_updated, datetime) else self.last_updated,
             'underlying_alert_price': self.underlying_alert_price,
@@ -1254,6 +1259,9 @@ class OptionPositionMonitor:
             }
             
             original_sl_order_id = position.sl_order_id
+            if position.modify_pending:
+                self._sync_active_sl_order_id(position)
+                original_sl_order_id = position.sl_order_id
 
             # Cancel the active broker SL only for manual exits.
             if position.sl_order_id and self.broker and not broker_managed_exit and not skip_sl_cancel:
@@ -1555,6 +1563,56 @@ class OptionPositionMonitor:
         logger.error(f"EXIT_FILL_TIMEOUT: {symbol} | order_id={order_id} | waited={timeout}s")
         return None
 
+    def _sync_active_sl_order_id(self, position: OptionPosition) -> Optional[str]:
+        """Refresh local SL order id from broker when modify flows may have replaced it."""
+        if OptionsTradingConfig.TRADING_MODE != "LIVE" or not self.broker or not position:
+            return getattr(position, 'sl_order_id', None)
+
+        get_order_book = getattr(self.broker, 'get_order_book', None)
+        if not callable(get_order_book):
+            return position.sl_order_id
+
+        try:
+            order_book = get_order_book()
+            if not order_book:
+                return position.sl_order_id
+
+            terminal_statuses = {'COMPLETE', 'FILLED', 'FULLY_FILLED', 'REJECTED', 'CANCELLED', 'CANCELED', 'EXPIRED'}
+            latest_active_order_id = None
+
+            for order in order_book:
+                trading_symbol = str(order.get('tradingsymbol') or order.get('symbol') or '')
+                if trading_symbol != position.symbol:
+                    continue
+
+                status = str(order.get('orderstatus') or order.get('orderstate') or order.get('status') or '').upper()
+                if status in terminal_statuses:
+                    continue
+
+                transaction_type = str(order.get('transactiontype') or order.get('transaction_type') or '').upper()
+                order_type = str(order.get('ordertype') or order.get('order_type') or '').upper()
+                variety = str(order.get('variety') or '').upper()
+                if transaction_type != 'SELL':
+                    continue
+                if 'STOPLOSS' not in order_type and variety != 'STOPLOSS':
+                    continue
+
+                candidate_order_id = str(order.get('orderid') or order.get('order_id') or '')
+                if candidate_order_id:
+                    latest_active_order_id = candidate_order_id
+
+            if latest_active_order_id and latest_active_order_id != position.sl_order_id:
+                logger.warning(
+                    f"SL_ORDER_SYNC: UPDATED | {position.symbol} | old={position.sl_order_id} | new={latest_active_order_id}"
+                )
+                position.sl_order_id = latest_active_order_id
+                self._save_positions()
+
+            return position.sl_order_id
+        except Exception as sync_error:
+            logger.debug(f"SL_ORDER_SYNC: SKIPPED | {position.symbol} | {str(sync_error)}")
+            return position.sl_order_id
+
     def _reconcile_broker_stop_exit(self, symbol: str, expected_exit_price: float, exit_reason: str) -> Optional[Dict[str, Any]]:
         """Finalize local position state only after the broker stop order reaches a terminal state."""
         position = self._get_position(symbol)
@@ -1782,9 +1840,8 @@ class OptionPositionMonitor:
                 )
                 return True  # Queued
             
-            # Update position tracking
+            # Update position tracking (last_modify_time first; last_modified_sl_price set ONLY on confirmed broker success)
             position.last_modify_time = datetime.now()
-            position.last_modified_sl_price = new_sl_price
             position.modify_pending = False
             
             new_sl_price = self._round_to_10_paise(new_sl_price)
@@ -1819,10 +1876,20 @@ class OptionPositionMonitor:
                             logger.info(f"MODIFY_SL: ORDER_ID_UPDATED | {symbol} | old={active_order_id} | new={result}")
                         position.sl_order_id = result
                         position.sl_order_price = new_sl_price
+                        position.last_modified_sl_price = new_sl_price  # Only set after confirmed broker success
+                    elif result and str(result).startswith("QUEUED_"):
+                        logger.warning(f"MODIFY_SL: QUEUED | {symbol} | order_id={active_order_id} | queued_id={result}")
+                        position.modify_pending = True
+                        self._sync_active_sl_order_id(position)
+                        return True
                     elif not result:
                         logger.warning(f"MODIFY_SL: Broker API failed | {symbol} | order_id={active_order_id}")
+                        rate_limiter.record_call("modify_order", False)
+                        return False
                 except Exception as e:
                     logger.warning(f"MODIFY_SL: Broker API error | {symbol} | {str(e)}")
+                    rate_limiter.record_call("modify_order", False)
+                    return False
             
             # Record successful modify
             rate_limiter.record_call("modify_order", True)
@@ -3950,6 +4017,7 @@ class OptionPositionMonitor:
                 position.current_iv = pos_data.get('current_iv', 20.0)
                 position.unrealized_pnl = pos_data.get('unrealized_pnl', 0.0)
                 position.highest_premium = pos_data.get('highest_premium', position.highest_premium)
+                position.lowest_premium = pos_data.get('lowest_premium', position.lowest_premium)
                 # Restore SL order tracking
                 position.sl_order_id = pos_data.get('sl_order_id')
                 position.sl_order_price = pos_data.get('sl_order_price')

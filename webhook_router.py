@@ -41,9 +41,6 @@ EQUITY_BOT_URL = os.getenv("EQUITY_BOT_URL", "http://127.0.0.1:8080/webhook")
 CE_BOT_URL = os.getenv("CE_BOT_URL", "http://127.0.0.1:8081/webhook/options")
 PE_BOT_URL = os.getenv("PE_BOT_URL", "http://127.0.0.1:8082/webhook/put_options")
 
-# Optional authentication
-ROUTER_SECRET = os.getenv("ROUTER_SECRET", "")
-
 # Track stats
 STATS = {
     "total_alerts_received": 0,
@@ -54,22 +51,6 @@ STATS = {
     "last_alert_time": None,
     "last_symbols": []
 }
-
-
-def validate_webhook_secret(received_secret: str = None) -> bool:
-    """Validate webhook secret if configured"""
-    if not ROUTER_SECRET:
-        return True
-    
-    if not received_secret:
-        logger.warning("Webhook secret required but not provided")
-        return False
-    
-    if received_secret != ROUTER_SECRET:
-        logger.warning(f"Invalid webhook secret provided")
-        return False
-    
-    return True
 
 
 def forward_alert(url: str, payload: Dict[str, Any], bot_name: str, retries: int = 1) -> bool:
@@ -213,13 +194,6 @@ def normalize_payload_for_target(payload: Dict[str, Any], alert_type: str) -> Di
 def handle_webhook():
     """Main webhook endpoint - receives alerts from TradingView"""
     try:
-        # Get secret from query param or header
-        secret = request.args.get('secret') or request.headers.get('X-Webhook-Secret')
-        
-        if not validate_webhook_secret(secret):
-            logger.warning("Request rejected: invalid or missing secret")
-            return jsonify({"error": "Unauthorized"}), 401
-        
         # Parse payload - handle both JSON and form-data from TradingView
         raw_payload = {}
         
@@ -404,8 +378,7 @@ def index():
             "listen_port": ROUTER_PORT,
             "equity_bot_endpoint": EQUITY_BOT_URL,
             "ce_bot_endpoint": CE_BOT_URL,
-            "pe_bot_endpoint": PE_BOT_URL,
-            "authentication": "enabled" if ROUTER_SECRET else "disabled"
+            "pe_bot_endpoint": PE_BOT_URL
         }
     }), 200
 
@@ -446,7 +419,6 @@ def start_router():
     logger.info(f"Equity bot endpoint: {EQUITY_BOT_URL}")
     logger.info(f"CE Options bot endpoint: {CE_BOT_URL}")
     logger.info(f"PE Options bot endpoint: {PE_BOT_URL}")
-    logger.info(f"Authentication: {'ENABLED' if ROUTER_SECRET else 'DISABLED'}")
     logger.info(f"Alert routing: INTELLIGENT (CE/PE detection enabled)")
     logger.info(f"{'='*70}\n")
 

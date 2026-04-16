@@ -7,7 +7,7 @@ Shares only webhook alerts stream from TradingView.
 """
 
 import os
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from pathlib import Path
 
 # Optional dotenv support
@@ -96,10 +96,22 @@ class OptionsCapitalConfig:
     # of both the contract's traded volume and open interest.
     LIQUIDITY_MIN_BUDGET = float(os.getenv("OPTIONS_LIQUIDITY_MIN_BUDGET", "15000"))
     LIQUIDITY_MAX_BUDGET = float(os.getenv("OPTIONS_LIQUIDITY_MAX_BUDGET", "200000"))
+    LIQUIDITY_MIN_PREMIUM = float(os.getenv("OPTIONS_LIQUIDITY_MIN_PREMIUM", "5.0"))
+    LIQUIDITY_MAX_PREMIUM = float(os.getenv("OPTIONS_LIQUIDITY_MAX_PREMIUM", "250.0"))
     MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET", "0.25"))
     MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET", "0.10"))
     MAX_OI_PARTICIPATION_AT_MIN_BUDGET = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION_AT_MIN_BUDGET", "0.10"))
     MAX_OI_PARTICIPATION_AT_MAX_BUDGET = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION_AT_MAX_BUDGET", "0.03"))
+    MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM", "15000"))
+    MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM", "30000"))
+    MIN_OI_AT_MAX_BUDGET_LOW_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MAX_BUDGET_LOW_PREMIUM", "50000"))
+    MIN_OI_AT_MAX_BUDGET_HIGH_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MAX_BUDGET_HIGH_PREMIUM", "120000"))
+    MAX_SPREAD_PCT_AT_LOW_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_PCT_AT_LOW_PREMIUM", "4.0"))
+    MAX_SPREAD_PCT_AT_HIGH_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_PCT_AT_HIGH_PREMIUM", "1.25"))
+    MAX_SPREAD_RS_AT_LOW_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_RS_AT_LOW_PREMIUM", "0.20"))
+    MAX_SPREAD_RS_AT_HIGH_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_RS_AT_HIGH_PREMIUM", "1.00"))
+    SPREAD_TIGHTENING_AT_MAX_BUDGET = float(os.getenv("OPTIONS_SPREAD_TIGHTENING_AT_MAX_BUDGET", "0.75"))
+    PARTICIPATION_TIGHTENING_AT_HIGH_PREMIUM = float(os.getenv("OPTIONS_PARTICIPATION_TIGHTENING_AT_HIGH_PREMIUM", "0.75"))
     
     # Commission and charges per trade
     BROKERAGE_PER_TRADE = 15.0  # ₹15 flat brokerage per options order
@@ -110,18 +122,16 @@ class OptionsCapitalConfig:
     @classmethod
     def get_cap_for_market_trend(cls, market_trend: str) -> float:
         """PE position sizing by market trend.
-        
-        For PE (puts/bearish strategy):
-        - BAD/bearish market → Allow (good entry for puts)
-        - GOOD/bullish market → Block (bad entry for puts)  
-        - NEUTRAL → Allow at neutral cap
+
+        For PE (puts/bearish strategy), ONLY enter on BAD (bearish) market:
+        - BAD  → Allow at CAP_PER_TRADE_BAD  (bearish, ideal put entry)
+        - GOOD → Block (bullish, puts likely to lose)
+        - NEUTRAL → Block (ambiguous, no edge for puts)
         """
         t = (market_trend or "").strip().upper()
-        if t == "GOOD":
-            return 0.0                      # No PE entries in GOOD (bullish) market
         if t == "BAD":
-            return cls.CAP_PER_TRADE_BAD    # Allow PE in BAD (bearish) market
-        return cls.CAP_PER_TRADE_NEUTRAL
+            return cls.CAP_PER_TRADE_BAD    # Only valid PE entry condition
+        return 0.0                          # GOOD, NEUTRAL, or unknown → no PE entries
     
     @classmethod
     def calculate_total_charges(cls, trade_value: float) -> float:
@@ -135,61 +145,103 @@ class OptionsCapitalConfig:
     @classmethod
     def calculate_quantity_for_capital(cls, premium: float, capital: float, lot_size: int = 1) -> int:
         """
-        Calculate option contracts (lots) to maximize capital utilization.
-        
-        Formula: quantity = (capital / premium) * lot_size
-        
+        Calculate exchange-valid option quantity using whole lots only.
+
+        Premium is quoted per option unit, so one lot costs:
+          lot_cost = premium * lot_size
+
         Example:
           Budget: ₹30,000
-          Premium: ₹6,000
-          Lot Size: 75 (BANKNIFTY standard)
-          Calculation: 30,000 / 6,000 = 5 lots × 75 = 375 contracts
-          Utilization: 100% (5 × 6,000 = 30,000)
+          Premium: ₹12.50
+          Lot Size: 775
+          Lot cost: ₹9,687.50
+          Affordable lots: floor(30,000 / 9,687.50) = 3
+          Quantity: 3 × 775 = 2,325
         """
-        if premium <= 0:
+        if premium <= 0 or capital <= 0:
             return 0
-        
-        # Calculate how many premium units we can afford
-        num_lots = int(capital / premium)
-        
-        # If we can't afford even 1 lot, return minimum (1 lot)
-        if num_lots < 1:
-            return lot_size  # Return 1 contract (minimum trade size)
-        
-        # Calculate total quantity = number of premium units × lot size
-        quantity = num_lots * lot_size
-        
-        # Verify we don't exceed capital (safety check)
-        actual_cost = (quantity / lot_size) * premium
+
+        effective_lot_size = max(int(lot_size or 1), 1)
+        lot_cost = premium * effective_lot_size
+        if lot_cost <= 0:
+            return 0
+
+        affordable_lots = int(capital / lot_cost)
+        if affordable_lots < 1:
+            return 0
+
+        quantity = affordable_lots * effective_lot_size
+        actual_cost = quantity * premium
         if actual_cost > capital:
-            # Reduce by 1 lot and recalculate
-            quantity = (num_lots - 1) * lot_size if num_lots > 1 else lot_size
-        
-        return max(lot_size, quantity)
+            affordable_lots -= 1
+            if affordable_lots < 1:
+                return 0
+            quantity = affordable_lots * effective_lot_size
+
+        return quantity
 
     @classmethod
-    def get_dynamic_liquidity_limits(cls, budget: float) -> Dict[str, float]:
-        """Scale liquidity participation limits based on per-symbol order budget."""
+    def get_dynamic_liquidity_limits(cls, budget: float, premium: float) -> Dict[str, float]:
+        """Scale liquidity limits using both order budget and contract premium."""
         floor_budget = min(cls.LIQUIDITY_MIN_BUDGET, cls.LIQUIDITY_MAX_BUDGET)
         ceil_budget = max(cls.LIQUIDITY_MIN_BUDGET, cls.LIQUIDITY_MAX_BUDGET)
         effective_budget = min(max(budget, floor_budget), ceil_budget)
         budget_span = max(ceil_budget - floor_budget, 1.0)
         budget_ratio = (effective_budget - floor_budget) / budget_span
 
-        max_volume_participation = (
+        floor_premium = min(cls.LIQUIDITY_MIN_PREMIUM, cls.LIQUIDITY_MAX_PREMIUM)
+        ceil_premium = max(cls.LIQUIDITY_MIN_PREMIUM, cls.LIQUIDITY_MAX_PREMIUM)
+        effective_premium = min(max(premium, floor_premium), ceil_premium)
+        premium_span = max(ceil_premium - floor_premium, 1.0)
+        premium_ratio = (effective_premium - floor_premium) / premium_span
+
+        base_max_volume_participation = (
             cls.MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET +
             (cls.MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET - cls.MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET) * budget_ratio
         )
-        max_oi_participation = (
+        base_max_oi_participation = (
             cls.MAX_OI_PARTICIPATION_AT_MIN_BUDGET +
             (cls.MAX_OI_PARTICIPATION_AT_MAX_BUDGET - cls.MAX_OI_PARTICIPATION_AT_MIN_BUDGET) * budget_ratio
         )
+        premium_participation_tightening = 1.0 - ((1.0 - cls.PARTICIPATION_TIGHTENING_AT_HIGH_PREMIUM) * premium_ratio)
+        max_volume_participation = base_max_volume_participation * premium_participation_tightening
+        max_oi_participation = base_max_oi_participation * premium_participation_tightening
+
+        min_oi_low_premium = (
+            cls.MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM +
+            (cls.MIN_OI_AT_MAX_BUDGET_LOW_PREMIUM - cls.MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM) * budget_ratio
+        )
+        min_oi_high_premium = (
+            cls.MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM +
+            (cls.MIN_OI_AT_MAX_BUDGET_HIGH_PREMIUM - cls.MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM) * budget_ratio
+        )
+        min_required_oi = (
+            min_oi_low_premium +
+            (min_oi_high_premium - min_oi_low_premium) * premium_ratio
+        )
+
+        base_max_spread_pct = (
+            cls.MAX_SPREAD_PCT_AT_LOW_PREMIUM +
+            (cls.MAX_SPREAD_PCT_AT_HIGH_PREMIUM - cls.MAX_SPREAD_PCT_AT_LOW_PREMIUM) * premium_ratio
+        )
+        base_max_spread_rs = (
+            cls.MAX_SPREAD_RS_AT_LOW_PREMIUM +
+            (cls.MAX_SPREAD_RS_AT_HIGH_PREMIUM - cls.MAX_SPREAD_RS_AT_LOW_PREMIUM) * premium_ratio
+        )
+        spread_budget_tightening = 1.0 - ((1.0 - cls.SPREAD_TIGHTENING_AT_MAX_BUDGET) * budget_ratio)
+        max_spread_pct = base_max_spread_pct * spread_budget_tightening
+        max_spread_rs = base_max_spread_rs * spread_budget_tightening
 
         return {
             'effective_budget': effective_budget,
             'budget_ratio': budget_ratio,
+            'effective_premium': effective_premium,
+            'premium_ratio': premium_ratio,
+            'min_required_oi': max(1000.0, min_required_oi),
             'max_volume_participation': max(0.01, max_volume_participation),
             'max_oi_participation': max(0.005, max_oi_participation),
+            'max_spread_pct': max(0.25, max_spread_pct),
+            'max_spread_rs': max(0.05, max_spread_rs),
         }
 
     @classmethod
@@ -201,13 +253,16 @@ class OptionsCapitalConfig:
         premium: float,
         volume: int,
         open_interest: int,
+        bid: float = 0.0,
+        ask: float = 0.0,
+        bid_ask_spread_pct: Optional[float] = None,
         lot_size: int = 1,
-    ) -> Tuple[bool, str, Dict[str, float]]:
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         """Reject oversized orders when order size is too large for contract liquidity."""
         if quantity <= 0 or premium <= 0:
             return False, "Invalid order sizing for liquidity check", {}
 
-        limits = cls.get_dynamic_liquidity_limits(budget)
+        limits = cls.get_dynamic_liquidity_limits(budget, premium)
         effective_lot_size = max(lot_size, 1)
         order_lots = quantity / effective_lot_size
         order_value = quantity * premium
@@ -215,14 +270,67 @@ class OptionsCapitalConfig:
         metrics = {
             'budget': budget,
             'effective_budget': limits['effective_budget'],
+            'effective_premium': limits['effective_premium'],
+            'premium_ratio': limits['premium_ratio'],
             'order_value': order_value,
             'quantity': quantity,
             'order_lots': order_lots,
             'volume': float(volume or 0),
             'open_interest': float(open_interest or 0),
+            'min_required_oi': limits['min_required_oi'],
             'max_volume_participation': limits['max_volume_participation'],
             'max_oi_participation': limits['max_oi_participation'],
+            'bid': float(bid or 0.0),
+            'ask': float(ask or 0.0),
+            'max_spread_pct': limits['max_spread_pct'],
+            'max_spread_rs': limits['max_spread_rs'],
+            'spread_advisory': False,
+            'spread_advisory_reason': None,
         }
+
+        if not open_interest or open_interest <= 0:
+            return False, "Live OI unavailable for contract - refusing entry", metrics
+
+        if open_interest < limits['min_required_oi']:
+            return (
+                False,
+                (
+                    f"Open interest {open_interest:,} is below required minimum {int(limits['min_required_oi']):,} "
+                    f"for premium ₹{premium:.2f} and budget ₹{budget:,.0f}"
+                ),
+                metrics,
+            )
+
+        spread_warning = None
+        if not bid or not ask or bid <= 0 or ask <= 0 or ask < bid:
+            metrics['bid_ask_spread'] = None
+            metrics['bid_ask_spread_pct'] = float(bid_ask_spread_pct or 0.0)
+            spread_warning = "Live bid/ask unavailable for contract - logging only, not blocking entry"
+        else:
+            spread_abs = max(ask - bid, 0.0)
+            spread_pct = bid_ask_spread_pct
+            if spread_pct is None:
+                spread_pct = (spread_abs / premium * 100.0) if premium > 0 else None
+
+            metrics['bid_ask_spread'] = spread_abs
+            metrics['bid_ask_spread_pct'] = float(spread_pct or 0.0)
+
+            if spread_pct is None or spread_pct < 0:
+                spread_warning = "Unable to compute live spread for contract - logging only, not blocking entry"
+            elif spread_abs > limits['max_spread_rs']:
+                spread_warning = (
+                    f"Bid/ask spread ₹{spread_abs:.2f} exceeds advisory max ₹{limits['max_spread_rs']:.2f} "
+                    f"for budget ₹{budget:,.0f}"
+                )
+            elif spread_pct > limits['max_spread_pct']:
+                spread_warning = (
+                    f"Bid/ask spread {spread_pct:.2f}% exceeds advisory max {limits['max_spread_pct']:.2f}% "
+                    f"for budget ₹{budget:,.0f}"
+                )
+
+        if spread_warning:
+            metrics['spread_advisory'] = True
+            metrics['spread_advisory_reason'] = spread_warning
 
         if volume and volume > 0:
             volume_participation = quantity / max(volume, 1)
@@ -237,26 +345,28 @@ class OptionsCapitalConfig:
                     metrics,
                 )
 
-        if open_interest and open_interest > 0:
-            oi_participation = quantity / max(open_interest, 1)
-            metrics['oi_participation'] = oi_participation
-            if oi_participation > limits['max_oi_participation']:
-                return (
-                    False,
-                    (
-                        f"Order qty {quantity} is {oi_participation * 100:.2f}% of OI {open_interest:,} "
-                        f"(limit {limits['max_oi_participation'] * 100:.2f}% for budget ₹{budget:,.0f})"
-                    ),
-                    metrics,
-                )
+        oi_participation = quantity / max(open_interest, 1)
+        metrics['oi_participation'] = oi_participation
+        if oi_participation > limits['max_oi_participation']:
+            return (
+                False,
+                (
+                    f"Order qty {quantity} is {oi_participation * 100:.2f}% of OI {open_interest:,} "
+                    f"(limit {limits['max_oi_participation'] * 100:.2f}% for budget ₹{budget:,.0f})"
+                ),
+                metrics,
+            )
 
-        if (not volume or volume <= 0) and (not open_interest or open_interest <= 0):
+        if not volume or volume <= 0:
             return False, "Liquidity data unavailable for contract - refusing entry", metrics
 
         return True, "Dynamic liquidity check passed", metrics
 
     @classmethod
     def get_today_live_summary(cls) -> dict:
+        """Fail-CLOSED on any error: returns sentinel trades_today=999 so the
+        min_trades guard is always satisfied and the CB is conservatively active
+        rather than silently disabled when live_data.json is missing/corrupt."""
         import json as _json
         live_data_file = BASE_DIR / "data" / "live_data.json"
         try:
@@ -271,7 +381,7 @@ class OptionsCapitalConfig:
                 }
         except Exception:
             pass
-        return {'total_pnl': 0.0, 'total_pnl_percent': 0.0, 'budget_used': 0.0, 'trades_today': 0}
+        return {'total_pnl': 0.0, 'total_pnl_percent': 0.0, 'budget_used': 0.0, 'trades_today': 999}
     
     @classmethod
     def get_available_capital(cls, used_capital: float) -> float:
@@ -362,7 +472,7 @@ class OptionsTradingConfig:
     TRADING_MODE = "PAPER"  # PAPER mode - simulated orders, real data from broker API
     
     # Underlying indexes for options trading (legacy - keep for backward compatibility)
-    UNDERLYING_INDEXES = ["BANKNIFTY", "NIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX"]  # Preferred underlying indexes
+    UNDERLYING_INDEXES = ["BANKNIFTY", "NIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]  # Preferred NSE underlying indexes
     
     # F&O Universe - Complete NSE stock list for deriving strikes
     FO_UNIVERSE = [
@@ -389,7 +499,7 @@ class OptionsTradingConfig:
         "PETRONET", "PFC", "PGEL", "PHOENIXLTD", "PIDILITIND", "PIIND", "PNB", "PNBHOUSING", 
         "POLICYBZR", "POLYCAB", "POONAWALLA", "POWERGRID", "POWERINDIA", "PRESTIGE", "PPLPHARMA", "RECLTD", 
         "RELIANCE", "RVNL", "SAIL", "SAMMAANCAP", "SBICARD", "SBILIFE", "SBIN", "SHREECEM", 
-        "SHRIRAMFIN", "SIEMENS", "SJVN", "SOLARINDS", "SONACOMS", "SRF", "SUNPHARMA", "SUPREMEIND", "SENSEX", "BANKEX",
+        "SHRIRAMFIN", "SIEMENS", "SJVN", "SOLARINDS", "SONACOMS", "SRF", "SUNPHARMA", "SUPREMEIND",
         "SYNGENE", "SWIGGY", "TATACHEM", "TATACOMM", "TATACONSUM", "TATAELXSI", "TATAPOWER", "TATASTEEL", 
         "TATATECH", "TCS", "TECHM", "TIINDIA", "TITAGARH", "TITAN", "TMPV", "TORNTPHARM", 
         "TORNTPOWER", "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO", "UNIONBANK", "UNITDSPR", 
@@ -443,11 +553,12 @@ class OptionsTradingConfig:
     STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "10.0"))  # 10% hard SL (fixed below entry)
     PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "0"))  # NO PROFIT TARGET - let winners run!
     
-    # Number of lots per trade (for scaling trade size)
-    # Each option contract = 1 lot (qty = lot_size * NO_OF_LOTS)
-    # When scaling: increase this to increase trade size proportionally
-    # Example: NO_OF_LOTS=1 → qty=lot_size, NO_OF_LOTS=2 → qty=2*lot_size
-    NO_OF_LOTS = int(os.getenv("NO_OF_LOTS", "1"))  # Default 1 lot per trade
+    # Lot sizing is BUDGET-DRIVEN (not fixed lots).
+    # Quantity is calculated by OptionsCapitalConfig.calculate_quantity_for_capital():
+    #   affordable_lots = floor(cap_this_trade / (premium × lot_size))
+    #   quantity        = affordable_lots × lot_size
+    # To trade more lots per alert, increase OPTIONS_CAP_PER_TRADE(_GOOD/_NEUTRAL) in .env.
+    # NO_OF_LOTS env var is intentionally NOT used — budget-based sizing is more robust.
     
     # Trailing Exit Strategy - MOVE SL UP EVERY 10% GAIN
     # Keep SL 20% below peak price as position gains

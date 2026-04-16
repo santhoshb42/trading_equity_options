@@ -2185,6 +2185,44 @@ class AngelOneBroker:
                 self.symbol_locks[symbol] = threading.Lock()
             return self.symbol_locks[symbol]
     
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        Cancel an existing order by ID.
+        Used to cancel pending SL/exit orders before placing manual exits,
+        preventing double-fill and AttributeError from monitor.py call sites.
+
+        Args:
+            order_id: Broker order ID to cancel
+
+        Returns:
+            True if cancelled (or already absent), False on failure
+        """
+        from .bot_logging import log_event
+        if not order_id:
+            return False
+
+        if DevConfig.is_paper_trading():
+            log_event("CANCEL_ORDER_PAPER", f"Paper: cancel order {order_id}")
+            self.pending_orders.pop(order_id, None)
+            return True
+
+        try:
+            response = self._safe_api_call(
+                self.smart_api.cancelOrder,
+                order_id,
+                "STOPLOSS",
+                timeout=10.0
+            )
+            if response:
+                self.pending_orders.pop(order_id, None)
+                log_event("CANCEL_ORDER_SUCCESS", f"Cancelled order {order_id}")
+                return True
+            log_event("CANCEL_ORDER_FAILED", f"Cancel returned falsy for order {order_id}")
+            return False
+        except Exception as e:
+            log_event("CANCEL_ORDER_ERROR", f"Failed to cancel {order_id}: {e}")
+            return False
+
     def place_order_safe(
         self,
         symbol: str,

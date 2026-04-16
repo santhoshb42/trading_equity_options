@@ -615,21 +615,25 @@ class OptionsTradingBot:
                     
                     # Only check exits if we successfully refreshed at least some LTPs
                     if not ltps_refreshed:
-                        logger.debug(f"POSITION_MONITOR: No LTPs refreshed, skipping exit checks")
+                        if not getattr(self, '_ltp_skip_logged', False):
+                            logger.debug("POSITION_MONITOR: No LTPs refreshed, skipping exit checks")
+                            self._ltp_skip_logged = True
                         # Still write CSV/live data even when skipping exit checks
                         if HAS_LIVE_DATA and self.live_data_tracker:
                             try:
                                 self.live_data_tracker.save()
                                 if self.live_data_formatter:
                                     csv_data = self.live_data_formatter.generate_csv()
-                                    csv_file = Path('/root/santhosh/trading/put_options/data/live_data_trades.csv')
-                                    with open(csv_file, 'w') as f:
-                                        f.write(csv_data)
-                                    logger.debug("POSITION_MONITOR: CSV_UPDATED")
+                                    if csv_data != getattr(self, '_last_live_csv_payload', None):
+                                        csv_file = Path('/root/santhosh/trading/put_options/data/live_data_trades.csv')
+                                        with open(csv_file, 'w') as f:
+                                            f.write(csv_data)
+                                        self._last_live_csv_payload = csv_data
                             except Exception as _live_err:
                                 pass
                         time.sleep(current_interval)
                         continue
+                    self._ltp_skip_logged = False
                     
                     # Check and close expired positions
                     expired = self.monitor.check_expiry_close()
@@ -993,15 +997,15 @@ class OptionsTradingBot:
                     if HAS_LIVE_DATA and self.live_data_tracker:
                         try:
                             self.live_data_tracker.save()
-                            logger.debug("POSITION_MONITOR: LIVE_DATA_SAVED")
                             
                             # Also update CSV file (for Excel viewing)
                             if self.live_data_formatter:
                                 csv_data = self.live_data_formatter.generate_csv()
-                                csv_file = Path('/root/santhosh/trading/put_options/data/live_data_trades.csv')
-                                with open(csv_file, 'w') as f:
-                                    f.write(csv_data)
-                                logger.debug("POSITION_MONITOR: CSV_UPDATED")
+                                if csv_data != getattr(self, '_last_live_csv_payload', None):
+                                    csv_file = Path('/root/santhosh/trading/put_options/data/live_data_trades.csv')
+                                    with open(csv_file, 'w') as f:
+                                        f.write(csv_data)
+                                    self._last_live_csv_payload = csv_data
                         except Exception as live_err:
                             logger.debug(f"POSITION_MONITOR: LIVE_DATA_SAVE_FAILED | {str(live_err)}")
                     

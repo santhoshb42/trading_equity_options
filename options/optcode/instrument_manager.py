@@ -21,8 +21,6 @@ from typing import List, Dict, Optional, Tuple
 
 from .optlogging import logger, log_event
 
-BFO_INDEX_UNDERLYINGS = {"SENSEX", "BANKEX"}
-
 # =============================================================================
 # Instrument Manager
 # =============================================================================
@@ -140,8 +138,7 @@ class InstrumentManager:
         return 1
     
     def _default_exch_seg_for_underlying(self, underlying: str) -> str:
-        clean_underlying = (underlying or "").upper().rstrip('0123456789')
-        return "BFO" if clean_underlying in BFO_INDEX_UNDERLYINGS else "NFO"
+        return "NFO"
 
     def get_strikes_for_underlying(self, underlying: str, exch_seg=None,
                                    instrument_types=("OPTSTK", "FUTSTK", "OPTIDX", "FUTIDX")) -> List[Dict]:
@@ -336,7 +333,7 @@ class InstrumentManager:
         # Count F&O underlyings across supported derivative segments.
         fo_stocks = set()
         for inst in self.instruments:
-            if inst.get('exch_seg') in ('NFO', 'BFO') and inst.get('instrumenttype') in ('OPTSTK', 'FUTSTK', 'OPTIDX', 'FUTIDX'):
+            if inst.get('exch_seg') == 'NFO' and inst.get('instrumenttype') in ('OPTSTK', 'FUTSTK', 'OPTIDX', 'FUTIDX'):
                 name = inst.get('name')
                 if name:
                     fo_stocks.add(name)

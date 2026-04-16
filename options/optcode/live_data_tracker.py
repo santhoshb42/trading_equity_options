@@ -12,6 +12,7 @@ Output: /root/santhosh/trading/options/data/live_data.json
 import json
 import tempfile
 import os
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from pathlib import Path
@@ -49,6 +50,8 @@ class LiveDataTracker:
         
         # Thread-safe lock for file writes (critical for preventing corruption)
         self._file_lock = threading.RLock()
+        self._last_saved_signature = None
+        self._last_save_changed = False
         
         # Initialize live data structure
         self.live_data = {
@@ -95,11 +98,23 @@ class LiveDataTracker:
                         # Preserve summary if available
                         if 'summary' in existing_data:
                             self.live_data['summary'] = existing_data['summary']
+                        self._last_saved_signature = self._build_signature(existing_data)
                         logger.info(f"LIVE_DATA_TRACKER: Loaded {len(self.live_data['trades'])} existing trades from file")
             except Exception as e:
                 logger.warning(f"LIVE_DATA_TRACKER: Failed to load existing data | {str(e)}")
         
         logger.info("LIVE_DATA_TRACKER: INITIALIZED")
+
+    def _build_signature(self, data: Dict[str, Any]) -> str:
+        """Build a stable signature for change detection, ignoring wall-clock timestamp churn."""
+        comparable_data = {
+            key: value
+            for key, value in data.items()
+            if key != 'timestamp'
+        }
+        return hashlib.sha256(
+            json.dumps(comparable_data, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        ).hexdigest()
     
     def update_summary(self,
                       total_budget: float,
@@ -445,7 +460,10 @@ class LiveDataTracker:
                 }
             }
             
-            logger.debug(f"LIVE_DATA_TRACKER: Scraped | ongoing={ongoing_count} | closed={closed_count} | pnl=₹{output_data['summary']['total_pnl']:.2f}")
+            current_signature = self._build_signature(output_data)
+            if current_signature == self._last_saved_signature:
+                self._last_save_changed = False
+                return True
             
             # Write JSON to file with ATOMIC operation (prevent corruption)
             try:
@@ -465,21 +483,30 @@ class LiveDataTracker:
                     
                     # Atomic rename (on Unix, this is atomic)
                     os.replace(tmp_path, str(self.live_data_file))
-                    logger.debug(f"LIVE_DATA_TRACKER: SAVED | file={self.live_data_file}")
+                    self._last_saved_signature = current_signature
+                    self._last_save_changed = True
+                    logger.debug(
+                        f"LIVE_DATA_TRACKER: SAVED | ongoing={ongoing_count} | closed={closed_count} | "
+                        f"pnl=₹{output_data['summary']['total_pnl']:.2f} | file={self.live_data_file}"
+                    )
             except Exception as write_err:
                 logger.error(f"LIVE_DATA_TRACKER: ATOMIC_WRITE_ERROR | {str(write_err)}")
                 # Fallback: try direct write if atomic failed
                 try:
                     with open(self.live_data_file, 'w') as f:
                         json.dump(output_data, f, indent=2)
+                    self._last_saved_signature = current_signature
+                    self._last_save_changed = True
                     logger.warning(f"LIVE_DATA_TRACKER: FALLBACK_WRITE | recovered from atomic write error")
                 except:
                     logger.error(f"LIVE_DATA_TRACKER: FALLBACK_WRITE_ALSO_FAILED | data lost")
+                    self._last_save_changed = False
                     return False
             
             return True
             
         except Exception as e:
+            self._last_save_changed = False
             logger.error(f"LIVE_DATA_TRACKER: SAVE_ERROR | {str(e)}")
             return False
     

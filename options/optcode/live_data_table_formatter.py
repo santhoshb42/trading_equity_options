@@ -320,7 +320,9 @@ No closed trades.
             entry_prem = trade.get('entry_premium', 0)
             exit_prem = trade.get('exit_premium', 0)
             highest_prem = trade.get('highest_premium', 0)
-            lowest_prem = trade.get('lowest_premium', 0)
+            lowest_prem = trade.get('lowest_premium')
+            if lowest_prem is None:
+                lowest_prem = min(entry_prem, exit_prem)
             qty = trade.get('quantity', 0)
             pnl = trade.get('pnl', 0)
             pnl_pct = trade.get('pnl_percent', 0)
@@ -390,7 +392,9 @@ No closed trades.
             entry_prem = trade.get('entry_premium', 0)
             current_prem = trade.get('current_premium', 0)
             highest_prem = trade.get('highest_premium', 0)
-            lowest_prem = trade.get('lowest_premium', 0)
+            lowest_prem = trade.get('lowest_premium')
+            if lowest_prem is None:
+                lowest_prem = min(entry_prem, current_prem)
             qty = trade.get('quantity', 0)
             unrealized_pnl = trade.get('unrealized_pnl', 0)
             pnl_pct = (unrealized_pnl / (entry_prem * qty) * 100) if (entry_prem * qty) > 0 else 0

@@ -26,6 +26,22 @@ from .ce_extractor import get_ce_extractor
 
 class OptionsSignalValidator:
     """Validates and processes TradingView alerts for options trading"""
+
+    @staticmethod
+    def _has_supported_exchange_prefix(symbol: str) -> bool:
+        """Allow bare symbols or explicit NSE-prefixed cash symbols only."""
+        clean_symbol = str(symbol or '').upper().strip()
+        return ':' not in clean_symbol or clean_symbol.startswith('NSE:')
+
+    @staticmethod
+    def _normalize_alert_symbol(symbol: str) -> str:
+        """Normalize TradingView symbols for the NSE alert format."""
+        clean_symbol = str(symbol or '').upper().strip()
+        if clean_symbol.startswith('NSE:'):
+            clean_symbol = clean_symbol[4:]
+        if clean_symbol.endswith('-EQ'):
+            clean_symbol = clean_symbol[:-3]
+        return clean_symbol.strip()
     
     @staticmethod
     def validate_options_signal(alert: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
@@ -36,7 +52,8 @@ class OptionsSignalValidator:
         """
         try:
             # Extract basic fields
-            symbol = alert.get('symbol', '').upper().strip()
+            raw_symbol = str(alert.get('symbol', ''))
+            symbol = OptionsSignalValidator._normalize_alert_symbol(raw_symbol)
             action = alert.get('action', '').upper()
             confidence = float(alert.get('confidence', 0))
             # Use score if provided, otherwise use confidence as fallback
@@ -49,6 +66,12 @@ class OptionsSignalValidator:
             if not symbol or action not in ['BUY', 'SELL']:
                 message = "Invalid symbol or action"
                 logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={action}")
+                log_signal_validation(symbol, False, message, action=action)
+                return False, message, None
+
+            if not OptionsSignalValidator._has_supported_exchange_prefix(raw_symbol):
+                message = f"Unsupported exchange prefix in symbol '{raw_symbol}' - NSE only"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message}")
                 log_signal_validation(symbol, False, message, action=action)
                 return False, message, None
             
@@ -184,7 +207,7 @@ class OptionsSignalValidator:
         If symbol is an equity stock with F&O, map it to its symbol.
         Returns None if symbol cannot be mapped.
         """
-        symbol_upper = symbol.upper()
+        symbol_upper = OptionsSignalValidator._normalize_alert_symbol(symbol)
 
         # TradingView → AngelOne F&O symbol name remaps
         # TradingView uses underscores; AngelOne uses hyphens for some symbols

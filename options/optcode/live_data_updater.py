@@ -46,13 +46,13 @@ def start_live_data_updater_service():
                 
                 if success:
                     live_data_file = Path('/root/santhosh/trading/options/data/live_data.json')
-                    if live_data_file.exists():
+                    if getattr(tracker, '_last_save_changed', False) and live_data_file.exists():
                         file_size = live_data_file.stat().st_size
                         logger.debug(f"LIVE_DATA_UPDATER: Updated | file_size={file_size} bytes")
-                    else:
+                    elif getattr(tracker, '_last_save_changed', False):
                         logger.warning("LIVE_DATA_UPDATER: File not created after save()")
                 else:
-                    logger.debug("LIVE_DATA_UPDATER: Save returned False")
+                    logger.warning("LIVE_DATA_UPDATER: Save returned False")
                     
             except Exception as e:
                 logger.warning(f"LIVE_DATA_UPDATER: Error | {str(e)[:100]}")

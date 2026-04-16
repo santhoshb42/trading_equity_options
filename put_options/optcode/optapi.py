@@ -806,6 +806,57 @@ def _compact_alert_details(details: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in details.items() if value is not None}
 
 
+def _append_liquidity_decision_log(bot_type: str, payload: Dict[str, Any]) -> None:
+    """Persist entry-time liquidity decisions for later review/backtesting."""
+    try:
+        log_path = Path(__file__).parent.parent / "data" / "liquidity_decisions.jsonl"
+        record = {
+            'timestamp': datetime.now().isoformat(),
+            'bot_type': bot_type,
+            **payload,
+        }
+        with open(log_path, 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+    except Exception as exc:
+        logger.warning(f"LIQUIDITY_DECISION_LOG: FAILED | {str(exc)}")
+
+
+def _extract_probation_snapshot(filter_details: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return trade-time probation state when the entry filter captured it."""
+    if not isinstance(filter_details, dict):
+        return None
+    reputation_details = filter_details.get('symbol_reputation')
+    if not isinstance(reputation_details, dict):
+        return None
+    snapshot = reputation_details.get('snapshot')
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _log_entry_filter_decision(
+    symbol: str,
+    action: str,
+    is_valid: bool,
+    entry_reason: str,
+    entry_details: Dict[str, Any],
+    data_available: int,
+) -> None:
+    """Persist the exact entry-filter decision, including probation state when present."""
+    validators_passed = entry_details.get('validators_passed', 0) if isinstance(entry_details, dict) else 0
+    probation_snapshot = _extract_probation_snapshot(entry_details)
+    log_event(
+        "ENTRY_FILTER_DECISION",
+        f"{'PASSED' if is_valid else 'REJECTED'}: {symbol}",
+        symbol=symbol,
+        action=action,
+        passed=is_valid,
+        reason=entry_reason,
+        validators_passed=validators_passed,
+        data_collected=data_available,
+        probation_snapshot=probation_snapshot,
+        filter_details=entry_details,
+    )
+
+
 def _build_alert_completion_details(alert: Dict[str, Any], result: Any, elapsed_ms: float) -> Dict[str, Any]:
     """Create a precise final alert summary for alerts.jsonl."""
     details = {
@@ -840,6 +891,7 @@ def _build_alert_completion_details(alert: Dict[str, Any], result: Any, elapsed_
         'reason': result.get('reason') or result.get('error'),
         'liquidity_metrics': result.get('liquidity_metrics'),
         'filter_details': result.get('filter_details'),
+        'probation_snapshot': result.get('probation_snapshot'),
         'data_fetch_status': result.get('data_fetch_status'),
     }))
 
@@ -892,7 +944,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         alert_price = float(alert.get('price', 0) or 0)
 
         # If no price in alert, fetch live spot price from broker for correct ATM selection
-        # (critical for large-value indices like SENSEX where wrong ATM = wrong contract)
+        # (critical for index underlyings where wrong ATM = wrong contract)
         if alert_price <= 0:
             try:
                 broker = state['broker']
@@ -968,14 +1020,14 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         cap_this_trade = OptionsCapitalConfig.get_cap_for_market_trend(market_trend)
         if cap_this_trade == 0.0:
             logger.warning(
-                f"ALERT_PROCESS: BAD_MARKET_TREND_REJECTED | symbol={symbol} | market_trend={market_trend}"
+                f"ALERT_PROCESS: MARKET_TREND_REJECTED | symbol={symbol} | market_trend={market_trend} | PE bot only trades on BAD market"
             )
-            log_alert(alert=alert, status='bad_market_trend_rejected', details={'market_trend': market_trend})
+            log_alert(alert=alert, status='market_trend_rejected', details={'market_trend': market_trend})
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'BAD market trend - no new PE entries',
+                'reason': f'PE bot requires BAD market trend — got {market_trend}, no new PE entries',
                 'stage': 'market_trend_gate',
                 'market_trend': market_trend,
                 **base_context,
@@ -1294,6 +1346,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 
                 # Validate entry with whatever data we have
                 is_entry_valid, entry_reason, entry_details = state['entry_filter'].validate(entry_signal, market_data)
+                probation_snapshot = _extract_probation_snapshot(entry_details)
+                _log_entry_filter_decision(symbol, action, is_entry_valid, entry_reason, entry_details, data_available)
                 
                 if not is_entry_valid:
                     logger.warning(f"ENTRY_FILTER: REJECTED | symbol={symbol} | action={action} | reason={entry_reason} | data_collected={data_available}")
@@ -1304,12 +1358,14 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                         'reason': entry_reason,
                         'stage': 'entry_filter',
                         'filter_details': entry_details,
+                        'probation_snapshot': probation_snapshot,
                         'data_fetch_status': fetch_results,
                         **base_context,
                     }
                 
                 validators_passed = entry_details.get('validators_passed', 0)
                 logger.info(f"ENTRY_FILTER: PASSED | symbol={symbol} | action={action} | validators_passed={validators_passed} | data_collected={data_available}")
+                base_context['probation_snapshot'] = probation_snapshot
             
             except Exception as e:
                 # Log error but continue (don't block entry on filter error)
@@ -1487,68 +1543,186 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # NOTE: OptionsCapitalConfig is already imported at module level - don't re-import here
         # For options, lot_size=1 means each contract is 1 unit (not bundled)
         # The formula: quantity = (capital / premium) * lot_size
-        # With lot_size=1: quantity = capital / premium (direct contract count)
-        quantity = OptionsCapitalConfig.calculate_quantity_for_capital(
-            premium=selected_contract.ltp,
-            capital=cap_this_trade,
-            lot_size=1
-        )
-        
-        # Apply neural ML position size multiplier if signal available
-        if neural_ml_signal and 'neural_ml_multiplier' in locals():
-            original_quantity = quantity
-            quantity = max(1, int(quantity * neural_ml_multiplier))
-            logger.info(f"NEURAL_ML: POSITION_SIZE_APPLIED | symbol={symbol} | multiplier={neural_ml_multiplier:.2f}x | qty: {original_quantity} → {quantity}")
-        
-        # Calculate actual cost and utilization percentage
-        # quantity is already in contracts (lot_size=1), so cost = quantity * premium
-        actual_cost = quantity * selected_contract.ltp
-        utilization_pct = (actual_cost / cap_this_trade) * 100 if cap_this_trade > 0 else 0
-        order_context = {
-            **contract_context,
-            'quantity': quantity,
-            'actual_cost': round(actual_cost, 2),
-            'budget': cap_this_trade,
-            'market_trend': market_trend,
-        }
-
+        lot_size = max(state['instrument_manager'].get_lot_size(selected_contract.symbol), 1)
         liquidity_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
         liquidity_oi_map = state['broker'].get_oi_data([selected_contract.symbol], "NFO") or {}
         live_volume = int(liquidity_market_data.get('volume') or selected_contract.volume or 0)
-        live_oi = int(liquidity_oi_map.get(selected_contract.symbol) or selected_contract.open_interest or 0)
+        live_oi = int(liquidity_oi_map.get(selected_contract.symbol) or liquidity_market_data.get('open_interest') or selected_contract.open_interest or 0)
+        live_bid = float(liquidity_market_data.get('bid') or selected_contract.bid or 0.0)
+        live_ask = float(liquidity_market_data.get('ask') or selected_contract.ask or 0.0)
+        live_spread_pct = liquidity_market_data.get('bid_ask_spread_pct')
         selected_contract.volume = live_volume
         selected_contract.open_interest = live_oi
+        selected_contract.bid = live_bid
+        selected_contract.ask = live_ask
 
-        liquidity_ok, liquidity_reason, liquidity_metrics = OptionsCapitalConfig.evaluate_liquidity_for_order(
-            budget=cap_this_trade,
-            quantity=quantity,
-            premium=selected_contract.ltp,
-            volume=live_volume,
-            open_interest=live_oi,
-            lot_size=1,
-        )
+        effective_budget = cap_this_trade
+        liquidity_scale_attempts = 0
+        scaled_down_for_oi = False
+        quantity = 0
+        affordable_lots = 0
+        actual_cost = 0.0
+        utilization_pct = 0.0
+        order_context = {**contract_context, 'market_trend': market_trend}
+        liquidity_ok = False
+        liquidity_reason = ""
+        liquidity_metrics = {}
 
-        logger.info(
-            f"ALERT_PROCESS: LIQUIDITY_CHECK | contract={selected_contract.symbol} | qty={quantity} "
-            f"| budget=₹{cap_this_trade:.0f} | volume={live_volume:,} | oi={live_oi:,} | result={liquidity_ok}"
-        )
-
-        if not liquidity_ok:
-            logger.warning(
-                f"ALERT_PROCESS: REJECTED_LIQUIDITY | symbol={symbol} | contract={selected_contract.symbol} "
-                f"| reason={liquidity_reason} | metrics={liquidity_metrics}"
+        while True:
+            quantity = OptionsCapitalConfig.calculate_quantity_for_capital(
+                premium=selected_contract.ltp,
+                capital=effective_budget,
+                lot_size=lot_size,
             )
-            return {
-                'symbol': symbol,
-                'timestamp': timestamp,
-                'status': 'rejected',
-                'reason': liquidity_reason,
-                'liquidity_metrics': liquidity_metrics,
-                'stage': 'dynamic_liquidity_check',
-                **order_context,
+            affordable_lots = quantity // lot_size if lot_size > 0 else 0
+
+            if quantity <= 0:
+                lot_cost = selected_contract.ltp * lot_size
+                logger.warning(
+                    f"ALERT_PROCESS: LOT_NOT_AFFORDABLE | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} "
+                    f"| lot_size={lot_size} | lot_cost=₹{lot_cost:.2f} | budget=₹{effective_budget:.2f}"
+                )
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Cannot afford 1 lot within ₹{effective_budget:.0f} budget',
+                    'stage': 'lot_sizing',
+                    **contract_context,
+                }
+
+            if neural_ml_signal and 'neural_ml_multiplier' in locals() and affordable_lots > 0:
+                original_quantity = quantity
+                adjusted_lots = min(affordable_lots, max(1, int(affordable_lots * neural_ml_multiplier)))
+                quantity = adjusted_lots * lot_size
+                logger.info(
+                    f"NEURAL_ML: POSITION_SIZE_APPLIED | symbol={symbol} | multiplier={neural_ml_multiplier:.2f}x "
+                    f"| lots: {affordable_lots} → {adjusted_lots} | qty: {original_quantity} → {quantity}"
+                )
+
+            actual_cost = quantity * selected_contract.ltp
+            utilization_pct = (actual_cost / effective_budget) * 100 if effective_budget > 0 else 0
+            order_context = {
+                **contract_context,
+                'quantity': quantity,
+                'lot_size': lot_size,
+                'order_lots': quantity // lot_size if lot_size > 0 else 0,
+                'actual_cost': round(actual_cost, 2),
+                'budget': effective_budget,
+                'requested_budget': cap_this_trade,
+                'scaled_down_for_oi': scaled_down_for_oi,
+                'liquidity_scale_attempts': liquidity_scale_attempts,
+                'market_trend': market_trend,
             }
+
+            liquidity_ok, liquidity_reason, liquidity_metrics = OptionsCapitalConfig.evaluate_liquidity_for_order(
+                budget=effective_budget,
+                quantity=quantity,
+                premium=selected_contract.ltp,
+                volume=live_volume,
+                open_interest=live_oi,
+                bid=live_bid,
+                ask=live_ask,
+                bid_ask_spread_pct=live_spread_pct,
+                lot_size=lot_size,
+            )
+
+            logger.info(
+                f"ALERT_PROCESS: LIQUIDITY_CHECK | contract={selected_contract.symbol} | qty={quantity} | lots={quantity // lot_size} "
+                f"| budget=₹{effective_budget:.0f} | volume={live_volume:,} | oi={live_oi:,} | bid={live_bid:.2f} | ask={live_ask:.2f} "
+                f"| spread_pct={float(live_spread_pct or 0.0):.2f} | result={liquidity_ok} | attempt={liquidity_scale_attempts}"
+            )
+
+            if liquidity_metrics.get('spread_advisory_reason'):
+                logger.warning(
+                    f"ALERT_PROCESS: SPREAD_ADVISORY | symbol={symbol} | contract={selected_contract.symbol} "
+                    f"| requested_budget=₹{cap_this_trade:.0f} | effective_budget=₹{effective_budget:.0f} "
+                    f"| reason={liquidity_metrics['spread_advisory_reason']}"
+                )
+
+            if liquidity_ok:
+                break
+
+            is_oi_failure = liquidity_reason.startswith("Open interest") or " of OI " in liquidity_reason
+            next_budget = effective_budget / 2.0
+            next_quantity = OptionsCapitalConfig.calculate_quantity_for_capital(
+                premium=selected_contract.ltp,
+                capital=next_budget,
+                lot_size=lot_size,
+            )
+
+            if not is_oi_failure or next_quantity <= 0:
+                logger.warning(
+                    f"ALERT_PROCESS: REJECTED_LIQUIDITY | symbol={symbol} | contract={selected_contract.symbol} "
+                    f"| requested_budget=₹{cap_this_trade:.0f} | effective_budget=₹{effective_budget:.0f} "
+                    f"| reason={liquidity_reason} | metrics={liquidity_metrics}"
+                )
+                _append_liquidity_decision_log('put_options', {
+                    'decision': 'rejected',
+                    'symbol': symbol,
+                    'contract': selected_contract.symbol,
+                    'requested_budget': round(cap_this_trade, 2),
+                    'effective_budget': round(effective_budget, 2),
+                    'scale_attempts': liquidity_scale_attempts,
+                    'scaled_down_for_oi': scaled_down_for_oi,
+                    'quantity': quantity,
+                    'lot_size': lot_size,
+                    'premium': round(selected_contract.ltp, 2),
+                    'volume': live_volume,
+                    'open_interest': live_oi,
+                    'bid': round(live_bid, 2),
+                    'ask': round(live_ask, 2),
+                    'spread_pct': round(float(live_spread_pct or 0.0), 4),
+                    'reason': liquidity_reason,
+                    'liquidity_metrics': liquidity_metrics,
+                })
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': liquidity_reason,
+                    'liquidity_metrics': liquidity_metrics,
+                    'stage': 'dynamic_liquidity_check',
+                    **order_context,
+                }
+
+            logger.warning(
+                f"ALERT_PROCESS: LIQUIDITY_SCALE_DOWN | symbol={symbol} | contract={selected_contract.symbol} "
+                f"| requested_budget=₹{cap_this_trade:.0f} | effective_budget=₹{effective_budget:.0f} → ₹{next_budget:.0f} "
+                f"| reason={liquidity_reason}"
+            )
+            effective_budget = next_budget
+            liquidity_scale_attempts += 1
+            scaled_down_for_oi = True
         
-        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} | budget=₹{cap_this_trade} | market_trend={market_trend} | qty={quantity} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}%")
+        if scaled_down_for_oi:
+            logger.warning(
+                f"ALERT_PROCESS: LIQUIDITY_SCALE_DOWN_ACCEPTED | symbol={symbol} | contract={selected_contract.symbol} "
+                f"| requested_budget=₹{cap_this_trade:.0f} | effective_budget=₹{effective_budget:.0f} "
+                f"| qty={quantity} | lots={quantity // lot_size} | attempts={liquidity_scale_attempts}"
+            )
+
+        _append_liquidity_decision_log('put_options', {
+            'decision': 'accepted',
+            'symbol': symbol,
+            'contract': selected_contract.symbol,
+            'requested_budget': round(cap_this_trade, 2),
+            'effective_budget': round(effective_budget, 2),
+            'scale_attempts': liquidity_scale_attempts,
+            'scaled_down_for_oi': scaled_down_for_oi,
+            'quantity': quantity,
+            'lot_size': lot_size,
+            'premium': round(selected_contract.ltp, 2),
+            'volume': live_volume,
+            'open_interest': live_oi,
+            'bid': round(live_bid, 2),
+            'ask': round(live_ask, 2),
+            'spread_pct': round(float(live_spread_pct or 0.0), 4),
+            'spread_advisory_reason': liquidity_metrics.get('spread_advisory_reason'),
+            'liquidity_metrics': liquidity_metrics,
+        })
+
+        logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{selected_contract.ltp:.2f} | lot_size={lot_size} | budget=₹{effective_budget} | requested_budget=₹{cap_this_trade} | market_trend={market_trend} | qty={quantity} | lots={quantity // lot_size} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}% | scaled_down_for_oi={scaled_down_for_oi}")
         
         logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | premium=₹{selected_contract.ltp:.2f}")
         
@@ -1722,8 +1896,37 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         if not position_added:
             logger.warning(f"ALERT_PROCESS: POSITION_NOT_ADDED | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id} | likely_duplicate")
             if OptionsTradingConfig.TRADING_MODE == "LIVE":
-                logger.error(f"ALERT_PROCESS: POSITION_TRACKING_FAILED_AFTER_FILL | symbol={symbol} | contract={selected_contract.symbol} | emergency flattening")
-                state['broker'].place_options_order(
+                existing_position = None
+                try:
+                    for _, tracked_position in state['monitor']._snapshot_positions_items():
+                        if tracked_position.underlying == underlying:
+                            existing_position = tracked_position
+                            break
+                except Exception as snapshot_error:
+                    logger.warning(f"ALERT_PROCESS: POSITION_TRACKING_SNAPSHOT_FAILED | symbol={symbol} | {snapshot_error}")
+
+                if existing_position:
+                    logger.warning(
+                        f"ALERT_PROCESS: POSITION_ALREADY_TRACKED_AFTER_FILL | symbol={symbol} | "
+                        f"contract={selected_contract.symbol} | existing_symbol={existing_position.symbol} | "
+                        f"existing_order_id={existing_position.order_id}"
+                    )
+                    return {
+                        'symbol': symbol,
+                        'underlying': underlying,
+                        'contract': selected_contract.symbol,
+                        'timestamp': timestamp,
+                        'status': 'success',
+                        'stage': 'position_already_tracked',
+                        'order_id': existing_position.order_id or order_id,
+                        'message': f'BUY filled; position already tracked as {existing_position.symbol}',
+                        'tracked_symbol': existing_position.symbol,
+                        'tracked_order_id': existing_position.order_id,
+                        **order_context,
+                    }
+
+                logger.error(f"ALERT_PROCESS: POSITION_TRACKING_FAILED_AFTER_FILL | symbol={symbol} | contract={selected_contract.symbol} | emergency flattening with confirmation")
+                flatten_order_id = state['broker'].place_options_order(
                     symbol=selected_contract.symbol,
                     action='SELL',
                     quantity=quantity,
@@ -1731,13 +1934,57 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     product_type='INTRADAY',
                     allow_queue=False,
                 )
+
+                if not flatten_order_id or str(flatten_order_id).startswith("QUEUED_"):
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': 'Position add failed after BUY fill and emergency SELL could not be placed',
+                        'stage': 'position_registration',
+                        'order_id': order_id,
+                        'emergency_exit_order_id': flatten_order_id,
+                        **order_context,
+                    }
+
+                emergency_flatten_filled = False
+                emergency_flatten_status = None
+                for _ in range(40):
+                    emergency_flatten_status = state['broker'].get_order_status(flatten_order_id)
+                    if emergency_flatten_status:
+                        status = str(emergency_flatten_status.get('status', '')).upper()
+                        if status in {'COMPLETE', 'FILLED', 'FULLY_FILLED'}:
+                            emergency_flatten_filled = True
+                            break
+                        if status in {'REJECTED', 'CANCELLED', 'EXPIRED'}:
+                            break
+                    time.sleep(0.5)
+
+                if not emergency_flatten_filled:
+                    status = (emergency_flatten_status or {}).get('status', 'UNKNOWN')
+                    logger.error(
+                        f"ALERT_PROCESS: EMERGENCY_FLATTEN_UNCONFIRMED | symbol={symbol} | "
+                        f"contract={selected_contract.symbol} | exit_order_id={flatten_order_id} | status={status}"
+                    )
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': f'Position add failed after BUY fill; emergency SELL not confirmed (status={status})',
+                        'stage': 'position_registration',
+                        'order_id': order_id,
+                        'emergency_exit_order_id': flatten_order_id,
+                        **order_context,
+                    }
+
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Position not added (likely duplicate)',
+                'reason': 'Position add failed after BUY fill; emergency flatten executed',
                 'stage': 'position_registration',
                 'order_id': order_id,
+                'emergency_exit_order_id': flatten_order_id if OptionsTradingConfig.TRADING_MODE == "LIVE" else None,
                 **order_context,
             }
         # 🔧 FIX: Increment daily trade counter ONLY after position is successfully added
