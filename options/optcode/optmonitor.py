@@ -2178,35 +2178,51 @@ class OptionPositionMonitor:
                 nifty_ltp=nifty_ltp,  # ✅ Now passes actual Nifty LTP
                 current_time=datetime.now()
             )
+            trial_sl_buffer_pct = max(0.0, OptionsTradingConfig.TRAILING_BUFFER_PERCENTAGE)
+            buffered_activation_pct = trial_sl_threshold + trial_sl_buffer_pct
+            safe_trigger_ceiling = max(position.entry_premium, position.current_premium - 0.10)
             
-            if not is_trial_sl_enabled and peak_gain_percent >= trial_sl_threshold:
-                # 🚀 ACTIVATE TRIAL SL at threshold% gain - Lock at activation threshold milestone
+            if (
+                not is_trial_sl_enabled
+                and peak_gain_percent >= buffered_activation_pct
+                and gain_percent >= buffered_activation_pct
+            ):
+                # 🚀 ACTIVATE TRIAL SL only after the live premium can support the buffered lock.
                 position.trial_sl_enabled = True
                 position.trial_sl_activation_time = datetime.now().isoformat()
-                # 🎯 STAIRCASE: Lock at threshold (5% or 10%), not peak * 0.95
-                position.trial_sl_price = position.entry_premium * (1 + trial_sl_threshold / 100)
+                # 🎯 Buffer the lock level so STOPLOSS_MARKET slippage still tends to realize
+                # near the intended threshold on fast pullbacks.
+                desired_trial_sl = position.entry_premium * (1 + buffered_activation_pct / 100)
+                position.trial_sl_price = min(desired_trial_sl, safe_trigger_ceiling)
                 # 🔴 IMPORTANT: Also update legacy trailing_sl fields for backward compatibility
                 position.trailing_sl_activated = True
                 position.last_trailing_sl_price = position.trial_sl_price
                 position.trailing_sl_activation_time = datetime.now().isoformat()
                 is_trial_sl_enabled = True
                 
-                log_event("TRIAL_SL_ACTIVATED",
-                         f"✅ TRIAL SL ACTIVATED for {symbol} ({trial_sl_threshold:.0f}% gain reached)",
-                         symbol=symbol,
-                         peak_gain_percent=round(peak_gain_percent, 2),
-                         current_gain_percent=round(gain_percent, 2),
-                         entry_premium=position.entry_premium,
-                         peak_premium=position.highest_premium,
-                         trial_sl=round(position.trial_sl_price, 2),
-                         current_premium=position.current_premium,
-                         threshold_used=trial_sl_threshold,
-                         market_condition=market_reason,
-                         reason=f"Adaptive threshold ({trial_sl_threshold:.0f}%): {market_reason}")
-                
-                logger.info(f"TRIAL_SL_ACTIVATED: {symbol} | Threshold: {trial_sl_threshold:.0f}% | Peak Gain: {peak_gain_percent:.2f}% | "
-                           f"Current Gain: {gain_percent:.2f}% | Peak: ₹{position.highest_premium:.2f} | TRIAL SL: ₹{position.trial_sl_price:.2f} | "
-                           f"Market: {market_reason}")
+                log_event(
+                    "TRIAL_SL_ACTIVATED",
+                    f"✅ TRIAL SL ACTIVATED for {symbol} ({buffered_activation_pct:.1f}% buffered gain reached)",
+                    symbol=symbol,
+                    peak_gain_percent=round(peak_gain_percent, 2),
+                    current_gain_percent=round(gain_percent, 2),
+                    entry_premium=position.entry_premium,
+                    peak_premium=position.highest_premium,
+                    trial_sl=round(position.trial_sl_price, 2),
+                    current_premium=position.current_premium,
+                    threshold_used=trial_sl_threshold,
+                    buffer_used=trial_sl_buffer_pct,
+                    buffered_activation_pct=round(buffered_activation_pct, 2),
+                    market_condition=market_reason,
+                    reason=f"Adaptive threshold {trial_sl_threshold:.0f}% + {trial_sl_buffer_pct:.1f}% buffer: {market_reason}",
+                )
+
+                logger.info(
+                    f"TRIAL_SL_ACTIVATED: {symbol} | Threshold: {trial_sl_threshold:.0f}% | Buffer: {trial_sl_buffer_pct:.1f}% | "
+                    f"Buffered Activation: {buffered_activation_pct:.1f}% | Peak Gain: {peak_gain_percent:.2f}% | "
+                    f"Current Gain: {gain_percent:.2f}% | Peak: ₹{position.highest_premium:.2f} | TRIAL SL: ₹{position.trial_sl_price:.2f} | "
+                    f"Market: {market_reason}"
+                )
                 
                 # 🔴 CRITICAL: Save positions to disk so state persists across bot restarts
                 self._save_positions()
@@ -2234,11 +2250,12 @@ class OptionPositionMonitor:
                 #   Peak 15% → SL = max(5%, 12%) = 12%  ← better than old 10%
                 #   Peak 29% → SL = max(5%, 26%) = 26%  ← better than old 25%
                 #
-                # The 3% gap means a normal intraday options wiggle (1-2%) never fires the SL.
-                TRAILING_GAP = 3.0  # % breathing room between SL and all-time peak
+                # The 2% gap keeps more profit than 3% while still avoiding 0-1% noise exits.
+                TRAILING_GAP = 2.0  # % breathing room between SL and all-time peak
 
-                trailing_sl_pct = max(trial_sl_threshold, peak_gain_percent - TRAILING_GAP)
-                new_trial_sl = position.entry_premium * (1 + trailing_sl_pct / 100)
+                trailing_sl_pct = max(buffered_activation_pct, peak_gain_percent - TRAILING_GAP)
+                desired_trial_sl = position.entry_premium * (1 + trailing_sl_pct / 100)
+                new_trial_sl = min(desired_trial_sl, safe_trigger_ceiling)
 
                 # Only update if new SL is meaningfully higher than current (avoid micro-updates
                 # that spam broker modify_sl_order calls on every monitoring tick)
@@ -2246,7 +2263,12 @@ class OptionPositionMonitor:
                 min_move = position.entry_premium * MIN_SL_MOVE_PCT / 100
                 current_sl = position.trial_sl_price or 0.0
 
-                if new_trial_sl > current_sl + min_move:
+                if desired_trial_sl > safe_trigger_ceiling:
+                    logger.debug(
+                        f"TRIAL_SL_SKIP_BUFFERED_UPDATE: {symbol} | desired=₹{desired_trial_sl:.2f} | "
+                        f"safe_ceiling=₹{safe_trigger_ceiling:.2f} | current=₹{position.current_premium:.2f}"
+                    )
+                elif new_trial_sl > current_sl + min_move:
                     old_trial_sl = position.trial_sl_price
                     position.trial_sl_price = new_trial_sl
                     # 🔴 IMPORTANT: Update legacy trailing_sl tracking for analysis
@@ -2261,6 +2283,7 @@ class OptionPositionMonitor:
                                  symbol=symbol,
                                  update_count=position.trial_sl_update_count,
                                  trailing_gap=TRAILING_GAP,
+                                 trial_sl_buffer_pct=trial_sl_buffer_pct,
                                  trailing_sl_pct=round(trailing_sl_pct, 2),
                                  old_trial_sl=round(old_trial_sl, 2),
                                  new_trial_sl=round(new_trial_sl, 2),
@@ -3847,16 +3870,17 @@ class OptionPositionMonitor:
             momentum_closes = [p for p in momentum_closes if p['symbol'] not in greeks_closed_symbols and p['symbol'] not in trailing_closed_symbols]
             monitoring_result['closed_by_momentum'] = [p['symbol'] for p in momentum_closes]
             
-            # ⭐ PRIORITY 2.3: Stale consolidation exit (DISABLED)
-            # ANALYSIS SHOWS: This exit strategy costs ₹1,22,879 in missed gains (492% worse than HARD_SL)
-            # 32 positions exited: -₹25,001 loss | If held with HARD_SL: +₹97,878 profit
-            # Winners cut early (MUTHOOTFIN +174%, SIEMENS +55%, KEI +36%) >> Small losses saved
-            # Let HARD_SL (-10%) and TRIAL_SL handle exits instead
-            stale_consol_closes = []  # DISABLED - was: []
-            monitoring_result['closed_by_stale_consolidation'] = []
+            # ⭐ PRIORITY 2.3: Stale consolidation exit
+            # Enabled to cut low-momentum positions that never activate TRIAL_SL,
+            # while keeping stale timeout disabled for stronger trend days.
+            stale_consol_closes = self.check_stale_consolidation_exits()
+            monitoring_result['closed_by_stale_consolidation'] = [p['symbol'] for p in stale_consol_closes]
             
-            # if stale_consol_closes:  # DISABLED
-            #     logger.info(f"MONITORING: Stale consolidation exit detected {len(stale_consol_closes)} profitable positions | Locked gains before momentum reversal")
+            if stale_consol_closes:
+                logger.info(
+                    f"MONITORING: Stale consolidation exit detected {len(stale_consol_closes)} positions | "
+                    f"TRIAL_SL inactive after hold-time threshold"
+                )
             
             # ⭐ NEW: Retry failed SL placement (critical - ensures all positions protected)
             # This runs in background to place SL orders for any positions still missing them

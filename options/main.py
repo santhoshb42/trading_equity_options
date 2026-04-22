@@ -739,8 +739,8 @@ class OptionsTradingBot:
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: MOMENTUM_ALERT_FAILED | {str(e)}")
                     
-                    # ⭐ STALE CONSOLIDATION: Exit positions held >15min without hitting 10% peak
-                    # Prevents getting caught in low-gain consolidations that reverse into losses
+                    # ⭐ STALE CONSOLIDATION: Exit positions held >20min with TRIAL_SL still inactive
+                    # Prevents low-momentum positions from idling into reversals.
                     stale_consol_exits = self.monitor.check_stale_consolidation_exits()
                     if stale_consol_exits:
                         # Record to learning engine
@@ -759,7 +759,7 @@ class OptionsTradingBot:
                                             'exit_price': pos.get('exit_premium', 0),
                                             'pnl': pos['pnl'],
                                             'pnl_percent': pos.get('pnl_percent', 0),
-                                            'reason': 'Stale consolidation (no momentum after 15min)'
+                                            'reason': 'Stale consolidation (20min hold with TRIAL_SL inactive)'
                                         }
                                     )
                                 except Exception as e:

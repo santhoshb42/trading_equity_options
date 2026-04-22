@@ -529,8 +529,14 @@ def run_monitor_checks(bot: str, monitor_module: Any) -> List[ScenarioResult]:
 
         position = FakePosition('TESTSYM')
         position.sl_order_id = 'SL-BASE'
-        position.current_premium = 109.0
-        position.highest_premium = 110.0
+        if bot == 'PE':
+            position.current_premium = 109.0
+            position.highest_premium = 110.0
+            expected_activation_sl = 110.0
+        else:
+            position.current_premium = 111.2
+            position.highest_premium = 111.2
+            expected_activation_sl = 111.0
         broker = FakeBroker(modify_results=['SL-ACTIVE'])
         monitor = build_monitor(monitor_module, broker, position)
         closed = monitor.check_trailing_stop_losses()
@@ -542,9 +548,9 @@ def run_monitor_checks(bot: str, monitor_module: Any) -> List[ScenarioResult]:
                 not closed
                 and position.trial_sl_enabled
                 and position.sl_order_id == 'SL-ACTIVE'
-                and abs(position.trial_sl_price - 110.0) < 1e-9
+                and abs(position.trial_sl_price - expected_activation_sl) < 1e-9
                 and activation_call.get('order_id') == 'SL-BASE'
-                and abs(float(activation_call.get('new_price', 0.0)) - 110.0) < 1e-9,
+                and abs(float(activation_call.get('new_price', 0.0)) - expected_activation_sl) < 1e-9,
                 'Expected reaching the TRIAL_SL activation threshold to immediately push the new broker SL to the activation milestone.',
             )
         )
@@ -552,14 +558,14 @@ def run_monitor_checks(bot: str, monitor_module: Any) -> List[ScenarioResult]:
         position = FakePosition('TESTSYM')
         position.sl_order_id = 'SL-ACTIVE'
         position.trial_sl_enabled = True
-        position.trial_sl_price = 110.0
-        position.current_premium = 121.0 if bot == 'PE' else 118.0
+        position.trial_sl_price = 110.0 if bot == 'PE' else 111.0
+        position.current_premium = 121.0 if bot == 'PE' else 118.2
         position.highest_premium = 120.0
         broker = FakeBroker(modify_results=['SL-TRAIL'])
         monitor = build_monitor(monitor_module, broker, position)
         closed = monitor.check_trailing_stop_losses()
         trail_call = broker.modify_calls[0] if broker.modify_calls else {}
-        expected_trailing_sl = 120.0 if bot == 'PE' else 117.0
+        expected_trailing_sl = 120.0 if bot == 'PE' else 118.0
         results.append(
             ScenarioResult(
                 bot,
