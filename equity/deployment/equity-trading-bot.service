@@ -1,0 +1,53 @@
+[Unit]
+Description=Equity Trading Bot with Webhook Server (Port 8080)
+Documentation=https://github.com/santhosh/equity-trading-bot
+After=network-online.target webhook-router.service
+Wants=network-online.target
+RequiresMountsFor=/root/santhosh/trading/equity
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/equity
+Environment=PATH=/root/santhosh/trading/equity/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/root/santhosh/trading/equity
+Environment=WEBHOOK_PORT=8090
+Environment=TRADING_MODE=PAPER
+ExecStart=/root/santhosh/trading/equity/start_trading_bot.sh
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Make it INDESTRUCTIBLE
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=10
+
+# Resource protection
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=80%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/root/santhosh/trading/equity
+ReadWritePaths=/var/log
+ReadWritePaths=/tmp
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=equity-trading-bot
+
+# Auto-restart on failure
+RestartPreventExitStatus=
+SuccessExitStatus=0 1 SIGTERM SIGKILL
+
+[Install]
+WantedBy=multi-user.target
+Alias=trading-bot.service

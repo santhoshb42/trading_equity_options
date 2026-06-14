@@ -1,0 +1,318 @@
+//@version=6
+indicator("Sniper PUT 6.0 – MACD Breakdown (1-Min)", overlay=true, max_labels_count=500)
+// IMPORTANT: Run this script on 1-minute chart only
+// Trading window: 09:30 - 15:30 IST
+//
+// v6.0 changes vs v5.3:
+//  1. deepBreakdownTrigger: relaxed from trendFilterStrict+deadDropFilter
+//     to trendFilterFlexible+sessionBreakdownFilter — catches stocks already
+//     deep in negative MACD territory (the #1 cause of missed losers)
+//  2. rsiWeakness: added oversold escape (rsi < 35) so temporary RSI bounces
+//     at extreme lows don't block real breakdown setups
+//  3. sessionBreakdownFilter: dayChange threshold -0.35 → -0.20 and added
+//     intraday structure fallback for mid-session breakdowns
+//  4. sustainedHistDrop: added 3-bar and 4-bar alternatives alongside 5/6
+//     so brief MACD histogram bounces don't kill the sequence
+//  5. Added TREND_CONTINUATION entry type: fires on stocks already in a
+//     confirmed multi-bar downtrend with RSI < 38, volume ≥ 1.5× avg,
+//     and stock day-change ≤ -0.5% — meant for BAD/NEUTRAL market days
+
+//──────── INPUTS ────────
+emaFast = input.int(9, "EMA Fast")
+emaSlow = input.int(20, "EMA Slow")
+rsiLen = input.int(14, "RSI Length")
+rsiMax = input.float(58.0, "RSI Max Entry (Breakdown)")  // raised 55→58
+macdFast = input.int(12, "MACD Fast")
+macdSlow = input.int(26, "MACD Slow")
+macdSignalLen = input.int(9, "MACD Signal")
+bbLen = input.int(20, "BB Length")
+bbStd = input.float(2.0, "BB StdDev")
+volMaLen = input.int(20, "Volume MA Length")
+volMultiplier = input.float(1.2, "Volume Multiplier")
+niftySymbol = input.symbol("NSE:NIFTY", "NIFTY Symbol")
+histFloor = input.float(0.20, "Histogram Floor Magnitude")
+histBurstMultiplier = input.float(2.0, "Histogram Burst Multiplier")
+deadDropLookback = input.int(30, "Dead Drop Lookback (bars)", minval=10, maxval=60)
+showLabels = input.bool(true, "Show Labels")
+isExpectedTimeframe = timeframe.isminutes and timeframe.multiplier == 1
+
+//──────── CORE INDICATORS ────────
+ema9 = ta.ema(close, emaFast)
+ema20 = ta.ema(close, emaSlow)
+rsi = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignalLen)
+[bbUpper, bbMiddle, bbLower] = ta.bb(close, bbLen, bbStd)
+bbWidth = (bbUpper - bbLower) / bbMiddle * 100
+volMa = ta.sma(volume, volMaLen)
+vwapVal = ta.vwap(hlc3)
+prevDayClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+dayOpen = request.security(syminfo.tickerid, "D", open, barmerge.gaps_off, barmerge.lookahead_off)
+niftyPrevClose = request.security(niftySymbol, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+niftyClose = request.security(niftySymbol, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+niftyChange = niftyPrevClose > 0 ? (niftyClose - niftyPrevClose) / niftyPrevClose * 100 : 0
+dayChange = prevDayClose > 0 ? (close - prevDayClose) / prevDayClose * 100 : na
+
+//──────── TREND FILTER ────────
+macdHistFalling = ta.falling(macdHist, 2)
+emaTrendStrict = ema9 < ema20 and ema20 < ema20[1]
+emaTrendFlexible = ema9 < ema20 or macdHistFalling
+emaResistance = high <= ema9 or close < ema9
+emaSlope = ema9 < ema9[1] and ema9[1] < ema9[2]
+trendFilterStrict = emaTrendStrict and emaResistance and emaSlope
+trendFilterFlexible = emaTrendFlexible and emaResistance and emaSlope
+
+//──────── VOLUME FILTER ────────
+volFilter = volume > volMa * volMultiplier
+
+//──────── RANGE / VOLATILITY FILTERS ────────
+bodySize = math.abs(close - open)
+avgBody = ta.sma(bodySize, 10)
+strongCandle = bodySize > avgBody * 1.2
+
+candleRange = high - low
+avgRange = ta.sma(candleRange, 10)
+rangeExpansion = candleRange > avgRange * 1.3
+
+atr = ta.atr(14)
+atrExpansion = atr > atr[1]
+
+bbAvgWidth = ta.sma(bbWidth, 10)
+bbCompression = bbWidth < bbAvgWidth * 0.8
+bbExpansion = bbWidth > bbWidth[1] and bbWidth[1] >= bbWidth[2] and bbWidth[2] >= bbWidth[3]
+bbFilter = bbCompression or (bbExpansion and close < bbMiddle)
+
+//──────── RSI WEAKNESS FILTER ────────
+// FIX: added oversold escape — at RSI < 35 the stock is already deeply weak;
+// a one-bar RSI bounce at those levels should not block a real breakdown signal.
+rsiFalling = ta.falling(rsi, 2)
+rsiWeakness = (rsi < rsiMax and rsiFalling) or rsi < 35
+
+//──────── MACD HISTOGRAM BREAKDOWN SEQUENCE ────────
+// shift candle: histogram flips from positive to negative
+// confirm candle: negative histogram reaches at least -0.20
+// burst candle: negative histogram doubles the prior candle magnitude
+histShiftPrevBar = macdHist[2] >= 0 and macdHist[1] < 0
+histConfirmCandle1 = macdHist[1] <= -histFloor
+histBurstCandle2 = macdHist < 0 and math.abs(macdHist) >= math.abs(macdHist[1]) * histBurstMultiplier and macdHist < macdHist[1]
+// On 1-minute charts the next bar often opens exactly at the previous close.
+// Allow equality so real breakdown continuation candles are not filtered out.
+priceBurstCandle2 = open <= close[1]
+volumeBurstCandle2 = volume > volMa
+burstSequenceReady = histShiftPrevBar and histConfirmCandle1 and histBurstCandle2 and priceBurstCandle2 and volumeBurstCandle2
+
+// Many real red-session leaders never give a clean positive-to-negative MACD flip intraday.
+// Allow continuation breakdowns once the histogram is already decisively negative.
+// The stricter trend, structure, and sustained-drop gates below still control quality.
+histContinuationCandle2 = macdHist < -histFloor
+continuationVolumeCandle2 = volume > volMa * 0.9
+continuationSequenceReady = histContinuationCandle2 and priceBurstCandle2 and continuationVolumeCandle2
+sequenceReady = burstSequenceReady or continuationSequenceReady
+
+// FIX: added 3-bar and 4-bar alternatives — intraday MACD histograms frequently
+// bounce one bar even in a strong downtrend; requiring 5-6 consecutive bars was
+// blocking real breakdown setups on high-beta stocks.
+histDrop3 = ta.falling(macdHist, 3)
+histDrop4 = ta.falling(macdHist, 4)
+histDrop5 = ta.falling(macdHist, 5)
+histDrop6 = ta.falling(macdHist, 6)
+sustainedHistDrop = (histDrop3 or histDrop4 or histDrop5 or histDrop6) and macdHist < 0
+
+// Preserve telemetry fields similar to the CE script.
+histShiftCandle0 = histShiftPrevBar
+macdLineConfirmCandle1 = macdLine[1] <= macdLine[2] and macdSignal[1] <= macdSignal[2]
+rsiConfirmCandle1 = rsi < rsi[1]
+volumeConfirmCandle1 = volumeBurstCandle2
+emaConfirmCandle1 = priceBurstCandle2
+vwapConfirmCandle1 = histBurstCandle2
+bbConfirmCandle1 = macdHist < -0.05
+priceConfirmCandle1 = priceBurstCandle2
+openWeaknessCandle2 = priceBurstCandle2
+
+// Classify the same burst setup by the MACD regime on the shift candle.
+deepContext = macdLine[1] >= 0 and macdSignal[1] >= 0
+accelerationContext = macdLine[1] < 0 and macdSignal[1] < 0
+neutralBreakdownContext = not deepContext and not accelerationContext
+
+histVelocity = histBurstCandle2
+
+distanceFromEMA = math.abs(close - ema9) / ema9 * 100
+confirmDistanceFromEMA = math.abs(close[1] - ema9[1]) / ema9[1] * 100
+notExtended = distanceFromEMA < 1.5
+confirmNotExtended = confirmDistanceFromEMA < 1.5
+deepReversalSetup = deepContext and sequenceReady
+
+//──────── PRICE STRUCTURE & VWAP FILTER ────────
+lowerHigh = high < high[1] and high[1] <= high[2]
+bearishClose = close < open
+vwapFalling = close < vwapVal and vwapVal < vwapVal[1]
+// FIX: OR-based — need bearishness on at least one dimension, not both simultaneously.
+// Full AND made the condition too brittle when the breakdown candle is a doji.
+priceStructure = (lowerHigh or bearishClose) and vwapFalling
+
+//──────── DEAD-DROP FILTERS ────────
+// Pine cannot verify the next 30 minutes without repainting, so this uses a strict 30-bar non-rising proxy.
+seriesDeadDrop(series) =>
+    enoughBars = not na(series[deadDropLookback])
+    enoughBars and series < series[5] and series[5] <= series[10] and series[10] <= series[15] and series[15] <= series[20] and series[20] <= series[25] and series[25] <= series[deadDropLookback]
+
+vwapDeadDrop = seriesDeadDrop(vwapVal)
+rsiDeadDrop = seriesDeadDrop(rsi)
+emaDeadDrop = seriesDeadDrop(ema9) and seriesDeadDrop(ema20)
+bbDeadDrop = seriesDeadDrop(bbUpper) and bbMiddle < bbMiddle[5] and close <= bbLower * 1.01
+deadDropScore = (vwapDeadDrop ? 1 : 0) + (rsiDeadDrop ? 1 : 0) + (emaDeadDrop ? 1 : 0) + (bbDeadDrop ? 1 : 0)
+deadDropFilter = deadDropScore >= 2
+
+// FIX: lowered dayChange threshold -0.35 → -0.20 so mid-session breakdowns
+// on stocks that opened flat but dropped intraday still qualify.
+// Added intraday MACD structure fallback for cases where day-change is minimal
+// but the stock is clearly in a confirmed intraday downtrend.
+intradayBreakdownStructure = macdHist < -histFloor and emaTrendFlexible and vwapFalling and close < ema20
+sessionBreakdownFilter = deadDropFilter or (dayChange <= -0.20 and vwapFalling and emaTrendFlexible and rsiWeakness) or (intradayBreakdownStructure and rsiWeakness)
+
+//──────── TIME FILTER ────────
+hourIST = hour(time, "Asia/Kolkata")
+minuteIST = minute(time, "Asia/Kolkata")
+inTradeWindow = (hourIST == 9 and minuteIST >= 30) or (hourIST >= 10 and hourIST < 15) or (hourIST == 15 and minuteIST <= 30)
+
+//──────── CONFIDENCE SCORING ────────
+score = 0.0
+score += neutralBreakdownContext ? 20 : 0
+score += histShiftPrevBar ? 20 : 0
+score += histConfirmCandle1 ? 10 : 0
+score += histBurstCandle2 ? 20 : 0
+score += sustainedHistDrop ? 10 : 0
+score += priceBurstCandle2 ? 10 : 0
+score += volumeBurstCandle2 ? 10 : 0
+
+deepScore = 0.0
+deepScore += deepContext ? 20 : 0
+deepScore += histShiftPrevBar ? 20 : 0
+deepScore += histConfirmCandle1 ? 10 : 0
+deepScore += histBurstCandle2 ? 20 : 0
+deepScore += sustainedHistDrop ? 10 : 0
+deepScore += priceBurstCandle2 ? 10 : 0
+deepScore += volumeBurstCandle2 ? 10 : 0
+
+momentumTrendStrict = ema9[1] < ema20[1] and ema20[1] <= ema20[2] and close[1] < ema9[1]
+momentumHistAccel = histShiftCandle0 and histConfirmCandle1 and histVelocity
+momentumRSI = rsi[1] < 50 and rsi[1] < rsi[2]
+momentumVolume = volumeConfirmCandle1
+momentumCandles = close[1] < open[1] and close[1] <= close[2]
+momentumVol = atr[1] >= atr[2] or bbWidth[1] >= bbWidth[2]
+momentumNotExtended = confirmNotExtended and open > bbLower
+
+momentumAccelSetup = accelerationContext and sequenceReady
+
+momScore = 0.0
+momScore += accelerationContext ? 20 : 0
+momScore += histShiftPrevBar ? 20 : 0
+momScore += histConfirmCandle1 ? 10 : 0
+momScore += histBurstCandle2 ? 20 : 0
+momScore += sustainedHistDrop ? 10 : 0
+momScore += priceBurstCandle2 ? 10 : 0
+momScore += volumeBurstCandle2 ? 10 : 0
+
+// TREND_CONTINUATION score: simplified — no sequence required
+contScore = 0.0
+contScore += emaTrendStrict ? 30 : (emaTrendFlexible ? 15 : 0)
+contScore += sustainedHistDrop ? 20 : 0
+contScore += vwapFalling ? 20 : 0
+contScore += rsi < 38 ? 20 : (rsi < rsiMax ? 10 : 0)
+contScore += volume > volMa * 1.5 ? 10 : 0
+
+//──────── ENTRY TRIGGERS ────────
+// Price must be below symbol's day open (avoid bad day losses for PUT)
+priceBelowDayOpen = close < dayOpen
+
+macdBreakdownSetup = neutralBreakdownContext and sequenceReady
+
+// FIX: deepBreakdownTrigger now uses trendFilterFlexible + sessionBreakdownFilter
+// instead of trendFilterStrict + deadDropFilter.
+// Root cause: stocks already in deep negative MACD territory scored 0-1/4 on
+// dead-drop but had perfect EMA/VWAP/RSI breakdown structure — this blocked
+// real losers like TECHM (-2.31%) that had RSI=30, price structure, sustained drop.
+deepBreakdownTrigger = deepReversalSetup and sustainedHistDrop and trendFilterFlexible and rsiWeakness and bbFilter and priceStructure and sessionBreakdownFilter and inTradeWindow and isExpectedTimeframe and priceBelowDayOpen
+
+momentumBreakdownTrigger = momentumAccelSetup and sustainedHistDrop and momentumTrendStrict and momentumHistAccel and momentumRSI and momentumVolume and momentumCandles and momentumVol and momentumNotExtended and sessionBreakdownFilter and inTradeWindow and isExpectedTimeframe and not deepBreakdownTrigger and priceBelowDayOpen
+
+macdBreakdownTrigger = macdBreakdownSetup and sustainedHistDrop and trendFilterFlexible and rsiWeakness and bbFilter and priceStructure and sessionBreakdownFilter and isExpectedTimeframe and not deepBreakdownTrigger and not momentumBreakdownTrigger and priceBelowDayOpen
+
+// TREND_CONTINUATION: fires on stocks already confirmed in a multi-bar downtrend.
+// Guards against false positives on NEUTRAL/GOOD days:
+//   - Per-stock day change must be ≤ -0.5% (confirmed loser for today)
+//   - RSI must be < 38 (stock genuinely oversold / in momentum breakdown)
+//   - Volume ≥ 1.5× average (institutional selling, not just noise)
+//   - EMA trend must be bearish (ema9 < ema20)
+//   - Not firing on any other trigger (no double-counting)
+stockDayLoser = dayChange <= -0.50
+contVolumeStrong = volume > volMa * 1.5
+contRsiOversold = rsi < 38
+trendContinuationTrigger = stockDayLoser and contRsiOversold and contVolumeStrong and emaTrendFlexible and sustainedHistDrop and vwapFalling and priceBelowDayOpen and inTradeWindow and isExpectedTimeframe and not deepBreakdownTrigger and not momentumBreakdownTrigger and not macdBreakdownTrigger
+
+//──────── SIGNAL METRICS ────────
+trend_strength = ema9[1] - ema9
+rsi_expansion = rsi[1] - rsi
+momentum_score = score
+vol_expanding = volFilter ? 1 : 0
+atr_expanding = atrExpansion ? 1 : 0
+hist_accelerating = histVelocity ? 1 : 0
+range_expanding = rangeExpansion ? 1 : 0
+price_extended = notExtended ? 0 : 1
+volume_ratio = volMa > 0 ? volume / volMa : 0.0
+vwap_distance = vwapVal > 0 ? (vwapVal - close) / vwapVal * 100 : 0.0
+ema_spread = ema20 > 0 ? (ema20 - ema9) / ema20 * 100 : 0.0
+atr_pc = close > 0 ? atr / close * 100 : 0.0
+signal_confidence = macdBreakdownTrigger ? math.max(90.0, math.min(100.0, score)) : math.min(100.0, score)
+deep_confidence = deepBreakdownTrigger ? math.max(70.0, math.min(95.0, deepScore)) : math.min(95.0, deepScore)
+mom_confidence = momentumBreakdownTrigger ? math.max(80.0, math.min(90.0, momScore)) : math.min(90.0, momScore)
+cont_confidence = trendContinuationTrigger ? math.max(75.0, math.min(90.0, contScore)) : math.min(90.0, contScore)
+
+marketTrendLabel = niftyChange <= -0.5 ? "BAD" : niftyChange < 0.4 ? "NEUTRAL" : "GOOD"
+
+//──────── ALERT JSON ────────
+format_value(x) => str.tostring(x, format.mintick)
+
+jsonMsg_MACDBreakdown = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"MACD_BREAKDOWN\",\"price\":\"" + format_value(close) + "\",\"score\":\"" + format_value(score) + "\",\"confidence\":\"" + format_value(signal_confidence) + "\",\"market_trend\":\"" + marketTrendLabel + "\",\"trend_strength\":\"" + format_value(trend_strength) + "\",\"momentum_score\":\"" + format_value(momentum_score) + "\",\"rsi_value\":\"" + format_value(rsi) + "\",\"rsi_expansion\":\"" + format_value(rsi_expansion) + "\",\"macd_hist\":\"" + format_value(macdHist) + "\",\"bb_width\":\"" + format_value(bbWidth) + "\",\"day_change\":\"" + format_value(dayChange) + "\",\"vol_expanding\":\"" + str.tostring(vol_expanding) + "\",\"atr_expanding\":\"" + str.tostring(atr_expanding) + "\",\"hist_accelerating\":\"" + str.tostring(hist_accelerating) + "\",\"range_expanding\":\"" + str.tostring(range_expanding) + "\",\"price_extended\":\"" + str.tostring(price_extended) + "\",\"vwap_distance\":\"" + format_value(vwap_distance) + "\",\"volume_ratio\":\"" + format_value(volume_ratio) + "\",\"ema_spread\":\"" + format_value(ema_spread) + "\",\"atr_pc\":\"" + format_value(atr_pc) + "\",\"tv_setup_label\":\"MACD_BREAKDOWN\",\"reentry_context_active\":\"false\",\"nifty50_change\":\"" + format_value(niftyChange) + "\"}"
+
+jsonMsg_DeepBreakdown = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"DEEP_MACD_BREAKDOWN\",\"price\":\"" + format_value(close) + "\",\"score\":\"" + format_value(deepScore) + "\",\"confidence\":\"" + format_value(deep_confidence) + "\",\"market_trend\":\"" + marketTrendLabel + "\",\"trend_strength\":\"" + format_value(trend_strength) + "\",\"momentum_score\":\"" + format_value(deepScore) + "\",\"rsi_value\":\"" + format_value(rsi) + "\",\"rsi_expansion\":\"" + format_value(rsi_expansion) + "\",\"macd_hist\":\"" + format_value(macdHist) + "\",\"bb_width\":\"" + format_value(bbWidth) + "\",\"day_change\":\"" + format_value(dayChange) + "\",\"vol_expanding\":\"" + str.tostring(vol_expanding) + "\",\"atr_expanding\":\"" + str.tostring(atr_expanding) + "\",\"hist_accelerating\":\"" + str.tostring(hist_accelerating) + "\",\"range_expanding\":\"" + str.tostring(range_expanding) + "\",\"price_extended\":\"" + str.tostring(price_extended) + "\",\"vwap_distance\":\"" + format_value(vwap_distance) + "\",\"volume_ratio\":\"" + format_value(volume_ratio) + "\",\"ema_spread\":\"" + format_value(ema_spread) + "\",\"atr_pc\":\"" + format_value(atr_pc) + "\",\"tv_setup_label\":\"DEEP_MACD_BREAKDOWN\",\"reentry_context_active\":\"false\",\"nifty50_change\":\"" + format_value(niftyChange) + "\"}"
+
+jsonMsg_MomentumBreakdown = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"MOMENTUM_BREAKDOWN\",\"price\":\"" + format_value(close) + "\",\"score\":\"" + format_value(momScore) + "\",\"confidence\":\"" + format_value(mom_confidence) + "\",\"market_trend\":\"" + marketTrendLabel + "\",\"trend_strength\":\"" + format_value(trend_strength) + "\",\"momentum_score\":\"" + format_value(momScore) + "\",\"rsi_value\":\"" + format_value(rsi) + "\",\"rsi_expansion\":\"" + format_value(rsi_expansion) + "\",\"macd_hist\":\"" + format_value(macdHist) + "\",\"bb_width\":\"" + format_value(bbWidth) + "\",\"day_change\":\"" + format_value(dayChange) + "\",\"vol_expanding\":\"" + str.tostring(vol_expanding) + "\",\"atr_expanding\":\"" + str.tostring(atr_expanding) + "\",\"hist_accelerating\":\"" + str.tostring(hist_accelerating) + "\",\"range_expanding\":\"" + str.tostring(range_expanding) + "\",\"price_extended\":\"" + str.tostring(price_extended) + "\",\"vwap_distance\":\"" + format_value(vwap_distance) + "\",\"volume_ratio\":\"" + format_value(volume_ratio) + "\",\"ema_spread\":\"" + format_value(ema_spread) + "\",\"atr_pc\":\"" + format_value(atr_pc) + "\",\"tv_setup_label\":\"MOMENTUM_BREAKDOWN\",\"reentry_context_active\":\"false\",\"nifty50_change\":\"" + format_value(niftyChange) + "\"}"
+
+jsonMsg_TrendContinuation = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"TREND_CONTINUATION\",\"price\":\"" + format_value(close) + "\",\"score\":\"" + format_value(contScore) + "\",\"confidence\":\"" + format_value(cont_confidence) + "\",\"market_trend\":\"" + marketTrendLabel + "\",\"trend_strength\":\"" + format_value(trend_strength) + "\",\"momentum_score\":\"" + format_value(contScore) + "\",\"rsi_value\":\"" + format_value(rsi) + "\",\"rsi_expansion\":\"" + format_value(rsi_expansion) + "\",\"macd_hist\":\"" + format_value(macdHist) + "\",\"bb_width\":\"" + format_value(bbWidth) + "\",\"day_change\":\"" + format_value(dayChange) + "\",\"vol_expanding\":\"" + str.tostring(vol_expanding) + "\",\"atr_expanding\":\"" + str.tostring(atr_expanding) + "\",\"hist_accelerating\":\"" + str.tostring(hist_accelerating) + "\",\"range_expanding\":\"" + str.tostring(range_expanding) + "\",\"price_extended\":\"" + str.tostring(price_extended) + "\",\"vwap_distance\":\"" + format_value(vwap_distance) + "\",\"volume_ratio\":\"" + format_value(volume_ratio) + "\",\"ema_spread\":\"" + format_value(ema_spread) + "\",\"atr_pc\":\"" + format_value(atr_pc) + "\",\"tv_setup_label\":\"TREND_CONTINUATION\",\"reentry_context_active\":\"false\",\"nifty50_change\":\"" + format_value(niftyChange) + "\"}"
+
+//──────── ALERT CONDITIONS ────────
+alertcondition(macdBreakdownTrigger, title="MACD Breakdown Entry", message="MACD_BREAKDOWN_ENTRY")
+alertcondition(deepBreakdownTrigger, title="Deep MACD Breakdown Entry", message="DEEP_MACD_BREAKDOWN_ENTRY")
+alertcondition(momentumBreakdownTrigger, title="Momentum Breakdown Entry", message="MOMENTUM_BREAKDOWN_ENTRY")
+alertcondition(trendContinuationTrigger, title="Trend Continuation Entry", message="TREND_CONTINUATION_ENTRY")
+
+if macdBreakdownTrigger
+    alert(jsonMsg_MACDBreakdown, alert.freq_once_per_bar_close)
+if deepBreakdownTrigger
+    alert(jsonMsg_DeepBreakdown, alert.freq_once_per_bar)
+if momentumBreakdownTrigger
+    alert(jsonMsg_MomentumBreakdown, alert.freq_once_per_bar)
+if trendContinuationTrigger
+    alert(jsonMsg_TrendContinuation, alert.freq_once_per_bar_close)
+
+//──────── LABELS ────────
+if showLabels and macdBreakdownTrigger
+    label.new(bar_index, low, "ENTRY\n(MB)\n" + str.tostring(score), style=label.style_label_up, color=color.red, textcolor=color.white, size=size.tiny)
+if showLabels and deepBreakdownTrigger
+    label.new(bar_index, low - 0.5, "ENTRY\n(DMB)\n" + str.tostring(deepScore), style=label.style_label_up, color=color.orange, textcolor=color.white, size=size.tiny)
+if showLabels and momentumBreakdownTrigger
+    label.new(bar_index, low - 1.0, "ENTRY\n(MOM)\n" + str.tostring(momScore), style=label.style_label_up, color=color.maroon, textcolor=color.white, size=size.tiny)
+if showLabels and trendContinuationTrigger
+    label.new(bar_index, low - 1.5, "ENTRY\n(CONT)\n" + str.tostring(contScore), style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.tiny)
+
+plotshape(showLabels and macdBreakdownTrigger, title="ENTRY FLAG - MACD_BREAKDOWN", text="MB", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.tiny)
+plotshape(showLabels and deepBreakdownTrigger, title="ENTRY FLAG - DEEP_MACD_BREAKDOWN", text="DMB", style=shape.labeldown, location=location.abovebar, color=color.orange, textcolor=color.black, size=size.tiny)
+plotshape(showLabels and momentumBreakdownTrigger, title="ENTRY FLAG - MOMENTUM_BREAKDOWN", text="MOM", style=shape.labeldown, location=location.abovebar, color=color.maroon, textcolor=color.white, size=size.tiny)
+plotshape(showLabels and trendContinuationTrigger, title="ENTRY FLAG - TREND_CONTINUATION", text="CONT", style=shape.labeldown, location=location.abovebar, color=color.purple, textcolor=color.white, size=size.tiny)
+
+//──────── PLOTS ────────
+plot(ema9, color=color.yellow, title="EMA9")
+plot(ema20, color=color.orange, title="EMA20")
+plot(bbUpper, color=color.gray, title="BB Upper")
+plot(bbLower, color=color.gray, title="BB Lower")
+bgcolor(not isExpectedTimeframe ? color.new(color.red, 88) : na, title="Use 1-Minute Chart")

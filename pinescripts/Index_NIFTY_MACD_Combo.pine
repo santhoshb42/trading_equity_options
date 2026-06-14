@@ -1,0 +1,176 @@
+//@version=6
+indicator("6.0 Index NIFTY MACD Combo", overlay=true, max_labels_count=500)
+
+// Run on 1-minute index charts. Uses a 4-candle MACD sequence with light structure filters.
+
+referenceIndex = input.symbol("NSE:NIFTY", "Reference Index")
+useChartSymbolTrend = input.bool(true, "Use Current Chart For Trend")
+emaFastLen = input.int(12, "EMA Fast")
+emaSlowLen = input.int(26, "EMA Slow")
+macdFastLen = input.int(12, "MACD Fast")
+macdSlowLen = input.int(26, "MACD Slow")
+macdSignalLen = input.int(9, "MACD Signal")
+rsiLen = input.int(14, "RSI Length")
+adxLen = input.int(14, "ADX Length")
+atrLen = input.int(14, "ATR Length")
+volLen = input.int(20, "Volume MA Length")
+bbLen = input.int(20, "BB Length")
+bbMult = input.float(2.0, "BB Multiplier")
+minAdx = input.float(16.0, "Min ADX")
+minAtrPc = input.float(0.10, "Min ATR %")
+callRsiFloor = input.float(52.0, "Call RSI Floor")
+putRsiCeiling = input.float(48.0, "Put RSI Ceiling")
+callMomentumRsi = input.float(58.0, "Call Momentum RSI")
+putMomentumRsi = input.float(42.0, "Put Momentum RSI")
+minVolumeRatio = input.float(0.95, "Min Volume Ratio")
+maxVwapStretch = input.float(0.45, "Max VWAP Stretch %")
+callHistCandle1Min = input.float(0.10, "CE Hist Candle 1 Min")
+callHistCandle2Factor = input.float(2.0, "CE Hist Candle 2 Factor")
+callHistCandle3Factor = input.float(1.3, "CE Hist Candle 3 Factor")
+putHistCandle1Min = input.float(0.20, "PE Hist Candle 1 Abs Min")
+putHistCandle2Factor = input.float(2.0, "PE Hist Candle 2 Factor")
+enableTradeWindow = input.bool(true, "Use 09:20-15:00 Window")
+showLabels = input.bool(true, "Show Labels")
+isExpectedTimeframe = timeframe.isminutes and timeframe.multiplier == 1
+
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFastLen, macdSlowLen, macdSignalLen)
+[plusDI, minusDI, adx] = ta.dmi(adxLen, adxLen)
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
+vwapVal = ta.vwap(hlc3)
+volMa = ta.sma(volume, volLen)
+[bbBasis, bbUpper, bbLower] = ta.bb(close, bbLen, bbMult)
+
+body = math.abs(close - open)
+barRange = math.max(high - low, 0.0)
+bodyRatio = barRange > 0 ? body / barRange : 0.0
+upperWickRatio = barRange > 0 ? (high - math.max(open, close)) / barRange : 0.0
+lowerWickRatio = barRange > 0 ? (math.min(open, close) - low) / barRange : 0.0
+atrPc = close > 0 ? atr / close * 100.0 : 0.0
+volumeRatio = volMa > 0 ? volume / volMa : 0.0
+vwapDistance = vwapVal > 0 ? (close - vwapVal) / vwapVal * 100.0 : 0.0
+emaSpread = emaSlow != 0 ? (emaFast - emaSlow) / emaSlow * 100.0 : 0.0
+
+symbolText = str.upper(syminfo.ticker)
+isBankNifty = str.contains(symbolText, "BANKNIFTY")
+isFinNifty = str.contains(symbolText, "FINNIFTY")
+isMidcpNifty = str.contains(symbolText, "MIDCPNIFTY")
+isSensex = str.contains(symbolText, "SENSEX")
+
+profileAtrPc = isBankNifty ? math.max(minAtrPc, 0.14) : isFinNifty ? math.max(minAtrPc, 0.12) : isMidcpNifty ? math.max(minAtrPc, 0.12) : isSensex ? math.max(minAtrPc, 0.12) : minAtrPc
+profileVwapStretch = isBankNifty ? math.max(maxVwapStretch, 0.60) : isFinNifty ? math.max(maxVwapStretch, 0.52) : isMidcpNifty ? math.max(maxVwapStretch, 0.55) : isSensex ? math.max(maxVwapStretch, 0.52) : maxVwapStretch
+profileCallRsi = isBankNifty ? math.min(callMomentumRsi, 56.0) : isFinNifty ? math.min(callMomentumRsi, 57.0) : callMomentumRsi
+profilePutRsi = isBankNifty ? math.max(putMomentumRsi, 44.0) : isFinNifty ? math.max(putMomentumRsi, 43.0) : putMomentumRsi
+profileVolumeRatio = isBankNifty ? math.min(minVolumeRatio, 0.90) : isSensex ? math.min(minVolumeRatio, 0.92) : minVolumeRatio
+
+indexClose = useChartSymbolTrend ? close : request.security(referenceIndex, "1", close, barmerge.gaps_off, barmerge.lookahead_off)
+indexPrevClose = useChartSymbolTrend ? request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off) : request.security(referenceIndex, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+indexDayChange = indexPrevClose > 0 ? (indexClose - indexPrevClose) / indexPrevClose * 100.0 : 0.0
+marketTrend = indexDayChange >= 0.35 ? "GOOD" : indexDayChange <= -0.35 ? "BAD" : "NEUTRAL"
+
+hourIST = hour(time, "Asia/Kolkata")
+minuteIST = minute(time, "Asia/Kolkata")
+inTradeWindow = not enableTradeWindow or ((hourIST == 9 and minuteIST >= 20) or (hourIST >= 10 and hourIST < 15))
+
+callTrend = close[1] > emaFast[1] and emaFast[1] > emaSlow[1] and emaFast[1] > emaFast[2]
+putTrend = close < emaFast and emaFast < emaSlow and emaFast < emaFast[1]
+
+// Three closed candles define the setup, and the alert fires on the strong candle-2 close.
+callHistShiftCandle0 = macdHist[2] < 0 and macdHist[1] > 0
+callHistCandle1 = macdHist[1] >= callHistCandle1Min
+callHistCandle2 = macdHist >= macdHist[1] * callHistCandle2Factor
+callMacdGate = macdLine > -8 and macdSignal > -8
+callRsiLead = rsi >= profileCallRsi and rsi > rsi[1]
+callVwapLead = close > vwapVal and vwapVal >= vwapVal[1] and math.abs(vwapDistance) <= profileVwapStretch
+callEmaLead = emaFast > emaSlow and emaFast >= emaFast[1]
+callBbLead = close > bbBasis and bbBasis >= bbBasis[1] and close >= bbUpper * 0.97
+callVolumeLead = volumeRatio >= profileVolumeRatio
+callSequenceReady = callHistShiftCandle0 and callHistCandle1 and callHistCandle2
+
+putHistShiftCandle0 = macdHist[2] > 0 and macdHist[1] < 0
+putHistCandle1 = math.abs(macdHist[1]) >= putHistCandle1Min
+putHistCandle2 = math.abs(macdHist) >= math.abs(macdHist[1]) * putHistCandle2Factor and macdHist < 0
+putMacdGate = macdLine < 8 and macdSignal < 8
+putRsiLead = rsi <= profilePutRsi and rsi < rsi[1]
+putVwapLead = close < vwapVal and vwapVal <= vwapVal[1] and math.abs(vwapDistance) <= profileVwapStretch
+putEmaLead = emaFast < emaSlow and emaFast <= emaFast[1]
+putBbLead = close < bbBasis and bbBasis <= bbBasis[1] and close <= bbLower * 1.03
+putVolumeLead = volumeRatio >= profileVolumeRatio
+putSequenceReady = putHistShiftCandle0 and putHistCandle1 and putHistCandle2
+
+callBase = atrPc >= profileAtrPc and adx >= minAdx and plusDI >= minusDI
+putBase = atrPc >= profileAtrPc and adx >= minAdx and minusDI >= plusDI
+
+callEntry = isExpectedTimeframe and inTradeWindow and callBase and callSequenceReady and callMacdGate and callRsiLead and callVwapLead and callEmaLead and callBbLead and callVolumeLead
+putEntry = isExpectedTimeframe and inTradeWindow and putBase and putSequenceReady and putMacdGate and putRsiLead and putVwapLead and putEmaLead and putBbLead and putVolumeLead
+
+callEntryType = "DEEP_MACD_REVERSAL"
+putEntryType = "DEEP_MACD_REVERSAL"
+callSetupLabel = "INDEX_CALL_DEEP_MACD_REVERSAL"
+putSetupLabel = "INDEX_PUT_DEEP_MACD_REVERSAL"
+
+callScore = 0.0
+callScore += callHistShiftCandle0 ? 18 : 0
+callScore += callHistCandle1 ? 12 : 0
+callScore += callHistCandle2 ? 16 : 0
+callScore += callHistCandle2 ? 18 : 0
+callScore += callMacdGate ? 8 : 0
+callScore += callRsiLead ? 10 : 0
+callScore += callVwapLead ? 6 : 0
+callScore += callEmaLead ? 6 : 0
+callScore += callBbLead ? 6 : 0
+callScore += callVolumeLead ? 6 : 0
+
+putScore = 0.0
+putScore += putHistShiftCandle0 ? 18 : 0
+putScore += putHistCandle1 ? 12 : 0
+putScore += putHistCandle2 ? 16 : 0
+putScore += putHistCandle2 ? 18 : 0
+putScore += putMacdGate ? 8 : 0
+putScore += putRsiLead ? 10 : 0
+putScore += putVwapLead ? 6 : 0
+putScore += putEmaLead ? 6 : 0
+putScore += putBbLead ? 6 : 0
+putScore += putVolumeLead ? 6 : 0
+
+callConfidence = callEntry ? math.max(72.0, math.min(92.0, callScore)) : 0.0
+putConfidence = putEntry ? math.max(72.0, math.min(92.0, putScore)) : 0.0
+
+fmt(x) => str.tostring(x, format.mintick)
+
+signalPrice = close
+signalRsi = rsi
+signalRsiExpansion = rsi - rsi[1]
+signalCallHist = macdHist
+signalPutHist = math.abs(macdHist)
+signalDayChange = indexDayChange
+signalCallVwapDistance = vwapDistance
+signalPutVwapDistance = math.abs(vwapDistance)
+signalVolumeRatio = volumeRatio
+signalCallEmaSpread = emaSlow != 0 ? (emaFast - emaSlow) / emaSlow * 100.0 : 0.0
+signalPutEmaSpread = math.abs(signalCallEmaSpread)
+signalAtrPc = atrPc
+signalAdx = adx
+
+callJson = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"option_side\":\"CE\",\"entry_type\":\"" + callEntryType + "\",\"price\":\"" + fmt(signalPrice) + "\",\"score\":\"" + fmt(callScore) + "\",\"confidence\":\"" + fmt(callConfidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(signalCallEmaSpread) + "\",\"momentum_score\":\"" + fmt(math.max(signalCallVwapDistance, 0)) + "\",\"rsi_value\":\"" + fmt(signalRsi) + "\",\"rsi_expansion\":\"" + fmt(signalRsiExpansion) + "\",\"macd_hist\":\"" + fmt(signalCallHist) + "\",\"day_change\":\"" + fmt(signalDayChange) + "\",\"vwap_distance\":\"" + fmt(signalCallVwapDistance) + "\",\"volume_ratio\":\"" + fmt(signalVolumeRatio) + "\",\"ema_spread\":\"" + fmt(signalCallEmaSpread) + "\",\"atr_pc\":\"" + fmt(signalAtrPc) + "\",\"adx\":\"" + fmt(signalAdx) + "\",\"tv_setup_label\":\"" + callSetupLabel + "\",\"reentry_context_active\":\"false\"}"
+
+putJson = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY_PUT\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"" + putEntryType + "\",\"price\":\"" + fmt(signalPrice) + "\",\"score\":\"" + fmt(putScore) + "\",\"confidence\":\"" + fmt(putConfidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(signalPutEmaSpread) + "\",\"momentum_score\":\"" + fmt(signalPutVwapDistance) + "\",\"rsi_value\":\"" + fmt(signalRsi) + "\",\"rsi_expansion\":\"" + fmt(rsi[2] - rsi[1]) + "\",\"macd_hist\":\"" + fmt(signalPutHist) + "\",\"day_change\":\"" + fmt(signalDayChange) + "\",\"vwap_distance\":\"" + fmt(signalPutVwapDistance) + "\",\"volume_ratio\":\"" + fmt(signalVolumeRatio) + "\",\"ema_spread\":\"" + fmt(signalPutEmaSpread) + "\",\"atr_pc\":\"" + fmt(signalAtrPc) + "\",\"adx\":\"" + fmt(signalAdx) + "\",\"tv_setup_label\":\"" + putSetupLabel + "\",\"reentry_context_active\":\"false\"}"
+
+if callEntry
+    alert(callJson, alert.freq_once_per_bar_close)
+
+if putEntry
+    alert(putJson, alert.freq_once_per_bar_close)
+
+if showLabels and callEntry
+    label.new(bar_index, low, "INDEX CE\nDMR", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+
+if showLabels and putEntry
+    label.new(bar_index, high, "INDEX PE\nDMR", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+plot(emaFast, color=color.yellow, title="EMA Fast")
+plot(emaSlow, color=color.orange, title="EMA Slow")
+plot(vwapVal, color=color.blue, title="VWAP")
+bgcolor(not isExpectedTimeframe ? color.new(color.red, 88) : na, title="Use 1-Minute Chart")

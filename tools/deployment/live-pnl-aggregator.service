@@ -1,0 +1,25 @@
+[Unit]
+Description=Live P&L Aggregator (all 4 bots → live_pnl/)
+After=network.target ce-otm.service ce-itm.service pe-otm.service pe-itm.service
+Wants=ce-otm.service ce-itm.service pe-otm.service pe-itm.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading
+ExecStart=/usr/bin/python3 /root/santhosh/trading/tools/live_pnl_aggregator.py
+
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=live-pnl-agg
+
+SuccessExitStatus=0 1 SIGTERM SIGKILL
+
+[Install]
+WantedBy=multi-user.target

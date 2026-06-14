@@ -1,0 +1,550 @@
+"""
+Options Signal Validation
+
+Validates TradingView alerts for options trading:
+- Strike selection (ATM vs OTM)
+- IV conditions (percentile thresholds)
+- Greeks constraints
+- Expiry window validation
+- Directional signal mapping (BUY_PUT→Long PE)
+"""
+
+import json
+import os
+import re
+from datetime import datetime
+from typing import Dict, Any, Optional, Tuple
+from pathlib import Path
+import threading
+
+from .optconfig import OptionsTradingConfig
+from .optlogging import logger, log_event, log_signal_validation
+from .fake_move_detector import get_fake_move_detector
+from .pe_extractor import get_pe_extractor
+
+# =============================================================================
+# Options Signal Validator
+# =============================================================================
+
+class OptionsSignalValidator:
+    """Validates and processes TradingView alerts for options trading"""
+
+    _reentry_lock = threading.RLock()
+    _last_alert_by_key: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _normalize_entry_type(entry_type: str) -> str:
+        """Map TradingView PUT setup labels into the validator's quality buckets."""
+        normalized = str(entry_type or '').upper().strip()
+        if normalized in {'MACD_BREAKDOWN', 'DEEP_MACD_BREAKDOWN'}:
+            return 'PRE_FALL'
+        if normalized in {'MOMENTUM_BREAKDOWN', 'TREND_CONTINUATION'}:
+            return 'MOMENTUM'
+        return normalized
+
+    @staticmethod
+    def _min_quality_for_entry_type(entry_type: str) -> float:
+        normalized = str(entry_type or '').upper().strip()
+        bucket = OptionsSignalValidator._normalize_entry_type(normalized)
+        if normalized == 'MACD_BREAKDOWN':
+            return OptionsTradingConfig.MIN_CONFIDENCE_MACD_BREAKDOWN
+        if normalized == 'DEEP_MACD_BREAKDOWN':
+            return OptionsTradingConfig.MIN_CONFIDENCE_DEEP_MACD_BREAKDOWN
+        if normalized == 'MOMENTUM_BREAKDOWN':
+            return OptionsTradingConfig.MIN_CONFIDENCE_MOMENTUM_BREAKDOWN
+        if normalized == 'TREND_CONTINUATION':
+            return OptionsTradingConfig.MIN_CONFIDENCE_TREND_CONTINUATION
+        normalized = bucket
+        if normalized == 'PRE_FALL':
+            return OptionsTradingConfig.MIN_CONFIDENCE_PRE_FALL
+        if normalized == 'PULLUP':
+            return OptionsTradingConfig.MIN_CONFIDENCE_PULLUP
+        if normalized == 'MOMENTUM':
+            return OptionsTradingConfig.MIN_CONFIDENCE_MOMENTUM
+        return OptionsTradingConfig.MIN_CONFIDENCE
+
+    @staticmethod
+    def _has_supported_exchange_prefix(symbol: str) -> bool:
+        """Allow bare symbols or explicit NSE-prefixed cash symbols only."""
+        clean_symbol = str(symbol or '').upper().strip()
+        return ':' not in clean_symbol or clean_symbol.startswith('NSE:')
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        """Parse optional numeric fields without forcing missing values to 0."""
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_normalized_put_alert(alert: Dict[str, Any]) -> bool:
+        """Return True for payloads explicitly normalized for the PUT bot."""
+        original_action = str(alert.get('original_action', '')).upper()
+        option_side = str(alert.get('option_side', '')).upper()
+        return original_action == 'BUY_PUT' or option_side == 'PE'
+
+    @staticmethod
+    def _normalize_alert_symbol(symbol: str) -> str:
+        """Normalize TradingView symbols for the NSE alert format."""
+        clean_symbol = str(symbol or '').upper().strip()
+        if clean_symbol.startswith('NSE:'):
+            clean_symbol = clean_symbol[4:]
+        if clean_symbol.endswith('-EQ'):
+            clean_symbol = clean_symbol[:-3]
+        return clean_symbol.strip()
+
+    @staticmethod
+    def _is_reentry_setup(entry_type: str, setup_sequence: Optional[int], tv_trigger_flag: str = '') -> bool:
+        normalized_flag = str(tv_trigger_flag or '').upper().strip()
+        if normalized_flag:
+            return normalized_flag == 'REENTRY'
+        normalized = OptionsSignalValidator._normalize_entry_type(entry_type)
+        if normalized not in {'PULLUP', 'PRE_FALL'}:
+            return False
+        return (setup_sequence or 0) >= 2
+
+    @classmethod
+    def _get_previous_alert(cls, underlying: str, entry_type: str) -> Optional[Dict[str, Any]]:
+        key = f"{underlying}:{str(entry_type or '').upper().strip()}"
+        with cls._reentry_lock:
+            return dict(cls._last_alert_by_key.get(key, {})) if key in cls._last_alert_by_key else None
+
+    @classmethod
+    def _record_alert(cls, underlying: str, entry_type: str, alert_price: float, setup_sequence: Optional[int]) -> None:
+        key = f"{underlying}:{str(entry_type or '').upper().strip()}"
+        payload = {
+            'alert_price': float(alert_price or 0.0),
+            'setup_sequence': int(setup_sequence or 0),
+            'recorded_at': datetime.now().isoformat(),
+        }
+        with cls._reentry_lock:
+            cls._last_alert_by_key[key] = payload
+    
+    @staticmethod
+    def validate_options_signal(alert: Dict[str, Any]) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """
+        Validate options trading signal from TradingView alert.
+        
+        Returns: (is_valid, message, processed_signal)
+        """
+        try:
+            # Extract basic fields
+            raw_symbol = str(alert.get('symbol', ''))
+            symbol = OptionsSignalValidator._normalize_alert_symbol(raw_symbol)
+            raw_action = alert.get('action', '').upper()
+            action = OptionsSignalValidator._normalize_alert_action(raw_action)
+            entry_type = str(alert.get('entry_type', '') or '').upper()
+            confidence_value = OptionsSignalValidator._safe_float(alert.get('confidence'))
+            score_value = OptionsSignalValidator._safe_float(alert.get('score'))
+            alert_price = OptionsSignalValidator._safe_float(alert.get('price')) or 0.0
+            day_change = OptionsSignalValidator._safe_float(alert.get('day_change')) or 0.0
+            try:
+                setup_sequence = int(float(alert.get('setup_sequence', 0) or 0))
+            except (TypeError, ValueError):
+                setup_sequence = 0
+            tv_trigger_flag = str(alert.get('tv_trigger_flag', '') or '').upper()
+            tv_setup_label = str(alert.get('tv_setup_label', '') or '')
+            reentry_context_active = str(alert.get('reentry_context_active', 'false')).lower() == 'true'
+
+            # PUT alerts from the router may not carry explicit confidence/score even
+            # when they are valid strategy outputs. Treat those as passing the quality
+            # gate only for explicit PUT payloads, then let downstream filters decide.
+            if confidence_value is None and score_value is None and OptionsSignalValidator._is_normalized_put_alert(alert):
+                confidence = OptionsTradingConfig.MIN_CONFIDENCE
+                score = OptionsTradingConfig.MIN_CONFIDENCE
+                logger.info(
+                    f"SIGNAL_VALIDATE: QUALITY_FALLBACK | symbol={symbol} | "
+                    f"raw_action={raw_action} | using min_quality={confidence}%"
+                )
+            else:
+                confidence = confidence_value if confidence_value is not None else 0.0
+                # Use score if provided, otherwise use confidence as fallback
+                score = score_value if score_value is not None else confidence
+            verdict = alert.get('verdict', 0)
+            
+            logger.debug(
+                f"SIGNAL_VALIDATE: START | symbol={symbol} | raw_action={raw_action} | "
+                f"normalized_action={action} | conf={confidence}% | score={score}"
+            )
+            
+            # Validation 1: Symbol and action
+            if not symbol or action not in ['BUY', 'SELL']:
+                message = "Invalid symbol or action"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={raw_action}")
+                log_signal_validation(symbol, False, message, action=raw_action)
+                return False, message, None
+
+            if not OptionsSignalValidator._has_supported_exchange_prefix(raw_symbol):
+                message = f"Unsupported exchange prefix in symbol '{raw_symbol}' - NSE only"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message}")
+                log_signal_validation(symbol, False, message, action=raw_action)
+                return False, message, None
+            
+            # Validation 1B: PE only - raw BUY is a CE trade and must be rejected
+            if raw_action == 'BUY':
+                message = f"PE only strategy: BUY action (CE) rejected"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol} | action={raw_action}")
+                log_signal_validation(symbol, False, message, action=raw_action)
+                return False, message, None
+            
+            # Validation 2: Signal quality thresholds - use combined confidence/score check
+            # If confidence is above threshold, accept (can override low score from external tools)
+            # If both are low, reject
+            signal_quality = max(confidence, score)
+            min_quality = OptionsSignalValidator._min_quality_for_entry_type(entry_type)
+            if signal_quality < min_quality:
+                message = f"Low signal quality: {signal_quality}% < {min_quality}%"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                log_signal_validation(symbol, False, "Low signal quality", confidence=confidence, score=score, min_quality=min_quality, entry_type=entry_type)
+                return False, message, None
+            
+            logger.debug(f"SIGNAL_VALIDATE: QUALITY_OK | symbol={symbol} | conf={confidence}% | score={score}")
+            
+            # Validation 4: Underlying availability
+            underlying = OptionsSignalValidator._derive_underlying(symbol)
+            if underlying is None:
+                message = f"Symbol '{symbol}' is not supported (no F&O options available)"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                log_signal_validation(symbol, False, "Unsupported symbol", underlying=underlying)
+                return False, message, None
+            
+            # Dynamic validation: Accept ALL F&O symbols
+            # The CE extractor will determine if options exist when generating the chain
+            SUPPORTED_INDICES = OptionsTradingConfig.UNDERLYING_INDEXES
+            
+            # Log the mapping if it's an equity symbol
+            if underlying not in SUPPORTED_INDICES:
+                logger.info(f"SIGNAL_VALIDATE: EQUITY_SYMBOL | symbol={symbol} → underlying={underlying} | will check F&O availability dynamically")
+            
+            logger.debug(f"SIGNAL_VALIDATE: UNDERLYING_OK | symbol={symbol} | underlying={underlying}")
+
+            reentry_allowed = os.getenv('PUT_OPTIONS_REENTRY_ALLOWED', 'false').lower() == 'true'
+            is_reentry_setup = OptionsSignalValidator._is_reentry_setup(entry_type, setup_sequence, tv_trigger_flag)
+            if is_reentry_setup and not reentry_allowed:
+                message = (
+                    f"PUT re-entry disabled by PUT_OPTIONS_REENTRY_ALLOWED | "
+                    f"entry_type={entry_type} | setup_sequence={setup_sequence}"
+                )
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                log_signal_validation(symbol, False, message, action=raw_action, underlying=underlying)
+                return False, message, None
+
+            if is_reentry_setup:
+                previous_alert = OptionsSignalValidator._get_previous_alert(underlying, entry_type)
+                min_reentry_price_step_pct = float(os.getenv('PUT_OPTIONS_REENTRY_MIN_ALERT_STEP_PCT', '1.0'))
+                if alert_price <= 0:
+                    message = f"PUT re-entry requires valid alert price | entry_type={entry_type}"
+                    logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                    log_signal_validation(symbol, False, message, action=raw_action, underlying=underlying)
+                    return False, message, None
+                if not previous_alert or float(previous_alert.get('alert_price', 0) or 0) <= 0:
+                    message = (
+                        f"PUT re-entry missing prior alert baseline | entry_type={entry_type} | "
+                        f"setup_sequence={setup_sequence}"
+                    )
+                    logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                    log_signal_validation(symbol, False, message, action=raw_action, underlying=underlying)
+                    return False, message, None
+
+                previous_alert_price = float(previous_alert.get('alert_price', 0) or 0)
+                max_allowed_price = previous_alert_price * (1 - min_reentry_price_step_pct / 100.0)
+                if alert_price > max_allowed_price:
+                    message = (
+                        f"PUT re-entry alert price ₹{alert_price:.2f} > prior alert ₹{previous_alert_price:.2f} "
+                        f"- {min_reentry_price_step_pct:.1f}%"
+                    )
+                    logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                    log_signal_validation(symbol, False, message, action=raw_action, underlying=underlying)
+                    return False, message, None
+            
+            # Validation 5: IV conditions (mock check - in production would fetch live IV)
+            iv_check, iv_message = OptionsSignalValidator._check_iv_conditions(underlying)
+            if not iv_check:
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {iv_message} | symbol={symbol} | underlying={underlying}")
+                log_signal_validation(symbol, False, "IV conditions failed", underlying=underlying, reason=iv_message)
+                return False, iv_message, None
+            
+            logger.debug(f"SIGNAL_VALIDATE: IV_OK | symbol={symbol} | {iv_message}")
+            
+            # Validation 6: Fake move detection (optional - only if required fields provided)
+            volume = float(alert.get('volume', 0))
+            price_change = float(alert.get('price_change_percent', 0))
+            
+            if volume > 0 and price_change != 0:
+                fake_move_detector = get_fake_move_detector()
+                
+                # Extract optional fields for deeper fake move checking
+                bid_price = float(alert.get('bid_price', 0)) if 'bid_price' in alert else None
+                ask_price = float(alert.get('ask_price', 0)) if 'ask_price' in alert else None
+                avg_spread = float(alert.get('avg_spread', 0)) if 'avg_spread' in alert else None
+                bid_volume = float(alert.get('bid_volume', 0)) if 'bid_volume' in alert else None
+                ask_volume = float(alert.get('ask_volume', 0)) if 'ask_volume' in alert else None
+                pcr_ratio = float(alert.get('pcr_ratio', 0)) if 'pcr_ratio' in alert else None
+                
+                is_valid, adjusted_confidence, rejection_reasons = fake_move_detector.validate_entry_signal(
+                    symbol=symbol,
+                    action=action,
+                    confidence=confidence,
+                    volume=volume,
+                    price_change_percent=price_change,
+                    candle_direction='UP' if action == 'BUY' else 'DOWN',
+                    bid_price=bid_price,
+                    ask_price=ask_price,
+                    avg_spread=avg_spread,
+                    bid_volume=bid_volume,
+                    ask_volume=ask_volume,
+                    pcr_ratio=pcr_ratio
+                )
+                
+                if not is_valid:
+                    message = f"Fake move detected: {'; '.join(rejection_reasons)}"
+                    logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                    log_signal_validation(symbol, False, "Fake move detected", 
+                                        reasons=rejection_reasons, 
+                                        confidence=confidence,
+                                        volume=volume,
+                                        price_change=price_change)
+                    return False, message, None
+                
+                # Update confidence if adjusted
+                if adjusted_confidence != confidence:
+                    logger.info(f"SIGNAL_VALIDATE: CONFIDENCE_ADJUSTED | {symbol} | {confidence:.1f}% → {adjusted_confidence:.1f}%")
+                    confidence = adjusted_confidence
+            
+            # Build processed signal for options
+            # 🔧 FIX: Respect explicit contract_type from alert if provided, else derive from action
+            alert_contract_type = alert.get('contract_type', '').upper()
+            if alert_contract_type and alert_contract_type != 'PE':
+                message = f"PE only strategy: contract_type {alert_contract_type} rejected"
+                logger.warning(f"SIGNAL_VALIDATE: REJECTED | {message} | symbol={symbol}")
+                log_signal_validation(symbol, False, message, action=raw_action, contract_type=alert_contract_type)
+                return False, message, None
+
+            recommended_contract = 'PE'
+            if alert_contract_type == 'PE':
+                logger.debug(f"SIGNAL_VALIDATE: CONTRACT_TYPE_FROM_ALERT | symbol={symbol} | contract=PE")
+            else:
+                logger.debug(f"SIGNAL_VALIDATE: CONTRACT_TYPE_FORCED | symbol={symbol} | action={action} | contract=PE")
+            
+            processed_signal = {
+                'underlying': underlying,
+                'action': action,  # Internal directional action: SELL means bearish PE setup
+                'original_action': raw_action,
+                'execution_action': 'BUY',
+                'symbol': symbol,  # Original symbol from alert
+                'confidence': confidence,
+                'score': score,
+                'verdict': verdict,
+                'timestamp': datetime.now().isoformat(),
+                'strike_offset': OptionsTradingConfig.STRIKE_OFFSET,  # Use config offset
+                'iv_percentile': OptionsSignalValidator._get_iv_percentile(underlying),
+                'recommended_contract': recommended_contract,
+                'entry_type': entry_type,
+                'alert_price': alert_price,
+                'day_change': day_change,
+                'setup_sequence': setup_sequence,
+                'is_reentry_setup': is_reentry_setup,
+                'tv_trigger_flag': tv_trigger_flag,
+                'tv_setup_label': tv_setup_label,
+                'reentry_context_active': reentry_context_active,
+            }
+
+            if action == 'SELL' and alert_price > 0:
+                OptionsSignalValidator._record_alert(underlying, entry_type, alert_price, setup_sequence)
+            
+            logger.info(f"SIGNAL_VALIDATE: PASSED | symbol={symbol} | action={action} | contract={processed_signal['recommended_contract']} | iv={processed_signal['iv_percentile']:.1f}%")
+            log_signal_validation(
+                symbol, True, "Signal validation passed",
+                action=raw_action,
+                underlying=underlying,
+                confidence=confidence,
+                score=score,
+                contract_type=processed_signal['recommended_contract']
+            )
+            
+            return True, "Options signal valid", processed_signal
+        
+        except Exception as e:
+            message = f"Validation error: {str(e)}"
+            logger.error(f"SIGNAL_VALIDATE: ERROR | {message}", exc_info=True)
+            log_signal_validation(alert.get('symbol', 'UNKNOWN'), False, "Exception in validation", error=str(e))
+            return False, message, None
+    
+    @staticmethod
+    def _derive_underlying(symbol: str) -> Optional[str]:
+        """
+        Derive underlying from symbol.
+        
+        If symbol is an index (BANKNIFTY, NIFTY, FINNIFTY), use it directly.
+        If symbol is an equity stock with F&O, map it to its symbol.
+        Returns None if symbol cannot be mapped.
+        """
+        symbol_upper = OptionsSignalValidator._normalize_alert_symbol(symbol)
+
+        # TradingView -> AngelOne F&O symbol remaps.
+        TV_SYMBOL_REMAP = {
+            'BAJAJ_AUTO': 'BAJAJ-AUTO',
+            'M_M': 'M&M',
+            'M_MFIN': 'M&MFIN',
+        }
+        if symbol_upper in TV_SYMBOL_REMAP:
+            symbol_upper = TV_SYMBOL_REMAP[symbol_upper]
+        
+        # Check if it's already a supported index.
+        # Match the longest configured underlyings first so NIFTYNXT50 does not collapse to NIFTY.
+        for underlying in sorted(OptionsTradingConfig.UNDERLYING_INDEXES, key=len, reverse=True):
+            if re.search(rf'{re.escape(underlying)}(?:$|[^A-Z]|\d)', symbol_upper):
+                return underlying
+        
+        # Accept ALL symbols as potential F&O stocks
+        # The broker will determine if options are available during chain fetch
+        # Return the symbol itself for equity stocks with potential F&O
+        return symbol_upper  # Return symbol itself (e.g., ASIANPAINT, GLENMARK, etc.)
+    
+    @staticmethod
+    def _check_iv_conditions(underlying: str) -> Tuple[bool, str]:
+        """
+        Check if IV percentile is within acceptable range.
+        In production: fetch live IV percentile from broker/options chain.
+        """
+        # Mock IV check - in production would fetch from angelone_options.py
+        # For now: assume IV is always acceptable
+        return True, "IV conditions acceptable"
+    
+    @staticmethod
+    def _get_iv_percentile(underlying: str) -> float:
+        """
+        Get IV percentile for underlying.
+        Mock implementation - returns middle of range.
+        """
+        min_iv = OptionsTradingConfig.IV_PERCENTILE_MIN
+        max_iv = OptionsTradingConfig.IV_PERCENTILE_MAX
+        return (min_iv + max_iv) / 2
+    
+    @staticmethod
+    def _get_contract_type(action: str) -> str:
+        """Map action to contract type"""
+        if action == "BUY":
+            return "CE"  # Call (bullish)
+        else:  # SELL
+            return "PE"  # Put (bearish)
+
+    @staticmethod
+    def _normalize_alert_action(action: str) -> str:
+        """Normalize TradingView PUT payloads to the internal bearish signal convention."""
+        action_upper = action.upper().strip()
+        if action_upper == "BUY_PUT":
+            return "SELL"
+        return action_upper
+    
+    @staticmethod
+    def check_greeks_constraints(greeks: Dict[str, float]) -> Tuple[bool, str]:
+        """Check if greeks are within acceptable constraints"""
+        delta = abs(greeks.get('delta', 0.5))
+        gamma = abs(greeks.get('gamma', 0.05))
+        
+        logger.debug(f"GREEKS_CHECK: START | delta={delta:.3f} | gamma={gamma:.4f}")
+        
+        if delta > OptionsTradingConfig.MAX_DELTA:
+            message = f"Delta {delta} exceeds max {OptionsTradingConfig.MAX_DELTA}"
+            logger.warning(f"GREEKS_CHECK: REJECTED | {message}")
+            return False, message
+        
+        logger.debug(f"GREEKS_CHECK: DELTA_OK | delta={delta:.3f} <= {OptionsTradingConfig.MAX_DELTA}")
+        
+        if gamma > OptionsTradingConfig.MAX_GAMMA:
+            message = f"Gamma {gamma} exceeds max {OptionsTradingConfig.MAX_GAMMA}"
+            logger.warning(f"GREEKS_CHECK: REJECTED | {message}")
+            return False, message
+        
+        logger.debug(f"GREEKS_CHECK: GAMMA_OK | gamma={gamma:.4f} <= {OptionsTradingConfig.MAX_GAMMA}")
+        logger.info(f"GREEKS_CHECK: PASSED | delta={delta:.3f} | gamma={gamma:.4f}")
+        
+        return True, "Greeks acceptable"
+    
+    @staticmethod
+    def check_expiry_validity(days_to_expiry: int) -> Tuple[bool, str]:
+        """Check if expiry is valid for trading"""
+        logger.debug(f"EXPIRY_CHECK: START | days_to_expiry={days_to_expiry}")
+        
+        # Reject only already-expired contracts. Expiry-day entries are allowed.
+        if days_to_expiry < 0:
+            message = "Option already expired"
+            logger.warning(f"EXPIRY_CHECK: REJECTED | {message} | days={days_to_expiry}")
+            return False, message
+        
+        logger.debug(f"EXPIRY_CHECK: DURATION_OK | days={days_to_expiry} >= 0")
+        
+        # Also avoid very long-term (monthly if we prefer weekly)
+        if OptionsTradingConfig.PREFER_WEEKLY and days_to_expiry > 14:
+            message = "Expiry too far - prefer weekly contracts"
+            logger.warning(f"EXPIRY_CHECK: REJECTED | {message} | days={days_to_expiry}")
+            return False, message
+        
+        logger.info(f"EXPIRY_CHECK: PASSED | days_to_expiry={days_to_expiry}")
+        
+        return True, "Expiry valid"
+
+# =============================================================================
+# Signal Quality Filter for Options
+# =============================================================================
+
+class OptionsSignalQualityFilter:
+    """Tracks and reports on options signal validation quality"""
+    
+    def __init__(self):
+        self.total_signals = 0
+        self.passed = 0
+        self.failed_by_reason = {}
+        self.processed_signals = []
+        logger.debug(f"SIGNAL_FILTER: INITIALIZED | filter ready")
+    
+    def validate(self, alert: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Validate alert and track statistics
+        
+        Returns: (is_valid, processed_signal_or_none, reason_on_rejection)
+        """
+        self.total_signals += 1
+        
+        logger.debug(f"SIGNAL_FILTER: VALIDATE | total={self.total_signals} | symbol={alert.get('symbol', 'UNKNOWN')}")
+        
+        is_valid, message, processed_signal = OptionsSignalValidator.validate_options_signal(alert)
+        
+        if is_valid:
+            self.passed += 1
+            self.processed_signals.append(processed_signal)
+            logger.debug(f"SIGNAL_FILTER: PASSED | passed={self.passed}/{self.total_signals} | pass_rate={(self.passed/self.total_signals*100):.1f}%")
+            return True, processed_signal, None
+        else:
+            reason = message.split(':')[0] if ':' in message else message
+            self.failed_by_reason[reason] = self.failed_by_reason.get(reason, 0) + 1
+            logger.debug(f"SIGNAL_FILTER: REJECTED | failed={self.total_signals - self.passed} | reason={reason} | message={message}")
+            return False, None, message
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get validation statistics"""
+        stats = {
+            'total_signals': self.total_signals,
+            'passed': self.passed,
+            'failed': self.total_signals - self.passed,
+            'pass_rate': (self.passed / self.total_signals * 100) if self.total_signals > 0 else 0,
+            'failed_by_reason': self.failed_by_reason
+        }
+        logger.info(f"SIGNAL_FILTER: STATS | total={stats['total_signals']} | passed={stats['passed']} | failed={stats['failed']} | pass_rate={stats['pass_rate']:.1f}%")
+        return stats
+
+# =============================================================================
+# Global validator instance
+# =============================================================================
+
+_options_signal_filter = None
+
+def get_options_signal_filter() -> OptionsSignalQualityFilter:
+    """Get or create signal filter instance"""
+    global _options_signal_filter
+    if _options_signal_filter is None:
+        _options_signal_filter = OptionsSignalQualityFilter()
+    return _options_signal_filter
