@@ -2687,6 +2687,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
 
         if OptionsTradingConfig.TRADING_MODE == "LIVE" and state.get('broker'):
             logger.info(f"BUY_CONFIRMATION: WAITING | {selected_contract.symbol} | order_id={order_id} | timeout=30s")
+            _bc_t0 = time.monotonic()  # LIVE order→fill latency (PAPER never exercises this)
             confirmed = state['broker'].wait_for_buy_confirmation(selected_contract.symbol, timeout=30, order_id=order_id)
             if not confirmed:
                 order_status = state['broker'].get_order_status(order_id) or {}
@@ -2709,18 +2710,34 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     }
                 logger.warning(f"BUY_CONFIRMATION: STATUS_RECOVERED_AS_FILLED | {selected_contract.symbol} | order_id={order_id}")
 
+            _buy_confirm_ms = (time.monotonic() - _bc_t0) * 1000.0
             fill_status = state['broker'].get_order_status(order_id) or {}
             fill_price = float(fill_status.get('average_price') or 0.0)
             if fill_price > 0:
                 actual_entry_premium = fill_price
+                # Real LIVE execution slippage: actual fill vs the price we tried to buy at,
+                # and vs the LTP at decision-time (the slippage that historically bled PnL).
+                _exec_slip = ((actual_entry_premium - pricing_premium) / pricing_premium * 100.0) if pricing_premium else 0.0
+                _dec_ltp = float(getattr(selected_contract, 'ltp', 0.0) or 0.0)
+                _ltp_slip = ((actual_entry_premium - _dec_ltp) / _dec_ltp * 100.0) if _dec_ltp else 0.0
                 logger.info(
                     f"BUY_CONFIRMATION: FILL_PRICE_CAPTURED | {selected_contract.symbol} | "
-                    f"order_id={order_id} | broker_avg=₹{actual_entry_premium:.2f} | order_price=₹{pricing_premium:.2f}"
+                    f"order_id={order_id} | broker_avg=₹{actual_entry_premium:.2f} | order_price=₹{pricing_premium:.2f} "
+                    f"| decision_ltp=₹{_dec_ltp:.2f} | exec_slippage={_exec_slip:+.2f}% | ltp_slippage={_ltp_slip:+.2f}% "
+                    f"| confirm_ms={_buy_confirm_ms:.0f}"
+                )
+                log_event(
+                    "BUY_FILL_SLIPPAGE",
+                    f"💱 LIVE entry fill for {selected_contract.symbol}",
+                    symbol=selected_contract.symbol, order_id=order_id,
+                    broker_avg=round(actual_entry_premium, 2), order_price=round(pricing_premium, 2),
+                    decision_ltp=round(_dec_ltp, 2), exec_slippage_pct=round(_exec_slip, 2),
+                    ltp_slippage_pct=round(_ltp_slip, 2), confirm_ms=round(_buy_confirm_ms, 0),
                 )
             else:
                 logger.warning(
                     f"BUY_CONFIRMATION: FILL_PRICE_UNAVAILABLE | {selected_contract.symbol} | "
-                    f"order_id={order_id} | using_order_price=₹{pricing_premium:.2f}"
+                    f"order_id={order_id} | using_order_price=₹{pricing_premium:.2f} | confirm_ms={_buy_confirm_ms:.0f}"
                 )
 
             # PARTIAL-FILL GUARD: size the position (and therefore the SL) to the qty actually

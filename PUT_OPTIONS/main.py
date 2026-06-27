@@ -591,6 +591,7 @@ class OptionsTradingBot:
             
             while self.running:
                 try:
+                    _mon_cycle_t0 = time.time()  # full monitor-cycle duration (exit-detection cadence on LIVE day)
                     # Check and refresh authentication if needed
                     if not self.broker.ensure_authenticated():
                         logger.error("POSITION_MONITOR: AUTH_FAILED | cannot proceed without valid session")
@@ -1074,7 +1075,13 @@ class OptionsTradingBot:
                             self.broker.process_pending_rate_limited_requests()
                         except Exception as _ql_err:
                             logger.debug(f"POSITION_MONITOR: QUEUE_DRAIN_ERROR | {str(_ql_err)}")
-                    
+
+                    if len(self.monitor.positions) > 0:
+                        _mon_cycle_ms = (time.time() - _mon_cycle_t0) * 1000.0
+                        logger.info(
+                            f"MONITOR_CYCLE: cycle_ms={_mon_cycle_ms:.0f} "
+                            f"| positions={len(self.monitor.positions)} | interval={current_interval}s"
+                        )
                     time.sleep(current_interval)  # Adaptive monitoring interval (default 10s, can go to 8s or 20s)
                 
                 except Exception as e:

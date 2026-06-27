@@ -4732,7 +4732,8 @@ class OptionPositionMonitor:
             'rate_limiter_stats': {},
             'error': None
         }
-        
+        _cycle_t0 = time.time()  # full monitor-cycle duration (cadence/starvation debug on LIVE day)
+
         try:
             # Process any rate-limited requests that were queued for retry
             if self.broker:
@@ -4882,7 +4883,12 @@ class OptionPositionMonitor:
             live_tracker.save()
         except Exception as e:
             logger.debug(f"LIVE_DATA_TRACKING: SAVE_FAILED | {str(e)}")
-        
+
+        monitoring_result['cycle_ms'] = round((time.time() - _cycle_t0) * 1000.0, 0)
+        logger.info(
+            f"MONITORING: CYCLE_COMPLETE | cycle_ms={monitoring_result['cycle_ms']:.0f} "
+            f"| positions={monitoring_result['positions_monitored']} | ltps_refreshed={monitoring_result['ltps_refreshed']}"
+        )
         return monitoring_result
     
     def _save_positions(self):
