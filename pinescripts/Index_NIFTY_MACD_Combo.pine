@@ -106,10 +106,89 @@ putBase = atrPc >= profileAtrPc and adx >= minAdx and minusDI >= plusDI
 callEntry = isExpectedTimeframe and inTradeWindow and callBase and callSequenceReady and callMacdGate and callRsiLead and callVwapLead and callEmaLead and callBbLead and callVolumeLead
 putEntry = isExpectedTimeframe and inTradeWindow and putBase and putSequenceReady and putMacdGate and putRsiLead and putVwapLead and putEmaLead and putBbLead and putVolumeLead
 
+//──────── GATE DIAGNOSTICS — "why is it not alerting?" (no trading effect) ────────
+// Run on a NIFTY/BANKNIFTY/MIDCPNIFTY 1-min chart over a full session. The table shows,
+// cumulatively over the loaded history:
+//   pass   = how many bars that single gate was satisfied (low = structurally rare)
+//   block  = "lone-blocker" count: bars where EVERY OTHER gate passed and only this one failed.
+//            The gate with the highest block count is THE swing gate — relaxing it unblocks the
+//            most alerts. If all block counts are ~0 but fires=0, alerts are blocked by MULTIPLE
+//            gates at once (look at the lowest pass counts instead).
+showDiag = input.bool(true, "Show Gate Diagnostics Table (debug only)")
+
+gateNames = array.from("inTradeWindow", "atrPc>=min", "adx>=min", "DI-direction", "histFlip(2 ago)", "hist1>=min", "hist2>=2x", "macdGate", "rsiLead", "vwapLead", "emaLead", "bbLead", "volLead")
+callGateVals = array.from(inTradeWindow, atrPc >= profileAtrPc, adx >= minAdx, plusDI >= minusDI, callHistShiftCandle0, callHistCandle1, callHistCandle2, callMacdGate, callRsiLead, callVwapLead, callEmaLead, callBbLead, callVolumeLead)
+putGateVals  = array.from(inTradeWindow, atrPc >= profileAtrPc, adx >= minAdx, minusDI >= plusDI, putHistShiftCandle0,  putHistCandle1,  putHistCandle2,  putMacdGate,  putRsiLead,  putVwapLead,  putEmaLead,  putBbLead,  putVolumeLead)
+nGates = 13
+
+var int[] callPass = array.new_int(nGates, 0)
+var int[] callLone = array.new_int(nGates, 0)
+var int[] putPass  = array.new_int(nGates, 0)
+var int[] putLone  = array.new_int(nGates, 0)
+var int diagBars = 0
+var int diagCallFires = 0
+var int diagPutFires = 0
+
+if showDiag and barstate.isconfirmed
+    diagBars += 1
+    diagCallFires += callEntry ? 1 : 0
+    diagPutFires += putEntry ? 1 : 0
+    cFalse = 0
+    cIdx = -1
+    pFalse = 0
+    pIdx = -1
+    for i = 0 to nGates - 1
+        if array.get(callGateVals, i)
+            array.set(callPass, i, array.get(callPass, i) + 1)
+        else
+            cFalse += 1
+            cIdx := i
+        if array.get(putGateVals, i)
+            array.set(putPass, i, array.get(putPass, i) + 1)
+        else
+            pFalse += 1
+            pIdx := i
+    if cFalse == 1
+        array.set(callLone, cIdx, array.get(callLone, cIdx) + 1)
+    if pFalse == 1
+        array.set(putLone, pIdx, array.get(putLone, pIdx) + 1)
+
+var table diag = table.new(position.top_right, 5, nGates + 4, border_width=1)
+if showDiag and barstate.islast
+    table.cell(diag, 0, 0, "GATE",     text_color=color.white, bgcolor=color.gray, text_size=size.tiny)
+    table.cell(diag, 1, 0, "CE pass",  text_color=color.white, bgcolor=color.gray, text_size=size.tiny)
+    table.cell(diag, 2, 0, "CE block", text_color=color.white, bgcolor=color.gray, text_size=size.tiny)
+    table.cell(diag, 3, 0, "PE pass",  text_color=color.white, bgcolor=color.gray, text_size=size.tiny)
+    table.cell(diag, 4, 0, "PE block", text_color=color.white, bgcolor=color.gray, text_size=size.tiny)
+    for i = 0 to nGates - 1
+        r = i + 1
+        cl = array.get(callLone, i)
+        pl = array.get(putLone, i)
+        cp = array.get(callPass, i)
+        pp = array.get(putPass, i)
+        table.cell(diag, 0, r, array.get(gateNames, i), text_color=color.white, text_size=size.tiny)
+        table.cell(diag, 1, r, str.tostring(cp), text_color = cp == 0 ? color.orange : color.white, text_size=size.tiny)
+        table.cell(diag, 2, r, str.tostring(cl), text_color = cl > 0 ? color.red : color.gray, bgcolor = cl > 0 ? color.new(color.red, 60) : na, text_size=size.tiny)
+        table.cell(diag, 3, r, str.tostring(pp), text_color = pp == 0 ? color.orange : color.white, text_size=size.tiny)
+        table.cell(diag, 4, r, str.tostring(pl), text_color = pl > 0 ? color.red : color.gray, bgcolor = pl > 0 ? color.new(color.red, 60) : na, text_size=size.tiny)
+    table.cell(diag, 0, nGates + 1, "bars=" + str.tostring(diagBars), text_color=color.yellow, text_size=size.tiny)
+    table.cell(diag, 1, nGates + 1, "CE fires=" + str.tostring(diagCallFires), text_color=color.yellow, text_size=size.tiny)
+    table.cell(diag, 3, nGates + 1, "PE fires=" + str.tostring(diagPutFires), text_color=color.yellow, text_size=size.tiny)
+    table.cell(diag, 0, nGates + 2, "live", text_color=color.aqua, text_size=size.tiny)
+    table.cell(diag, 1, nGates + 2, "adx=" + str.tostring(adx, "#.#") + " atr%=" + str.tostring(atrPc, "#.##"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(diag, 2, nGates + 2, "rsi=" + str.tostring(rsi, "#.#"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(diag, 3, nGates + 2, "vwapD=" + str.tostring(vwapDistance, "#.##") + " volR=" + str.tostring(volumeRatio, "#.##"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(diag, 4, nGates + 2, "hist=" + str.tostring(macdHist, "#.##"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(diag, 0, nGates + 3, "thresh", text_color=color.gray, text_size=size.tiny)
+    table.cell(diag, 1, nGates + 3, "minAdx=" + str.tostring(minAdx) + " minAtr%=" + str.tostring(profileAtrPc, "#.##"), text_color=color.gray, text_size=size.tiny)
+    table.cell(diag, 3, nGates + 3, "vwapMax=" + str.tostring(profileVwapStretch, "#.##") + " volMin=" + str.tostring(profileVolumeRatio, "#.##"), text_color=color.gray, text_size=size.tiny)
+
+// CE bot recognizes DEEP_MACD_REVERSAL; PUT bot recognizes DEEP_MACD_BREAKDOWN (not _REVERSAL).
+// Using the bot-recognized type per side so the correct min-confidence + entry-type logic applies.
 callEntryType = "DEEP_MACD_REVERSAL"
-putEntryType = "DEEP_MACD_REVERSAL"
+putEntryType = "DEEP_MACD_BREAKDOWN"
 callSetupLabel = "INDEX_CALL_DEEP_MACD_REVERSAL"
-putSetupLabel = "INDEX_PUT_DEEP_MACD_REVERSAL"
+putSetupLabel = "INDEX_PUT_DEEP_MACD_BREAKDOWN"
 
 callScore = 0.0
 callScore += callHistShiftCandle0 ? 18 : 0
@@ -144,7 +223,9 @@ signalPrice = close
 signalRsi = rsi
 signalRsiExpansion = rsi - rsi[1]
 signalCallHist = macdHist
-signalPutHist = math.abs(macdHist)
+// Send the REAL (negative) histogram for PUT — matches the stock PUT pine convention.
+// Was math.abs() which flipped the sign and broke any macd_hist-sign logic/analysis downstream.
+signalPutHist = macdHist
 signalDayChange = indexDayChange
 signalCallVwapDistance = vwapDistance
 signalPutVwapDistance = math.abs(vwapDistance)
@@ -154,9 +235,9 @@ signalPutEmaSpread = math.abs(signalCallEmaSpread)
 signalAtrPc = atrPc
 signalAdx = adx
 
-callJson = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"option_side\":\"CE\",\"entry_type\":\"" + callEntryType + "\",\"price\":\"" + fmt(signalPrice) + "\",\"score\":\"" + fmt(callScore) + "\",\"confidence\":\"" + fmt(callConfidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(signalCallEmaSpread) + "\",\"momentum_score\":\"" + fmt(math.max(signalCallVwapDistance, 0)) + "\",\"rsi_value\":\"" + fmt(signalRsi) + "\",\"rsi_expansion\":\"" + fmt(signalRsiExpansion) + "\",\"macd_hist\":\"" + fmt(signalCallHist) + "\",\"day_change\":\"" + fmt(signalDayChange) + "\",\"vwap_distance\":\"" + fmt(signalCallVwapDistance) + "\",\"volume_ratio\":\"" + fmt(signalVolumeRatio) + "\",\"ema_spread\":\"" + fmt(signalCallEmaSpread) + "\",\"atr_pc\":\"" + fmt(signalAtrPc) + "\",\"adx\":\"" + fmt(signalAdx) + "\",\"tv_setup_label\":\"" + callSetupLabel + "\",\"reentry_context_active\":\"false\"}"
+callJson = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"option_side\":\"CE\",\"entry_type\":\"" + callEntryType + "\",\"price\":\"" + fmt(signalPrice) + "\",\"score\":\"" + fmt(callScore) + "\",\"confidence\":\"" + fmt(callConfidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(signalCallEmaSpread) + "\",\"momentum_score\":\"" + fmt(math.max(signalCallVwapDistance, 0)) + "\",\"rsi_value\":\"" + fmt(signalRsi) + "\",\"rsi_expansion\":\"" + fmt(signalRsiExpansion) + "\",\"macd_hist\":\"" + fmt(signalCallHist) + "\",\"day_change\":\"" + fmt(signalDayChange) + "\",\"vwap_distance\":\"" + fmt(signalCallVwapDistance) + "\",\"volume_ratio\":\"" + fmt(signalVolumeRatio) + "\",\"ema_spread\":\"" + fmt(signalCallEmaSpread) + "\",\"atr_pc\":\"" + fmt(signalAtrPc) + "\",\"adx\":\"" + fmt(signalAdx) + "\",\"tv_setup_label\":\"" + callSetupLabel + "\",\"reentry_context_active\":\"false\",\"nifty50_change\":\"" + fmt(signalDayChange) + "\"}"
 
-putJson = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY_PUT\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"" + putEntryType + "\",\"price\":\"" + fmt(signalPrice) + "\",\"score\":\"" + fmt(putScore) + "\",\"confidence\":\"" + fmt(putConfidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(signalPutEmaSpread) + "\",\"momentum_score\":\"" + fmt(signalPutVwapDistance) + "\",\"rsi_value\":\"" + fmt(signalRsi) + "\",\"rsi_expansion\":\"" + fmt(rsi[2] - rsi[1]) + "\",\"macd_hist\":\"" + fmt(signalPutHist) + "\",\"day_change\":\"" + fmt(signalDayChange) + "\",\"vwap_distance\":\"" + fmt(signalPutVwapDistance) + "\",\"volume_ratio\":\"" + fmt(signalVolumeRatio) + "\",\"ema_spread\":\"" + fmt(signalPutEmaSpread) + "\",\"atr_pc\":\"" + fmt(signalAtrPc) + "\",\"adx\":\"" + fmt(signalAdx) + "\",\"tv_setup_label\":\"" + putSetupLabel + "\",\"reentry_context_active\":\"false\"}"
+putJson = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY_PUT\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"entry_type\":\"" + putEntryType + "\",\"price\":\"" + fmt(signalPrice) + "\",\"score\":\"" + fmt(putScore) + "\",\"confidence\":\"" + fmt(putConfidence) + "\",\"market_trend\":\"" + marketTrend + "\",\"trend_strength\":\"" + fmt(signalPutEmaSpread) + "\",\"momentum_score\":\"" + fmt(signalPutVwapDistance) + "\",\"rsi_value\":\"" + fmt(signalRsi) + "\",\"rsi_expansion\":\"" + fmt(rsi[2] - rsi[1]) + "\",\"macd_hist\":\"" + fmt(signalPutHist) + "\",\"day_change\":\"" + fmt(signalDayChange) + "\",\"vwap_distance\":\"" + fmt(signalPutVwapDistance) + "\",\"volume_ratio\":\"" + fmt(signalVolumeRatio) + "\",\"ema_spread\":\"" + fmt(signalPutEmaSpread) + "\",\"atr_pc\":\"" + fmt(signalAtrPc) + "\",\"adx\":\"" + fmt(signalAdx) + "\",\"tv_setup_label\":\"" + putSetupLabel + "\",\"reentry_context_active\":\"false\",\"nifty50_change\":\"" + fmt(signalDayChange) + "\"}"
 
 if callEntry
     alert(callJson, alert.freq_once_per_bar_close)

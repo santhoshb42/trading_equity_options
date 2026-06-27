@@ -1,9 +1,111 @@
 //@version=6
-indicator("Sniper PUT 6.0 – MACD Breakdown (1-Min)", overlay=true, max_labels_count=500)
+indicator("Sniper PUT 6.4 – MACD Breakdown (1-Min)", overlay=true, max_labels_count=500)
 // IMPORTANT: Run this script on 1-minute chart only
 // Trading window: 09:30 - 15:30 IST
 //
-// v6.0 changes vs v5.3:
+// ═══════════════════════════════════════════════════════════════════════
+// CHANGE HISTORY — newest first
+// ═══════════════════════════════════════════════════════════════════════
+//
+// v6.4 — 2026-06-23 — TREND_CONTINUATION falling-confluence (cut late/exhaustion entries)
+//
+//  PROBLEM (Jun-23 live, 413-trade analysis): on a down day, BAD-regime PUT entries did WORSE
+//  than NEUTRAL (40% vs 63% win) — entering AFTER the stock already fell, on exhausted moves
+//  → 0% gains / bounces. 94/219 BAD-regime entries never went green. sustainedHistDrop (3-6 bar
+//  falling) fires anywhere in a long fall, including the exhausted bottom.
+//
+//  FIX (slight tightening — mirror of CE rising-confluence; structure kept): require the breakdown
+//  to be ACTIVELY accelerating at the entry bar, which exhausted bottoms are NOT:
+//    1. contVolumeStrong: + volume > volume[1]  (selling pressure increasing, not tapering)
+//    2. contRsiOversold:  + rsi < rsi[1]         (RSI still falling, not flattening)
+//    3. contEmaFalling = ema9 < ema20 and ema9 < ema9[1]  (replaces loose emaTrendFlexible)
+//    (vwapFalling already required.) Histogram/sustainedHistDrop structure unchanged.
+//
+//  TO REVERT v6.4 → v6.3:
+//    contVolumeStrong = volume >= volMa * contVolFloor and volume < volMa * contVolCeil
+//    contRsiOversold = rsi < 38
+//    In trendContinuationTrigger replace contEmaFalling with emaTrendFlexible; delete contEmaFalling.
+//    Change indicator title back to "Sniper PUT 6.3".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v6.3 — 2026-06-21 — TREND_CONTINUATION volume band (data-driven, 651-trade TC analysis)
+//
+//  ROOT CAUSE: contVolumeStrong required volume > 1.5× volMa with NO upper cap.
+//  The data shows that gate is positioned exactly wrong for PUT:
+//    - 1.2-1.5× band (EXCLUDED by the old 1.5× floor): 68% win, +3.49 avg — the BEST band
+//    - 1.5-2.5× band (kept): 56% win, +2.01 avg
+//    - >2.5× capitulation (kept): 51% win, +1.26 avg — ~half of all TC alerts, weakest
+//  High volume on a down-candle is exhaustion/capitulation (→ bounce), not confirmation.
+//
+//  FIX: contVolumeStrong = volume in [contVolFloor × volMa, contVolCeil × volMa)
+//    Defaults: floor 1.5→1.2 (capture the 68% band), ceiling none→2.5 (drop capitulation).
+//    Net intent: shift TC toward the profitable moderate-volume zone AND cut ~half the
+//    alert spam (the >2.5× capitulation trades). Tunable via the two inputs below.
+//
+//  TO REVERT v6.3 → v6.2:
+//    contVolumeStrong = volume > volMa * 1.5
+//    Delete contVolFloor / contVolCeil inputs.
+//    Change indicator title back to "Sniper PUT 6.2".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v6.2 — 2026-06-19 — TREND_CONTINUATION histogram quality gate (data-driven, today's 104-trade analysis)
+//
+//  ROOT CAUSE: TREND_CONTINUATION was firing on near-zero histograms (hist ≈ 0 to -0.15).
+//  sustainedHistDrop only requires macdHist < 0, so -0.02 passed. These entries
+//  showed two failure modes:
+//    1. Too early (reversal risk): weak hist, stock hadn't committed to downside yet
+//    2. Too late: stock already fell big (INFY -7.8%), hist flattening, about to bounce
+//  In both cases: peak = 0%, never moved.
+//
+//  DATA: 84 TREND_CONTINUATION trades, 19% win rate.
+//        33 losers had hist > -0.20, all with near-zero peak.
+//        14 of those also had rangeExpansion = false.
+//
+//  FIX: Added contHistQuality gate on trendContinuationTrigger only:
+//    contHistQuality = macdHist <= -0.20 OR rangeExpansion
+//    Logic: need either real MACD momentum (hist < -0.20) OR confirmed
+//    range break (stock genuinely expanding its bearish range).
+//    Three borderline winners (BANKBARODA, MOTHERSON, HINDPETRO) all had
+//    rangeExpansion = true with hist ≈ 0 — they survive via the OR clause.
+//    No winners killed. 14 dead trades cut. Win rate: 18.6% → 21.6%.
+//
+//  TO REVERT v6.2 → v6.1:
+//    Delete the contHistQuality line.
+//    Remove "and contHistQuality" from trendContinuationTrigger.
+//    Change indicator title back to "Sniper PUT 6.1".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v6.1 — 2026-06-17 — Market quality gate (data-driven, 299-trade PUT OTM analysis)
+//
+//  ROOT CAUSE: Two specific market+signal combinations caused disproportionate losses:
+//
+//  Finding 1: NEUTRAL market day + |macd_hist| 0.30–0.80 = 49% WR, 5 HARD_SL hits
+//    NEUTRAL day = niftyChange between -0.5% and +0.4% (no directional tailwind)
+//    Mid-hist zone = signal has some conviction but not enough to overcome neutral market
+//    Result: coin-flip WR with HARD_SL asymmetry. Sides of this zone are fine:
+//      hist < 0.30 (fresh zero-cross) = 61% WR ← kept
+//      hist >= 0.80 (deeply oversold)  = 64% WR ← kept
+//
+//  Finding 2: GOOD market day (niftyChange >= 0.4%) + stock UP on day (dayChange >= 0)
+//    5 HARD_SL hits: HINDALCO +0.65%, COFORGE +0.90%, AUBANK +1.85%, others
+//    Pure counter-trend — stock rallying on rising NIFTY, PUT had no chance
+//
+//  FIX: Added putMarketQualityOK gate (applied to all 4 triggers):
+//    neutralMidHistRisk  = neutralMarket AND |hist| in [0.30, 0.80)  → blocked
+//    goodDayCounterTrend = goodMarket AND dayChange >= 0              → blocked
+//
+//  TO REVERT v6.1 → v6.0:
+//    Delete lines defining neutralMarket, goodMarket, neutralMidHistRisk,
+//    goodDayCounterTrend, putMarketQualityOK (5 lines in ENTRY TRIGGERS section).
+//    Remove "and putMarketQualityOK" from all 4 trigger lines.
+//    Change indicator title back to "Sniper PUT 6.0".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v6.0 — 2026-06-13 — vs v5.3:
 //  1. deepBreakdownTrigger: relaxed from trendFilterStrict+deadDropFilter
 //     to trendFilterFlexible+sessionBreakdownFilter — catches stocks already
 //     deep in negative MACD territory (the #1 cause of missed losers)
@@ -16,6 +118,14 @@ indicator("Sniper PUT 6.0 – MACD Breakdown (1-Min)", overlay=true, max_labels_
 //  5. Added TREND_CONTINUATION entry type: fires on stocks already in a
 //     confirmed multi-bar downtrend with RSI < 38, volume ≥ 1.5× avg,
 //     and stock day-change ≤ -0.5% — meant for BAD/NEUTRAL market days
+//
+//  TO REVERT v6.0 → v5.3:
+//    Restore trendFilterStrict+deadDropFilter in deepBreakdownTrigger.
+//    Remove rsi < 35 escape from rsiWeakness.
+//    Revert sessionBreakdownFilter dayChange threshold to -0.35.
+//    Revert sustainedHistDrop to 5/6-bar only.
+//    Remove entire TREND_CONTINUATION block (stockDayLoser through trendContinuationTrigger).
+// ═══════════════════════════════════════════════════════════════════════
 
 //──────── INPUTS ────────
 emaFast = input.int(9, "EMA Fast")
@@ -29,6 +139,10 @@ bbLen = input.int(20, "BB Length")
 bbStd = input.float(2.0, "BB StdDev")
 volMaLen = input.int(20, "Volume MA Length")
 volMultiplier = input.float(1.2, "Volume Multiplier")
+// v6.3: TREND_CONTINUATION volume band. Edge is at moderate volume (1.2-2.5×); >2.5× is
+// capitulation (bounce risk). Floor captures the best 1.2-1.5× band; ceiling drops capitulation.
+contVolFloor = input.float(1.2, "TC Volume Floor (×volMa)")
+contVolCeil = input.float(2.5, "TC Volume Ceiling (×volMa)")
 niftySymbol = input.symbol("NSE:NIFTY", "NIFTY Symbol")
 histFloor = input.float(0.20, "Histogram Floor Magnitude")
 histBurstMultiplier = input.float(2.0, "Histogram Burst Multiplier")
@@ -224,6 +338,21 @@ contScore += volume > volMa * 1.5 ? 10 : 0
 // Price must be below symbol's day open (avoid bad day losses for PUT)
 priceBelowDayOpen = close < dayOpen
 
+// DATA-DRIVEN MARKET QUALITY GATE (from 299-trade PUT OTM analysis):
+//
+// Finding 1 — NEUTRAL day + |hist| 0.30-0.80 = 49% WR, 5 HARD_SL (coin flip, blocked)
+//   NEUTRAL day = niftyChange in (-0.5%, +0.4%). Outside this range: hist 0.30-0.80 is fine.
+//   Reason: no market tailwind + mid-conviction signal = random outcome with downside asymmetry.
+//
+// Finding 2 — GOOD day + stock UP on day (dayChange >= 0) = 5 HARD_SL hits
+//   On a rising NIFTY day, entering PUT on a stock that is itself UP is purely counter-trend.
+//   3 of 5 had day_change > +0.6% → stock was strongly rallying, PUT had no chance.
+neutralMarket       = niftyChange > -0.5 and niftyChange < 0.4
+goodMarket          = niftyChange >= 0.4
+neutralMidHistRisk  = neutralMarket and math.abs(macdHist) >= 0.30 and math.abs(macdHist) < 0.80
+goodDayCounterTrend = goodMarket and (na(dayChange) or dayChange >= 0.0)
+putMarketQualityOK  = not neutralMidHistRisk and not goodDayCounterTrend
+
 macdBreakdownSetup = neutralBreakdownContext and sequenceReady
 
 // FIX: deepBreakdownTrigger now uses trendFilterFlexible + sessionBreakdownFilter
@@ -231,11 +360,11 @@ macdBreakdownSetup = neutralBreakdownContext and sequenceReady
 // Root cause: stocks already in deep negative MACD territory scored 0-1/4 on
 // dead-drop but had perfect EMA/VWAP/RSI breakdown structure — this blocked
 // real losers like TECHM (-2.31%) that had RSI=30, price structure, sustained drop.
-deepBreakdownTrigger = deepReversalSetup and sustainedHistDrop and trendFilterFlexible and rsiWeakness and bbFilter and priceStructure and sessionBreakdownFilter and inTradeWindow and isExpectedTimeframe and priceBelowDayOpen
+deepBreakdownTrigger = deepReversalSetup and sustainedHistDrop and trendFilterFlexible and rsiWeakness and bbFilter and priceStructure and sessionBreakdownFilter and putMarketQualityOK and inTradeWindow and isExpectedTimeframe and priceBelowDayOpen
 
-momentumBreakdownTrigger = momentumAccelSetup and sustainedHistDrop and momentumTrendStrict and momentumHistAccel and momentumRSI and momentumVolume and momentumCandles and momentumVol and momentumNotExtended and sessionBreakdownFilter and inTradeWindow and isExpectedTimeframe and not deepBreakdownTrigger and priceBelowDayOpen
+momentumBreakdownTrigger = momentumAccelSetup and sustainedHistDrop and momentumTrendStrict and momentumHistAccel and momentumRSI and momentumVolume and momentumCandles and momentumVol and momentumNotExtended and sessionBreakdownFilter and putMarketQualityOK and inTradeWindow and isExpectedTimeframe and not deepBreakdownTrigger and priceBelowDayOpen
 
-macdBreakdownTrigger = macdBreakdownSetup and sustainedHistDrop and trendFilterFlexible and rsiWeakness and bbFilter and priceStructure and sessionBreakdownFilter and isExpectedTimeframe and not deepBreakdownTrigger and not momentumBreakdownTrigger and priceBelowDayOpen
+macdBreakdownTrigger = macdBreakdownSetup and sustainedHistDrop and trendFilterFlexible and rsiWeakness and bbFilter and priceStructure and sessionBreakdownFilter and putMarketQualityOK and isExpectedTimeframe and not deepBreakdownTrigger and not momentumBreakdownTrigger and priceBelowDayOpen
 
 // TREND_CONTINUATION: fires on stocks already confirmed in a multi-bar downtrend.
 // Guards against false positives on NEUTRAL/GOOD days:
@@ -245,9 +374,22 @@ macdBreakdownTrigger = macdBreakdownSetup and sustainedHistDrop and trendFilterF
 //   - EMA trend must be bearish (ema9 < ema20)
 //   - Not firing on any other trigger (no double-counting)
 stockDayLoser = dayChange <= -0.50
-contVolumeStrong = volume > volMa * 1.5
-contRsiOversold = rsi < 38
-trendContinuationTrigger = stockDayLoser and contRsiOversold and contVolumeStrong and emaTrendFlexible and sustainedHistDrop and vwapFalling and priceBelowDayOpen and inTradeWindow and isExpectedTimeframe and not deepBreakdownTrigger and not momentumBreakdownTrigger and not macdBreakdownTrigger
+// v6.4: falling-confluence tightening (mirror of CE rising-confluence). The breakdown must be
+// ACTIVELY accelerating at the entry bar — this screens out the late/exhaustion entries (where
+// RSI/EMA/volume flatten near the bottom of an already-extended fall) that produced 0% gains.
+// v6.3: volume BAND instead of bare floor — moderate volume is the edge; >ceiling is capitulation.
+// v6.4: + volume RISING (volume > volume[1]) — selling pressure must be increasing, not tapering.
+contVolumeStrong = volume >= volMa * contVolFloor and volume < volMa * contVolCeil and volume > volume[1]
+// v6.4: RSI must be oversold AND still FALLING (was absolute level only) — flattening RSI = exhaustion.
+contRsiOversold = rsi < 38 and rsi < rsi[1]
+// v6.4: EMA must be in downtrend AND ema9 actively falling (was loose emaTrendFlexible OR).
+contEmaFalling = ema9 < ema20 and ema9 < ema9[1]
+// Histogram quality gate: need real MACD momentum OR confirmed range expansion.
+// Blocks hist ≈ 0 entries (too early / reversal risk) and late entries where
+// histogram is flattening after a big day drop. rangeExpansion escape keeps
+// borderline winners that show genuine range breakdown even with weak histogram.
+contHistQuality = macdHist <= -0.20 or rangeExpansion
+trendContinuationTrigger = stockDayLoser and contRsiOversold and contVolumeStrong and contEmaFalling and sustainedHistDrop and contHistQuality and vwapFalling and putMarketQualityOK and priceBelowDayOpen and inTradeWindow and isExpectedTimeframe and not deepBreakdownTrigger and not momentumBreakdownTrigger and not macdBreakdownTrigger
 
 //──────── SIGNAL METRICS ────────
 trend_strength = ema9[1] - ema9

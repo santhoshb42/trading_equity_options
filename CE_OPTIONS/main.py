@@ -1059,7 +1059,7 @@ class OptionsTradingBot:
                             if self.live_data_formatter:
                                 csv_data = self.live_data_formatter.generate_csv()
                                 if csv_data != getattr(self, '_last_live_csv_payload', None):
-                                    csv_file = Path('/root/santhosh/trading/options/data/live_data_trades.csv')
+                                    csv_file = DATA_DIR / 'live_data_trades.csv'
                                     with open(csv_file, 'w') as f:
                                         f.write(csv_data)
                                     self._last_live_csv_payload = csv_data

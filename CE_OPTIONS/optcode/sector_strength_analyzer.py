@@ -37,7 +37,7 @@ class SectorMappingManager:
     
     def __init__(self, mapping_file: str = None):
         if mapping_file is None:
-            mapping_file = str(_DATA_DIR / 'symbol_sectors.json') if _DATA_DIR else '/root/santhosh/trading/options/data/symbol_sectors.json'
+            mapping_file = str(_DATA_DIR / 'symbol_sectors.json') if _DATA_DIR else str(Path(__file__).parent.parent / 'data' / 'symbol_sectors.json')
         """Initialize sector mapping from JSON file"""
         self.mapping_file = Path(mapping_file)
         self.reverse_mapping = {}  # symbol -> sector

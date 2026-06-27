@@ -9,6 +9,7 @@ Wraps AngelOne SmartAPI for options trading:
 - Position monitoring for derivatives
 """
 
+import fcntl
 import json
 import os
 import re
@@ -522,6 +523,11 @@ class AngelOneOptionsBroker:
         self.option_chains: Dict[Tuple[str, str], OptionChain] = {}  # {(underlying, expiry): chain}
         self.chain_cache_file = DATA_DIR / "option_chain_cache.json"
         self.chain_last_updated = {}
+
+        # Historical data cache: {f"{symbol}:{interval}:{days_back}": (data, fetch_epoch)}
+        # Prevents repeated getCandleData calls for the same symbol within the TTL window.
+        self._historical_data_cache: Dict[str, tuple] = {}
+        self._historical_cache_ttl = 300  # 5 minutes
         
         # LTP cache for burst alert handling
         self.ltp_cache = LTPCache()
@@ -1069,7 +1075,7 @@ class AngelOneOptionsBroker:
             logger.error(f"PCR_CHAIN: ERROR for {underlying} {expiry} | {str(e)}")
             return None
     
-    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None, force_refresh: bool = False) -> Optional[OptionChain]:
+    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None, force_refresh: bool = False, light: bool = False) -> Optional[OptionChain]:
         """
         Fetch complete option chain for underlying and expiry.
         With rate limiting to prevent AngelOne API throttling.
@@ -1133,7 +1139,7 @@ class AngelOneOptionsBroker:
             # Always fetch real market data from AngelOne (even in PAPER mode)
             # PAPER mode only affects order placement, not market data
             try:
-                chain = self._fetch_from_angel(underlying, expiry, current_price=current_price)
+                chain = self._fetch_from_angel(underlying, expiry, current_price=current_price, light=light)
             except Exception as chain_error:
                 # Check if it's an auth error
                 error_str = str(chain_error).lower()
@@ -1166,7 +1172,7 @@ class AngelOneOptionsBroker:
             rate_limiter.record_call("fetch_chain", False)
             return None
     
-    def _fetch_from_angel(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> Optional[OptionChain]:
+    def _fetch_from_angel(self, underlying: str, expiry: str, current_price: Optional[float] = None, light: bool = False) -> Optional[OptionChain]:
         """Fetch from AngelOne API OR instrument.json for real contracts - OPTIMIZED for ATM only
         
         OPTIMIZATION: Instead of fetching ALL 69+ contracts, only fetch the ATM strike (2 contracts: CE + PE)
@@ -1238,11 +1244,12 @@ class AngelOneOptionsBroker:
         # For large strikes, use a percentage-based window.
         # For small strikes (100-5000), use absolute difference
         if atm_strike > 10000:
-            # Large strikes (indices): use 1% of ATM value as range
-            strike_range = max(atm_strike * 0.01, 1000)  # At least 1000 for boundary cases
+            # Large strikes (indices): ±300 pts gives ±3 BANKNIFTY strikes / ±6 NIFTY strikes
+            # max STRIKE_OFFSET used is ±1, so ±3 is a safe buffer
+            strike_range = 300
         else:
-            # Small strikes (stocks): use absolute range
-            strike_range = 200  # ±200 covers ±2 strikes for 100-point symbols
+            # Small strikes (stocks): ±150 pts covers ±2-3 strikes for most symbols
+            strike_range = 150
         
         for cd in atm_contracts_data:
             strike = cd.get('strike')
@@ -1251,8 +1258,20 @@ class AngelOneOptionsBroker:
             if abs(strike - atm_strike) <= strike_range:
                 atm_contracts_data_filtered.append(cd)
                 strikes_set.add(strike)
-        
-        logger.info(f"CHAIN_FETCH: Optimized fetch | {underlying} | ATM_strike={atm_strike} | fetching={len(atm_contracts_data_filtered)} contracts (±20 range: {sorted(strikes_set)}) (instead of {len(contracts_data)})")
+
+        # LIGHT: narrow to ±N STRIKES around ATM (not ±points). get_atm_contracts only ever
+        # selects the strike nearest spot (ATM±1), so a ±3-strike window covers selection +
+        # entry-premium with margin. Without this, tight-interval names (e.g. RELIANCE 10pt
+        # strikes) balloon the LTP fetch to 60+ contracts when we use one.
+        if light and atm_contracts_data_filtered:
+            _N = 1
+            _strikes = sorted(strikes_set)
+            _idx = min(range(len(_strikes)), key=lambda i: abs(_strikes[i] - atm_strike))
+            _keep = set(_strikes[max(0, _idx - _N): _idx + _N + 1])
+            atm_contracts_data_filtered = [cd for cd in atm_contracts_data_filtered if cd.get('strike') in _keep]
+            strikes_set = _keep
+
+        logger.info(f"CHAIN_FETCH: Optimized fetch | {underlying} | ATM_strike={atm_strike} | fetching={len(atm_contracts_data_filtered)} contracts (strikes: {sorted(strikes_set)}) (skipped: {len(contracts_data) - len(atm_contracts_data_filtered)})")
         
         # OPTIMIZATION: Only bulk fetch the 2 ATM contracts
         all_symbols = [cd['symbol'] for cd in atm_contracts_data_filtered]
@@ -1356,30 +1375,42 @@ class AngelOneOptionsBroker:
                 if time_to_expiry < 0:
                     time_to_expiry = 0
                 
-                # Estimate Greeks using Black-Scholes
-                estimated_greeks = estimate_greeks(
-                    underlying=underlying,
-                    strike=strike,
-                    spot=current_price if current_price else strike,  # Use current_price if available
-                    contract_type=contract_data['contract_type'],
-                    time_to_expiry_days=max(1, time_to_expiry),  # At least 1 day
-                    iv=0.25  # Default 25% IV (will be overridden by dynamic IV below)
-                )
-                
-                # Set dynamic IV based on market conditions (not hardcoded 20%)
-                from .volatility_calculator import get_volatility_calculator
-                vol_calc = get_volatility_calculator()
-                # Get market ADX if available (default None = use market condition multiplier only)
-                dynamic_iv = vol_calc.get_dynamic_iv(underlying, adx=None, rsi=None)
-                contract.iv = dynamic_iv
-                
-                # Update Greeks
-                contract.delta = estimated_greeks.get('delta', 0.5 if contract_data['contract_type'] == 'CE' else -0.5)
-                contract.gamma = estimated_greeks.get('gamma', 0.05)
-                contract.theta = estimated_greeks.get('theta', -0.02)
-                contract.vega = estimated_greeks.get('vega', 0.1)
-                
-                logger.debug(f"CHAIN_FETCH: GREEKS_ESTIMATED | {symbol} | D={contract.delta:.3f} G={contract.gamma:.4f} T={contract.theta:.4f} V={contract.vega:.4f}")
+                # Estimate Greeks using Black-Scholes.
+                # LIGHT mode skips this per-contract (scipy norm.cdf × N contracts ≈ 2s of the
+                # chain fetch) — selection is by STRIKE, not greeks, so non-selected contracts
+                # never need them. The SELECTED contract's greeks are computed downstream in
+                # process_alert. Light contracts get placeholder greeks (overwritten for the
+                # one we actually trade).
+                if light:
+                    contract.iv = 0.25
+                    contract.delta = 0.5 if contract_data['contract_type'] == 'CE' else -0.5
+                    contract.gamma = 0.05
+                    contract.theta = -0.02
+                    contract.vega = 0.1
+                else:
+                    estimated_greeks = estimate_greeks(
+                        underlying=underlying,
+                        strike=strike,
+                        spot=current_price if current_price else strike,  # Use current_price if available
+                        contract_type=contract_data['contract_type'],
+                        time_to_expiry_days=max(1, time_to_expiry),  # At least 1 day
+                        iv=0.25  # Default 25% IV (will be overridden by dynamic IV below)
+                    )
+
+                    # Set dynamic IV based on market conditions (not hardcoded 20%)
+                    from .volatility_calculator import get_volatility_calculator
+                    vol_calc = get_volatility_calculator()
+                    # Get market ADX if available (default None = use market condition multiplier only)
+                    dynamic_iv = vol_calc.get_dynamic_iv(underlying, adx=None, rsi=None)
+                    contract.iv = dynamic_iv
+
+                    # Update Greeks
+                    contract.delta = estimated_greeks.get('delta', 0.5 if contract_data['contract_type'] == 'CE' else -0.5)
+                    contract.gamma = estimated_greeks.get('gamma', 0.05)
+                    contract.theta = estimated_greeks.get('theta', -0.02)
+                    contract.vega = estimated_greeks.get('vega', 0.1)
+
+                    logger.debug(f"CHAIN_FETCH: GREEKS_ESTIMATED | {symbol} | D={contract.delta:.3f} G={contract.gamma:.4f} T={contract.theta:.4f} V={contract.vega:.4f}")
                 
             except Exception as e:
                 logger.warning(f"CHAIN_FETCH: GREEKS_ESTIMATION_FAILED | {symbol} | {str(e)}")
@@ -1718,36 +1749,8 @@ class AngelOneOptionsBroker:
             return None
         
         try:
-            # Wait for rate limit permission (with timeout)
-            if not rate_limiter.wait_for_call_permission(timeout=30.0, request_type="close_position"):
-                if not allow_queue:
-                    # Caller handles retries (e.g. retry_failed_sl_orders) — never queue SL orders
-                    logger.warning(f"ORDER_PLACE: RATE_LIMITED (no_queue) | {symbol} | returning None")
-                    self._set_last_order_error("Rate limited")
-                    return None
-                # Rate limited - queue for retry
-                logger.warning(f"ORDER_PLACE: RATE_LIMITED | {symbol} | queuing for retry")
-                print(f"⚠️ Rate limited for {symbol} - queuing for retry...")
-                
-                # Create callback for retry
-                def order_callback():
-                    return self.place_options_order(symbol, action, quantity, price, order_type, product_type)
-                
-                # Queue the request
-                rate_limiter.queue_request(
-                    request_type=f"place_order_{symbol}",
-                    callback=order_callback,
-                    args=(),
-                    kwargs={}
-                )
-                
-                return f"QUEUED_{int(time.time())}_{symbol}"
-            
-            # Record the API call attempt
-            rate_limiter.record_call("place_order", True)
-            
-            # PAPER mode: ONLY log order, don't place to broker
-            # Everything else (LTP, IV, Greeks, monitoring) uses LIVE data
+            # PAPER mode: ONLY log order, don't place to broker — skip rate limiter entirely
+            # (no real API call is made; rate-limiting paper orders starves real SL placement)
             if OptionsTradingConfig.TRADING_MODE == "PAPER":
                 order_id = f"OPT_{int(time.time())}_{symbol}_{action}"
                 logger.info(f"ORDER_PLACE: PAPER | {symbol} | {action} | qty={quantity} | premium={price:.2f} | order_id={order_id}")
@@ -1778,7 +1781,10 @@ class AngelOneOptionsBroker:
                 
                 return order_id
             
-            # LIVE mode: Place actual order to broker
+            # LIVE mode: Place actual order to broker.
+            # Intentionally NOT going through the shared market-data rate limiter —
+            # AngelOne's placeOrder endpoint is a separate API with its own (much higher)
+            # limits and must never be blocked by market-data polling saturation.
             try:
                 # BUG FIX #2: variety must be "STOPLOSS" for SL orders, "NORMAL" for regular
                 is_sl_order = order_type in ("STOPLOSS_LIMIT", "STOPLOSS_MARKET", "STOPLOSS-LIMIT", "STOPLOSS-MARKET")
@@ -1978,53 +1984,41 @@ class AngelOneOptionsBroker:
             print(f"❌ Error closing options position: {str(e)}")
             return False
     
-    def modify_order(self, 
-                    order_id: str, 
-                    symbol: str, 
+    def modify_order(self,
+                    order_id: str,
+                    symbol: str,
                     new_price: float,
                     quantity: int = 0,
                     order_type: str = "STOPLOSS_MARKET") -> Optional[str]:
         """
-        Modify an options order (change price)
-        With rate limiting to prevent AngelOne API throttling
-        
+        Modify an options order (change price).
+        Intentionally NOT rate-limited — modifyOrder is a separate broker API endpoint
+        with its own limits and must never be blocked by market-data polling saturation.
+        A blocked modify means the trial SL trail silently fails.
+
         Returns: order_id on success, None on failure
         """
-        rate_limiter = get_options_rate_limiter()
-        
         logger.debug(f"MODIFY_ORDER: {symbol} | order_id={order_id} | new_price={new_price:.2f}")
-        
+
+        # QTY GUARD: AngelOne modifyOrder needs the FULL order quantity. Sending qty=0 would
+        # either be rejected (silent trail failure) or zero the order. Never send a 0-qty modify.
+        if OptionsTradingConfig.TRADING_MODE != "PAPER" and quantity <= 0:
+            logger.error(f"MODIFY_ORDER: REJECTED_ZERO_QTY | {symbol} | order_id={order_id} | quantity={quantity} (caller must pass real qty)")
+            return None
+
         if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
             logger.error(f"MODIFY_ORDER: Not authenticated | {symbol}")
             return None
-        
+
+        rate_limiter = get_options_rate_limiter()
         try:
-            # Wait for rate limit permission
-            if not rate_limiter.wait_for_call_permission(timeout=30.0):
-                logger.warning(f"MODIFY_ORDER: RATE_LIMITED | {symbol} | queuing for retry")
-                
-                # Create callback for retry
-                def modify_callback():
-                    return self.modify_order(order_id, symbol, new_price, quantity)
-                
-                rate_limiter.queue_request(
-                    request_type=f"modify_order_{order_id}",
-                    callback=modify_callback,
-                    args=(),
-                    kwargs={}
-                )
-                return f"QUEUED_{int(time.time())}_{order_id}"
-            
-            # Record the API call
-            rate_limiter.record_call("modify_order", True)
-            
             # PAPER mode: Just log
             if OptionsTradingConfig.TRADING_MODE == "PAPER":
                 logger.info(f"MODIFY_ORDER: PAPER | {symbol} | {order_id} | price={new_price:.2f}")
                 print(f"📝 [PAPER] Modify order: {order_id} @ ₹{new_price:.2f}")
                 return order_id
-            
-            # LIVE mode: Call broker API
+
+            # LIVE mode: Call broker API directly — no rate limiter (separate endpoint)
             try:
                 # Get instrument token
                 derivatives_exchange = self._get_underlying_derivatives_exchange(symbol)
@@ -2087,16 +2081,17 @@ class AngelOneOptionsBroker:
                 return None
         
         except Exception as e:
-            rate_limiter.record_call("modify_order", False)
             logger.error(f"MODIFY_ORDER: ERROR | {symbol} | {str(e)}")
             print(f"❌ Error modifying options order: {str(e)}")
             return None
-    
+
     def cancel_order(self, order_id: str, symbol: str, order_type: str = "STOPLOSS_MARKET") -> bool:
         """
-        Cancel an options order
-        With rate limiting to prevent AngelOne API throttling
-        
+        Cancel an options order.
+        Intentionally NOT rate-limited — cancelOrder is a separate broker API endpoint
+        with its own limits and must never be blocked by market-data polling saturation.
+        A blocked cancel blocks the entire exit, leaving the position open.
+
         Args:
             order_id: Broker order ID to cancel
             symbol: Option symbol (for logging)
@@ -2105,43 +2100,29 @@ class AngelOneOptionsBroker:
         
         Returns: True on success, False on failure
         """
-        rate_limiter = get_options_rate_limiter()
-        
         logger.debug(f"CANCEL_ORDER: {symbol} | order_id={order_id}")
-        
-        # FIX: QUEUED_ means the SL order was never actually placed on the broker
+
+        # QUEUED_ means the SL order was never actually placed on the broker
         # (the place_options_order call was rate-limited and queued internally).
         # There is nothing to cancel on the broker side — just return True.
         if str(order_id).startswith("QUEUED_"):
             logger.info(f"CANCEL_ORDER: QUEUED_ORDER_SKIP | {symbol} | order_id={order_id} | no real broker order to cancel")
             return True
-        
+
         if not self.authenticated and OptionsTradingConfig.TRADING_MODE != "PAPER":
             logger.error(f"CANCEL_ORDER: Not authenticated | {symbol}")
             return False
-        
+
+        rate_limiter = get_options_rate_limiter()
         try:
-            # Wait for rate limit permission
-            if not rate_limiter.wait_for_call_permission(timeout=30.0):
-                # FIX: return False (not True) — the cancel has NOT happened yet.
-                # Returning True here would let close_position() proceed with a market SELL
-                # while the SL is still live on the broker, risking a double fill / short.
-                logger.warning(f"CANCEL_ORDER: RATE_LIMITED | {symbol} | returning False to block premature SELL")
-                return False
-            
-            # Record the API call
-            rate_limiter.record_call("cancel_order", True)
-            
             # PAPER mode: Just log
             if OptionsTradingConfig.TRADING_MODE == "PAPER":
                 logger.info(f"CANCEL_ORDER: PAPER | {symbol} | {order_id}")
                 print(f"📝 [PAPER] Cancel order: {order_id}")
                 return True
-            
-            # LIVE mode: Call broker API
+
+            # LIVE mode: Call broker API directly — no rate limiter (separate endpoint)
             try:
-                # BUG FIX #4: variety must match the original order's variety
-                # SL orders were placed with variety="STOPLOSS" — cancel must use same
                 is_sl_order = order_type in ("STOPLOSS_LIMIT", "STOPLOSS_MARKET", "STOPLOSS-LIMIT", "STOPLOSS-MARKET")
                 cancel_variety = "STOPLOSS" if is_sl_order else "NORMAL"
 
@@ -2152,10 +2133,8 @@ class AngelOneOptionsBroker:
                         "orderid": order_id,
                         "variety": cancel_variety
                     })
-                
-                # Handle response
+
                 if isinstance(response, str):
-                    # Success - response is the order ID
                     logger.info(f"CANCEL_ORDER: LIVE | {symbol} | order_id={response}")
                     print(f"✅ [LIVE] Order cancelled: {response}")
                     log_broker_action("CANCEL_ORDER", symbol, {
@@ -2164,7 +2143,6 @@ class AngelOneOptionsBroker:
                     })
                     return True
                 elif isinstance(response, dict) and response.get('status'):
-                    # Old format with dict
                     logger.info(f"CANCEL_ORDER: LIVE | {symbol} | order_id={order_id}")
                     print(f"✅ [LIVE] Order cancelled: {order_id}")
                     return True
@@ -2177,9 +2155,8 @@ class AngelOneOptionsBroker:
                 logger.error(f"CANCEL_ORDER: LIVE ERROR | {symbol} | {str(live_err)}")
                 print(f"❌ [LIVE] Error cancelling order: {str(live_err)}")
                 return False
-        
+
         except Exception as e:
-            rate_limiter.record_call("cancel_order", False)
             logger.error(f"CANCEL_ORDER: ERROR | {symbol} | {str(e)}")
             print(f"❌ Error cancelling options order: {str(e)}")
             return False
@@ -3222,11 +3199,55 @@ class AngelOneOptionsBroker:
             logger.error(f"UNDERLYING_TECHNICALS: ERROR for {underlying} | {str(e)}")
             return {}
     
-    def get_historical_data(self, symbol: str, interval: str = "FIVE_MINUTE", 
+    # Shared cross-process candle cache (avoids 4× redundant getCandleData calls during bursts)
+    _SHARED_CANDLE_CACHE = Path("/tmp/angelone_options_candle_cache.json")
+    _SHARED_CANDLE_TTL = 300  # 5 min, matches in-process TTL
+
+    def _read_shared_candle_cache(self, cache_key: str) -> Optional[List[Dict[str, Any]]]:
+        """Read candle data from the shared cross-process file cache. Returns None on miss.
+        No lock taken — a partial write yields a JSON error caught below, which is a safe miss."""
+        try:
+            if not self._SHARED_CANDLE_CACHE.exists():
+                return None
+            with open(self._SHARED_CANDLE_CACHE, 'r') as fh:
+                state = json.load(fh)
+            entry = state.get(cache_key)
+            if entry and time.time() - entry.get('fetched_at', 0) < self._SHARED_CANDLE_TTL:
+                return entry['data']
+        except Exception:
+            pass
+        return None
+
+    def _write_shared_candle_cache(self, cache_key: str, data: List[Dict[str, Any]]) -> None:
+        """Publish candle data to shared file cache in a daemon thread — caller never blocks."""
+        import threading
+        def _do_write():
+            try:
+                with open(self._SHARED_CANDLE_CACHE, 'a+') as fh:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                    try:
+                        fh.seek(0)
+                        raw = fh.read()
+                        state = json.loads(raw) if raw.strip() else {}
+                        state[cache_key] = {'data': data, 'fetched_at': time.time()}
+                        now = time.time()
+                        state = {k: v for k, v in state.items()
+                                 if now - v.get('fetched_at', 0) < self._SHARED_CANDLE_TTL}
+                        fh.seek(0)
+                        fh.truncate()
+                        json.dump(state, fh)
+                        fh.flush()
+                    finally:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        threading.Thread(target=_do_write, daemon=True, name=f"candle-cache-write-{cache_key}").start()
+
+    def get_historical_data(self, symbol: str, interval: str = "FIVE_MINUTE",
                            days_back: int = 2, exchange: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """
         Get historical candlestick data for a symbol.
-        
+
         Args:
             symbol: Symbol name (e.g., 'BANKNIFTY', 'NIFTY')
             interval: Time interval ('ONE_MINUTE', 'FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR', 'ONE_DAY')
@@ -3240,21 +3261,38 @@ class AngelOneOptionsBroker:
             if not self.authenticated:
                 logger.warning(f"HISTORICAL: Not authenticated for {symbol}")
                 return None
-            
+
+            # Check broker-level cache before hitting the API.
+            # RSI/MACD on 5m/15m candles don't need sub-5-minute freshness.
+            hist_cache_key = f"{symbol}:{interval}:{days_back}"
+            cached_entry = self._historical_data_cache.get(hist_cache_key)
+            if cached_entry is not None:
+                cached_data, cached_at = cached_entry
+                if time.time() - cached_at < self._historical_cache_ttl:
+                    logger.debug(f"HISTORICAL: CACHE_HIT for {symbol} {interval} (age={(time.time()-cached_at):.0f}s)")
+                    return cached_data
+
+            # Check shared cross-process cache (avoids redundant fetches from OTM/ITM/CE bots)
+            shared_data = self._read_shared_candle_cache(hist_cache_key)
+            if shared_data is not None:
+                self._historical_data_cache[hist_cache_key] = (shared_data, time.time())
+                logger.debug(f"HISTORICAL: SHARED_CACHE_HIT for {symbol} {interval}")
+                return shared_data
+
             resolved_exchange = exchange or self._get_underlying_cash_exchange(symbol)
             token = self.get_instrument_token(symbol, exchange=resolved_exchange)
             if not token:
                 logger.warning(f"HISTORICAL: Token not found for {symbol}")
                 return None
-            
+
             # Calculate date range
             from datetime import datetime as dt, timedelta
             end_date = dt.now()
             start_date = end_date - timedelta(days=days_back)
-            
+
             from_date = start_date.strftime("%Y-%m-%d 09:15")
             to_date = end_date.strftime("%Y-%m-%d 15:30")
-            
+
             # Fetch historical data
             rate_limiter = get_options_rate_limiter()
             if not rate_limiter.wait_for_call_permission(timeout=5.0):
@@ -3301,12 +3339,19 @@ class AngelOneOptionsBroker:
                     continue
             
             logger.info(f"HISTORICAL: Fetched {len(formatted_data)} candles for {symbol}")
+            # Store in in-process cache; prune if oversized
+            self._historical_data_cache[hist_cache_key] = (formatted_data, time.time())
+            if len(self._historical_data_cache) > 200:
+                oldest = min(self._historical_data_cache, key=lambda k: self._historical_data_cache[k][1])
+                del self._historical_data_cache[oldest]
+            # Publish to shared cross-process cache so sibling bots skip this fetch
+            self._write_shared_candle_cache(hist_cache_key, formatted_data)
             return formatted_data
-        
+
         except Exception as e:
             logger.error(f"HISTORICAL: ERROR for {symbol} | {str(e)}")
             return None
-    
+
     def _get_mock_historical_data(self, symbol: str, days_back: int = 2) -> List[Dict[str, Any]]:
         """Generate mock historical data for paper trading"""
         from datetime import datetime as dt, timedelta

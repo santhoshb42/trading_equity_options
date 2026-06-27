@@ -60,6 +60,7 @@ class LiveDataTracker:
         self._last_snapshot_at: Dict[str, datetime] = {}
         self._post_exit_watchers: Dict[str, Dict[str, Any]] = {}
         self._candle_context_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        self._candle_context_cache_max = 120  # ~2 hours × 60 underlyings before eviction
         
         # Initialize live data structure
         self.live_data = build_empty_live_data(market_status=get_market_status())
@@ -181,6 +182,10 @@ class LiveDataTracker:
                 'metrics': self._build_candle_metrics(latest_candle),
             }
             self._candle_context_cache[cache_key] = payload
+            # Evict oldest entries to prevent unbounded growth (grows 1 entry/min/symbol)
+            if len(self._candle_context_cache) > self._candle_context_cache_max:
+                oldest = min(self._candle_context_cache, key=lambda k: k)
+                del self._candle_context_cache[oldest]
             return payload
         except Exception as e:
             logger.debug(f"LIVE_DATA_TRACKER: CANDLE_FETCH_FAILED | {underlying} | {str(e)}")
@@ -994,6 +999,10 @@ class LiveDataTracker:
                         f"LIVE_DATA_TRACKER: SAVED | ongoing={ongoing_count} | closed={closed_count} | "
                         f"pnl=₹{total_unrealized_pnl + total_realized_pnl:.2f} | payload_changed={payload_changed} | file={self.live_data_file}"
                     )
+                    # Preserve in-memory trades list — output_data is the JSON summary
+                    # (no 'trades' key) but self.live_data['trades'] is the source of truth
+                    # for update_trade() / close_trade(). Overwriting without it causes KeyError.
+                    output_data['trades'] = self.live_data.get('trades', [])
                     self.live_data = output_data
             except Exception as write_err:
                 logger.error(f"LIVE_DATA_TRACKER: WRITE_ERROR | {str(write_err)}")

@@ -314,6 +314,24 @@ class MomentumValidator:
 
         # For BUY signal (CE/CALL entry) - need strong positive momentum (RSI >= 55)
         if action == 'BUY':
+            # GUARD 1: Absolute RSI ceiling — overbought stock has high reversal risk.
+            # Configurable via ENTRY_FILTER_RSI_MAX_CALL (default 82).
+            # MACD_REVERSAL / DEEP_MACD_REVERSAL are exempt (catching oversold recovery, RSI can be low).
+            rsi_max_call = float(os.getenv("ENTRY_FILTER_RSI_MAX_CALL", "82"))
+            if entry_type not in {'MACD_REVERSAL', 'DEEP_MACD_REVERSAL'} and rsi_15m > rsi_max_call:
+                return False, (
+                    f"CE entry: RSI {rsi_15m:.1f} > overbought ceiling {rsi_max_call} "
+                    f"(high reversal risk — skip)"
+                )
+
+            # GUARD 2: Absolute RSI floor — live RSI below 50 means bearish territory for CE.
+            # Alert RSI expansion alone cannot override this for non-reversal entry types.
+            if entry_type not in {'MACD_REVERSAL', 'DEEP_MACD_REVERSAL'} and rsi_15m < 50:
+                return False, (
+                    f"CE entry: RSI {rsi_15m:.1f} below 50 — bearish territory, call entry blocked "
+                    f"(entry_type={entry_type})"
+                )
+
             if entry_type == 'MOMENTUM':
                 rsi_min_call = self.regained_rsi_min_call
                 alert_rsi_floor = self.alert_momentum_rsi_floor
@@ -361,10 +379,37 @@ class MomentumValidator:
                     )
                 return False, f"CE entry: RSI {rsi_15m:.1f} < momentum threshold {rsi_min_call} (need strong uptrend)"
         
-        # For SELL signal - need extreme positive momentum (overbought)
+        # For SELL signal (PE/PUT entry) — bearish momentum required
         elif action == 'SELL':
-            if rsi_15m < self.rsi_overbought:
-                return False, f"PE entry: RSI {rsi_15m:.1f} < overbought threshold {self.rsi_overbought}"
+            # GUARD 1: Absolute RSI oversold floor — extremely oversold stock has high bounce-back risk.
+            # Configurable via ENTRY_FILTER_RSI_MIN_PUT (default 18).
+            # MACD_BREAKDOWN, DEEP_MACD_BREAKDOWN, TREND_CONTINUATION are exempt:
+            # — breakdown/continuation types enter into existing downtrends where RSI can stay deeply
+            #   oversold for many sessions (waterfall moves). Blocking them at RSI<18 kills winners.
+            rsi_min_put = float(os.getenv("ENTRY_FILTER_RSI_MIN_PUT", "18"))
+            oversold_exempt = {'MACD_BREAKDOWN', 'DEEP_MACD_BREAKDOWN', 'TREND_CONTINUATION'}
+            if entry_type not in oversold_exempt and rsi_15m < rsi_min_put:
+                return False, (
+                    f"PE entry: RSI {rsi_15m:.1f} < oversold floor {rsi_min_put} "
+                    f"(high reversal-up risk — skip put entry)"
+                )
+
+            # GUARD 2: Bullish territory block — RSI above 60 means stock has upward momentum, bad for puts.
+            # Breakdown/continuation types catch stocks rolling over from mid-RSI but threshold raised to
+            # 60 (from 55) because DEEP_MACD_BREAKDOWN at RSI 56-59 can still be valid put entries.
+            breakdown_types = {'MACD_BREAKDOWN', 'DEEP_MACD_BREAKDOWN', 'TREND_CONTINUATION',
+                               'PRE_FALL', 'MOMENTUM_BREAKDOWN', 'MOMENTUM', 'PULLBACK', 'PUT_BUY'}
+            if entry_type in breakdown_types:
+                rsi_bullish_ceil = float(os.getenv("ENTRY_FILTER_RSI_BULLISH_CEIL_PUT", "70"))
+                if rsi_15m > rsi_bullish_ceil:
+                    return False, (
+                        f"PE entry: RSI {rsi_15m:.1f} > {rsi_bullish_ceil} — stock in bullish zone, "
+                        f"put entry blocked (entry_type={entry_type})"
+                    )
+            else:
+                # For non-breakdown types (e.g., reversal puts): require overbought RSI
+                if rsi_15m < self.rsi_overbought:
+                    return False, f"PE entry: RSI {rsi_15m:.1f} < overbought threshold {self.rsi_overbought}"
         
         # MACD confirmation (if available and enabled)
         # The Pine scripts already encode improving MACD histogram in the alert.
@@ -439,6 +484,13 @@ class TrendValidator:
                     return False, (
                         f"CE entry: MA+slope still bearish (MA {ma_short:.2f} < {ma_long:.2f}, "
                         f"slope {slope:.4f})"
+                    )
+                # Flat slope means momentum exhausted — no directional bias
+                slope_min = float(os.getenv("ENTRY_FILTER_MOMENTUM_SLOPE_MIN", "0.05"))
+                if slope is not None and abs(slope) < slope_min:
+                    return False, (
+                        f"CE MOMENTUM: slope {slope:.4f} too flat (< {slope_min}) — "
+                        f"no directional momentum, likely exhausted move"
                     )
                 return True, "Trend sanity check OK for setup-driven scalp"
 
@@ -999,6 +1051,7 @@ class ComprehensiveEntryFilter:
             reason_key = 'SymbolBlocked_Probation'
             self.rejected_by_reason[reason_key] = self.rejected_by_reason.get(reason_key, 0) + 1
             logger.warning(f"{self.name}: ❌ HARD_GATE_REJECTED | {symbol} | {rep_reason}")
+            self._log_rejection(signal, market_data, rep_reason, filter_name='SYMBOL_PROBATION')
             pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
             logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
             return False, rep_reason, {
@@ -1102,6 +1155,7 @@ class ComprehensiveEntryFilter:
                 'required_passes': self.min_filters_pass,
             }
             logger.warning(f"{self.name}: ❌ NEUTRAL_SANITY_REJECTED | {symbol} {action} | Reason: {neutral_gate_reason}")
+            self._log_rejection(signal, market_data, neutral_gate_reason, filter_name='NEUTRAL_SANITY')
             pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
             logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
             return False, neutral_gate_reason, validation_results
@@ -1117,10 +1171,11 @@ class ComprehensiveEntryFilter:
                 'required_passes': self.min_filters_pass,
             }
             logger.warning(f"{self.name}: ❌ MARKET_HOURS_HARD_REJECTED | {symbol} {action} | Reason: {failure_reason}")
+            self._log_rejection(signal, market_data, failure_reason, filter_name='MARKET_HOURS')
             pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
             logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
             return False, failure_reason, validation_results
-        
+
         # Determine overall result
         if entry_type == 'PRE_BREAKOUT':
             required_passes = self.pre_breakout_min_pass
@@ -1169,10 +1224,114 @@ class ComprehensiveEntryFilter:
             }
             
             logger.warning(f"{self.name}: ❌ REJECTED | {symbol} {action} | {passed_count}/{len(self.validators)} validators | Reason: {failure_reason}")
+            self._log_rejection(signal, market_data, failure_reason)
             pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
             logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
             return False, failure_reason, validation_results
     
+    # -------------------------------------------------------------------------
+    # Rejection logging helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _classify_filter_name(reason: str) -> str:
+        """Map a failure reason string to a short filter label for grouping."""
+        r = (reason or '').upper()
+        if 'OVERBOUGHT CEILING' in r:    return 'RSI_CEILING'        # CE: RSI > 82
+        if 'OVERSOLD FLOOR' in r or 'REVERSAL-UP RISK' in r: return 'RSI_FLOOR_PUT'  # PE: RSI < 18
+        if 'BELOW 50' in r or 'BEARISH TERRITORY' in r: return 'RSI_FLOOR'           # CE: RSI < 50
+        if 'BULLISH ZONE' in r:          return 'RSI_CEIL_PUT'                        # PE: RSI > 55
+        if 'TOO FLAT' in r or 'MOMENTUM EXHAUSTED' in r: return 'SLOPE_MIN'
+        if 'PROBATION' in r or 'HARD_GATE' in r:        return 'SYMBOL_PROBATION'
+        if 'MARKET HOURS' in r or 'MARKET_HOURS' in r:  return 'MARKET_HOURS'
+        if 'NEUTRAL' in r and 'SANITY' in r:            return 'NEUTRAL_SANITY'
+        if 'PCR' in r:           return 'PCR'
+        if 'OI BUILDUP' in r or 'OI_BUILDUP' in r:     return 'OI_BUILDUP'
+        if 'MACD' in r:          return 'MACD'
+        if 'RSI' in r:           return 'RSI_FLOOR'
+        if 'SLOPE' in r:         return 'SLOPE'
+        if 'IV PERCENTILE' in r: return 'IV_PERCENTILE'
+        if 'PREMIUM' in r:       return 'PREMIUM'
+        if 'DTE' in r or 'EXPIRY' in r: return 'DTE'
+        if 'MOMENTUM SCORE' in r: return 'MOMENTUM_SCORE'
+        return 'OTHER'
+
+    def _log_rejection(
+        self,
+        signal: Dict[str, Any],
+        market_data: Dict[str, Any],
+        failure_reason: str,
+        filter_name: Optional[str] = None,
+    ) -> None:
+        """Write one structured rejection record to events.jsonl AND live_data_rejections.csv."""
+        try:
+            symbol      = signal.get('symbol', 'UNKNOWN')
+            action      = signal.get('action', 'UNKNOWN')
+            entry_type  = str(signal.get('entry_type', '') or '').upper()
+            alert_px    = signal.get('price', 0)
+            confidence  = signal.get('confidence', 0)
+            score       = signal.get('score', 0)
+            market_trend = signal.get('market_trend', 'UNKNOWN')
+            rsi_alert   = signal.get('rsi_value', None)
+
+            rsi_15m     = market_data.get('rsi_15m')
+            slope       = market_data.get('slope')
+            pcr         = market_data.get('pcr')
+            oi_buildup  = market_data.get('oi_buildup')
+            dte         = market_data.get('days_to_expiry')
+            iv_pct      = market_data.get('iv_percentile')
+            entry_prem  = market_data.get('entry_premium')
+
+            fname = filter_name or self._classify_filter_name(failure_reason)
+            now   = datetime.now()
+            ts    = now.isoformat()
+            hhmm  = now.strftime('%H:%M')
+
+            # ── 1. Structured JSON event (goes to events.jsonl via log_event) ──
+            log_event(
+                'ENTRY_FILTER_REJECTED',
+                f"REJECTED | {symbol} | {action} | filter={fname}",
+                symbol=symbol,
+                action=action,
+                entry_type=entry_type,
+                alert_px=alert_px,
+                confidence=confidence,
+                score=score,
+                market_trend=market_trend,
+                filter_name=fname,
+                reason=failure_reason,
+                rsi_15m=rsi_15m,
+                rsi_alert=rsi_alert,
+                slope=slope,
+                pcr=pcr,
+                oi_buildup=oi_buildup,
+                dte=dte,
+                iv_percentile=iv_pct,
+                entry_premium=entry_prem,
+            )
+
+            # ── 2. CSV row (goes to live_data_rejections.csv in DATA_DIR) ──
+            csv_path = DATA_DIR / 'live_data_rejections.csv'
+            header   = (
+                'Timestamp|Time|Symbol|Action|EntryType|AlertPx|Confidence|Score|'
+                'MarketTrend|FilterName|RSI_15m|RSI_Alert|Slope|PCR|OI_Buildup|'
+                'DTE|IV_Pct|EntryPremium|Reason\n'
+            )
+            row = (
+                f"{ts}|{hhmm}|{symbol}|{action}|{entry_type}|{alert_px}|"
+                f"{confidence}|{score}|{market_trend}|{fname}|"
+                f"{rsi_15m}|{rsi_alert}|{slope}|{pcr}|{oi_buildup}|"
+                f"{dte}|{iv_pct}|{entry_prem}|{failure_reason}\n"
+            )
+            if not csv_path.exists() or csv_path.stat().st_size == 0:
+                csv_path.write_text(header + row)
+            else:
+                with open(csv_path, 'a') as f:
+                    f.write(row)
+
+        except Exception as exc:
+            logger.debug(f"_log_rejection: failed to write rejection record: {exc}")
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get comprehensive filter statistics"""
         return {

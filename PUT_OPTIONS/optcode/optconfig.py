@@ -115,29 +115,19 @@ class OptionsCapitalConfig:
     MAX_TRADES_PER_DAY = MAX_NON_INDEX_TRADES_PER_DAY + MAX_INDEX_TRADES_PER_DAY
     INDEX_UNDERLYINGS = {"NIFTY", "BANKNIFTY", "SENSEX"}
 
-    # Dynamic liquidity guard calibration.
-    # As budget rises from 15K to 2L, we require the order to be a smaller share
-    # of both the contract's traded volume and open interest.
-    LIQUIDITY_MIN_BUDGET = float(os.getenv("OPTIONS_LIQUIDITY_MIN_BUDGET", "5000"))    # Lowered to allow 4 scaling iterations for low-OI contracts
-    LIQUIDITY_MAX_BUDGET = float(os.getenv("OPTIONS_LIQUIDITY_MAX_BUDGET", "200000"))
+    # Liquidity guard: simple flat rules.
+    # Max lots = 10% of OI lots (pre-capped in optapi.py before this check).
+    # Max volume participation = 20% of daily volume.
+    # Spread thresholds still scale by premium (advisory only, not a hard block).
     LIQUIDITY_MIN_PREMIUM = float(os.getenv("OPTIONS_LIQUIDITY_MIN_PREMIUM", "5.0"))
     LIQUIDITY_MAX_PREMIUM = float(os.getenv("OPTIONS_LIQUIDITY_MAX_PREMIUM", "250.0"))
-    MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET", "0.25"))
-    MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET", "0.10"))
-    MAX_OI_PARTICIPATION_AT_MIN_BUDGET = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION_AT_MIN_BUDGET", "0.10"))
-    MAX_OI_PARTICIPATION_AT_MAX_BUDGET = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION_AT_MAX_BUDGET", "0.03"))
-    MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM", "15000"))
-    MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM", "30000"))
-    MIN_OI_AT_MAX_BUDGET_LOW_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MAX_BUDGET_LOW_PREMIUM", "50000"))
-    MIN_OI_AT_MAX_BUDGET_HIGH_PREMIUM = float(os.getenv("OPTIONS_MIN_OI_AT_MAX_BUDGET_HIGH_PREMIUM", "120000"))
+    MAX_OI_PARTICIPATION = float(os.getenv("OPTIONS_MAX_OI_PARTICIPATION", "0.10"))       # 10% of OI lots
+    MAX_VOLUME_PARTICIPATION = float(os.getenv("OPTIONS_MAX_VOLUME_PARTICIPATION", "0.20")) # 20% of daily volume
     MAX_SPREAD_PCT_AT_LOW_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_PCT_AT_LOW_PREMIUM", "4.0"))
     MAX_SPREAD_PCT_AT_HIGH_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_PCT_AT_HIGH_PREMIUM", "1.25"))
     MAX_SPREAD_RS_AT_LOW_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_RS_AT_LOW_PREMIUM", "0.20"))
     MAX_SPREAD_RS_AT_HIGH_PREMIUM = float(os.getenv("OPTIONS_MAX_SPREAD_RS_AT_HIGH_PREMIUM", "1.00"))
-    SPREAD_TIGHTENING_AT_MAX_BUDGET = float(os.getenv("OPTIONS_SPREAD_TIGHTENING_AT_MAX_BUDGET", "0.75"))
-    PARTICIPATION_TIGHTENING_AT_HIGH_PREMIUM = float(os.getenv("OPTIONS_PARTICIPATION_TIGHTENING_AT_HIGH_PREMIUM", "0.75"))
-    HARD_SPREAD_REJECT_PREMIUM_CEILING = float(os.getenv("OPTIONS_HARD_SPREAD_REJECT_PREMIUM_CEILING", "12.0"))
-    HARD_SPREAD_REJECT_ENTRY_BID_GAP_PCT = float(os.getenv("OPTIONS_HARD_SPREAD_REJECT_ENTRY_BID_GAP_PCT", "8.0"))
+    HARD_SPREAD_PCT_REJECT = float(os.getenv("OPTIONS_HARD_SPREAD_PCT_REJECT", "5.0"))  # spread > 5% = hard block
 
     @classmethod
     def get_cap_for_market_trend(cls, market_trend: str) -> float:
@@ -238,64 +228,30 @@ class OptionsCapitalConfig:
 
     @classmethod
     def get_dynamic_liquidity_limits(cls, budget: float, premium: float) -> Dict[str, float]:
-        """Scale liquidity limits using both order budget and contract premium."""
-        floor_budget = min(cls.LIQUIDITY_MIN_BUDGET, cls.LIQUIDITY_MAX_BUDGET)
-        ceil_budget = max(cls.LIQUIDITY_MIN_BUDGET, cls.LIQUIDITY_MAX_BUDGET)
-        effective_budget = min(max(budget, floor_budget), ceil_budget)
-        budget_span = max(ceil_budget - floor_budget, 1.0)
-        budget_ratio = (effective_budget - floor_budget) / budget_span
-
+        """Simple flat liquidity limits. OI lot cap is pre-applied in optapi.py; this is a backstop."""
         floor_premium = min(cls.LIQUIDITY_MIN_PREMIUM, cls.LIQUIDITY_MAX_PREMIUM)
         ceil_premium = max(cls.LIQUIDITY_MIN_PREMIUM, cls.LIQUIDITY_MAX_PREMIUM)
         effective_premium = min(max(premium, floor_premium), ceil_premium)
         premium_span = max(ceil_premium - floor_premium, 1.0)
         premium_ratio = (effective_premium - floor_premium) / premium_span
 
-        base_max_volume_participation = (
-            cls.MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET +
-            (cls.MAX_VOLUME_PARTICIPATION_AT_MAX_BUDGET - cls.MAX_VOLUME_PARTICIPATION_AT_MIN_BUDGET) * budget_ratio
-        )
-        base_max_oi_participation = (
-            cls.MAX_OI_PARTICIPATION_AT_MIN_BUDGET +
-            (cls.MAX_OI_PARTICIPATION_AT_MAX_BUDGET - cls.MAX_OI_PARTICIPATION_AT_MIN_BUDGET) * budget_ratio
-        )
-        premium_participation_tightening = 1.0 - ((1.0 - cls.PARTICIPATION_TIGHTENING_AT_HIGH_PREMIUM) * premium_ratio)
-        max_volume_participation = base_max_volume_participation * premium_participation_tightening
-        max_oi_participation = base_max_oi_participation * premium_participation_tightening
-
-        min_oi_low_premium = (
-            cls.MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM +
-            (cls.MIN_OI_AT_MAX_BUDGET_LOW_PREMIUM - cls.MIN_OI_AT_MIN_BUDGET_LOW_PREMIUM) * budget_ratio
-        )
-        min_oi_high_premium = (
-            cls.MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM +
-            (cls.MIN_OI_AT_MAX_BUDGET_HIGH_PREMIUM - cls.MIN_OI_AT_MIN_BUDGET_HIGH_PREMIUM) * budget_ratio
-        )
-        min_required_oi = (
-            min_oi_low_premium +
-            (min_oi_high_premium - min_oi_low_premium) * premium_ratio
-        )
-
-        base_max_spread_pct = (
+        max_spread_pct = (
             cls.MAX_SPREAD_PCT_AT_LOW_PREMIUM +
             (cls.MAX_SPREAD_PCT_AT_HIGH_PREMIUM - cls.MAX_SPREAD_PCT_AT_LOW_PREMIUM) * premium_ratio
         )
-        base_max_spread_rs = (
+        max_spread_rs = (
             cls.MAX_SPREAD_RS_AT_LOW_PREMIUM +
             (cls.MAX_SPREAD_RS_AT_HIGH_PREMIUM - cls.MAX_SPREAD_RS_AT_LOW_PREMIUM) * premium_ratio
         )
-        spread_budget_tightening = 1.0 - ((1.0 - cls.SPREAD_TIGHTENING_AT_MAX_BUDGET) * budget_ratio)
-        max_spread_pct = base_max_spread_pct * spread_budget_tightening
-        max_spread_rs = base_max_spread_rs * spread_budget_tightening
 
         return {
-            'effective_budget': effective_budget,
-            'budget_ratio': budget_ratio,
+            'effective_budget': budget,
+            'budget_ratio': 1.0,
             'effective_premium': effective_premium,
             'premium_ratio': premium_ratio,
-            'min_required_oi': max(1000.0, min_required_oi),
-            'max_volume_participation': max(0.01, max_volume_participation),
-            'max_oi_participation': max(0.005, max_oi_participation),
+            'min_required_oi': 0,
+            'max_volume_participation': cls.MAX_VOLUME_PARTICIPATION,
+            'max_oi_participation': cls.MAX_OI_PARTICIPATION,
             'max_spread_pct': max(0.25, max_spread_pct),
             'max_spread_rs': max(0.05, max_spread_rs),
         }
@@ -348,78 +304,44 @@ class OptionsCapitalConfig:
         if not open_interest or open_interest <= 0:
             return False, "Live OI unavailable for contract - refusing entry", metrics
 
-        if open_interest < limits['min_required_oi']:
-            return (
-                False,
-                (
-                    f"Open interest {open_interest:,} is below required minimum {int(limits['min_required_oi']):,} "
-                    f"for premium ₹{premium:.2f} and budget ₹{budget:,.0f}"
-                ),
-                metrics,
-            )
-
-        spread_warning = None
         if not bid or not ask or bid <= 0 or ask <= 0 or ask < bid:
             metrics['bid_ask_spread'] = None
             metrics['bid_ask_spread_pct'] = float(bid_ask_spread_pct or 0.0)
-            spread_warning = "Live bid/ask unavailable for contract - logging only, not blocking entry"
+            metrics['spread_advisory'] = True
+            metrics['spread_advisory_reason'] = "Live bid/ask unavailable - logging only"
         else:
             spread_abs = max(ask - bid, 0.0)
             spread_pct = bid_ask_spread_pct
             if spread_pct is None:
-                spread_pct = (spread_abs / premium * 100.0) if premium > 0 else None
+                spread_pct = (spread_abs / premium * 100.0) if premium > 0 else 0.0
 
             metrics['bid_ask_spread'] = spread_abs
-            metrics['bid_ask_spread_pct'] = float(spread_pct or 0.0)
-            entry_bid_gap_pct = ((premium - bid) / premium * 100.0) if premium > 0 else None
-            metrics['entry_bid_gap_pct'] = float(entry_bid_gap_pct or 0.0)
+            metrics['bid_ask_spread_pct'] = float(spread_pct)
+            entry_bid_gap_pct = ((premium - bid) / premium * 100.0) if premium > 0 else 0.0
+            metrics['entry_bid_gap_pct'] = float(entry_bid_gap_pct)
 
-            if spread_pct is None or spread_pct < 0:
-                spread_warning = "Unable to compute live spread for contract - logging only, not blocking entry"
-            elif spread_abs > limits['max_spread_rs']:
-                spread_warning = (
-                    f"Bid/ask spread ₹{spread_abs:.2f} exceeds advisory max ₹{limits['max_spread_rs']:.2f} "
-                    f"for budget ₹{budget:,.0f}"
-                )
-            elif spread_pct > limits['max_spread_pct']:
-                spread_warning = (
-                    f"Bid/ask spread {spread_pct:.2f}% exceeds advisory max {limits['max_spread_pct']:.2f}% "
-                    f"for budget ₹{budget:,.0f}"
-                )
-
-        if spread_warning:
-            metrics['spread_advisory'] = True
-            metrics['spread_advisory_reason'] = spread_warning
-
-        if volume and volume > 0:
-            volume_participation = quantity / max(volume, 1)
-            metrics['volume_participation'] = volume_participation
-            if volume_participation > limits['max_volume_participation']:
+            if spread_pct > cls.HARD_SPREAD_PCT_REJECT:
                 return (
                     False,
-                    (
-                        f"Order qty {quantity} is {volume_participation * 100:.1f}% of contract volume {volume:,} "
-                        f"(limit {limits['max_volume_participation'] * 100:.1f}% for budget ₹{budget:,.0f})"
-                    ),
+                    f"Bid/ask spread {spread_pct:.1f}% exceeds hard limit {cls.HARD_SPREAD_PCT_REJECT:.0f}% — too wide to enter safely",
                     metrics,
                 )
 
-        oi_participation = quantity / max(open_interest, 1)
-        metrics['oi_participation'] = oi_participation
-        if oi_participation > limits['max_oi_participation']:
-            return (
-                False,
-                (
-                    f"Order qty {quantity} is {oi_participation * 100:.2f}% of OI {open_interest:,} "
-                    f"(limit {limits['max_oi_participation'] * 100:.2f}% for budget ₹{budget:,.0f})"
-                ),
-                metrics,
-            )
+            if spread_abs > limits['max_spread_rs'] or spread_pct > limits['max_spread_pct']:
+                metrics['spread_advisory'] = True
+                metrics['spread_advisory_reason'] = (
+                    f"Bid/ask spread {spread_pct:.2f}% (₹{spread_abs:.2f}) — advisory"
+                )
 
-        if not volume or volume <= 0:
+        if volume and volume > 0:
+            metrics['volume_participation'] = quantity / max(volume, 1)
+        else:
             metrics['volume_data_missing'] = True
 
-        return True, "Dynamic liquidity check passed", metrics
+        oi_participation = quantity / max(open_interest, 1)
+        metrics['oi_participation'] = oi_participation
+
+        return True, "Liquidity check passed", metrics
     
     @classmethod
     def get_today_live_summary(cls) -> dict:
@@ -762,12 +684,33 @@ class OptionsTradingConfig:
     ENABLE_TRAILING_EXIT = os.getenv("OPTIONS_ENABLE_TRAILING_EXIT", "true").lower() == "true"  # Enable trailing
     TRAILING_BUFFER_PERCENTAGE = float(os.getenv("OPTIONS_TRAILING_BUFFER_PERCENTAGE", "1.0"))  # Extra % added to TRIAL_SL trigger/lock to offset stop-market slippage
     TRAILING_GAIN_THRESHOLD = float(os.getenv("TRAILING_GAIN_THRESHOLD", "10.0"))  # Update SL every 10% gain
+
+    # ── SLIPPAGE MODELING (PAPER) ─────────────────────────────────────────────
+    # PAPER books ideal fills (entry=LTP, exit=SL trigger) → PnL is optimistic by ~1 round-trip
+    # spread. When ON, PAPER books entry at the REAL ask and exit at the REAL bid (fetched live),
+    # so PAPER PnL ≈ LIVE PnL. Always logs entry/exit slippage metadata for analysis regardless.
+    PAPER_SLIPPAGE_MODELING = os.getenv("OPTIONS_PAPER_SLIPPAGE_MODELING", "true").lower() == "true"
+    # Real-spread entry gate (uses real bid/ask, not synthetic). Advisory by default: logs
+    # "would-reject" without blocking, so we gather the spread distribution before enforcing.
+    MAX_ENTRY_SPREAD_PCT = float(os.getenv("OPTIONS_MAX_ENTRY_SPREAD_PCT", "5.0"))
+    ENTRY_SPREAD_GATE_ENFORCE = os.getenv("OPTIONS_ENTRY_SPREAD_GATE_ENFORCE", "false").lower() == "true"
     TRIAL_SL_SCALP_PREMIUM_MAX = float(os.getenv("OPTIONS_TRIAL_SL_SCALP_PREMIUM_MAX", "12.0"))
     TRIAL_SL_SCALP_ACTIVATION_PCT = float(os.getenv("OPTIONS_TRIAL_SL_SCALP_ACTIVATION_PCT", "5.0"))
     TRIAL_SL_SCALP_GAP = float(os.getenv("OPTIONS_TRIAL_SL_SCALP_GAP", "1.5"))
     TRIAL_SL_STANDARD_GAP = float(os.getenv("OPTIONS_TRIAL_SL_STANDARD_GAP", "2.0"))
     TRIAL_SL_RUNNER_TREND_MIN = float(os.getenv("OPTIONS_TRIAL_SL_RUNNER_TREND_MIN", "0.45"))
     TRIAL_SL_RUNNER_GAP = float(os.getenv("OPTIONS_TRIAL_SL_RUNNER_GAP", "2.5"))
+    # Trail-ARM cap: arm the trail earlier so the +3-6% "give-back dead zone" gets protected.
+    # With the +1% buffer this means the trail effectively arms at ~4% peak (was ~6%/11%).
+    # Lowering the arm does NOT cap upside — the peak-minus-gap trail keeps trailing up.
+    TRIAL_SL_BASE_ACTIVATION_PCT = float(os.getenv("OPTIONS_TRIAL_SL_BASE_ACTIVATION_PCT", "3.0"))
+
+    # PROFIT FLOOR (breakeven protection):
+    # Once a trade has been green >= TRIGGER%, move the hard SL up to the LOCK% floor and never
+    # let stale/dead-trade exits book it below that floor. Kills the "+5% -> -5%" round-trips.
+    ENABLE_PROFIT_FLOOR = os.getenv("OPTIONS_ENABLE_PROFIT_FLOOR", "true").lower() == "true"
+    PROFIT_FLOOR_TRIGGER_PCT = float(os.getenv("OPTIONS_PROFIT_FLOOR_TRIGGER_PCT", "3.0"))
+    PROFIT_FLOOR_LOCK_PCT = float(os.getenv("OPTIONS_PROFIT_FLOOR_LOCK_PCT", "0.0"))
     
     # Signal filtering
     MIN_CONFIDENCE = float(os.getenv("OPTIONS_MIN_CONFIDENCE", "90"))  # Min 90% confidence for options signals
@@ -796,12 +739,16 @@ class MonitoringConfig:
     # Base monitoring intervals (shorter than equity bot due to IV decay)
     # Options premiums move 2-3x faster than equity, so need sub-5s monitoring
     # With 60s LTP cache, can monitor every 3s without API exhaustion
-    MONITOR_INTERVAL_SECONDS = int(os.getenv("MONITOR_INTERVAL", "3"))  # Default 3s - aggressive IV tracking
-    
-    # Adaptive intervals based on rate limiter health
-    MONITOR_INTERVAL_FAST = 2       # When rate limits are healthy - ultra-frequent IV tracking
-    MONITOR_INTERVAL_NORMAL = 3     # Normal monitoring - rapid IV tracking for options
-    MONITOR_INTERVAL_SLOW = 5       # When rate limits are stressed - still fast fallback
+    MONITOR_INTERVAL_SECONDS = int(os.getenv("MONITOR_INTERVAL", "2"))  # 2s — fast exit-trigger detection
+
+    # Adaptive intervals — PINNED to 2s. Post per-endpoint-limiter fix, LTP for all active
+    # strikes is one cheap bulk call (~120/min across 4 bots vs 450/min budget) and the MACD-fade
+    # candle check is 5-min-cached, so 2s adds no candle load. Loop interval = exit-trigger
+    # DETECTION latency, so 2s minimizes exit slippage. The rate limiter remains the hard guardrail
+    # (denies on breach; monitor handles partial fetches), so no auto-backoff is needed.
+    MONITOR_INTERVAL_FAST = 2       # rate limits healthy
+    MONITOR_INTERVAL_NORMAL = 2     # normal (was 3) — pinned 2s for tight exit detection
+    MONITOR_INTERVAL_SLOW = 2       # was 5 — pinned 2s; limiter guards breaches, not the interval
     
     # Rate limiter utilization thresholds for adaptive adjustment
     RATE_LIMIT_HEALTHY_THRESHOLD = 0.50     # < 50% utilization = FAST

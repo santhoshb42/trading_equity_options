@@ -1,14 +1,14 @@
 #!/bin/bash
-# Watchdog for CE_OPTIONS bots (OTM on 8081, ITM on 8080).
-# Checks both services every 30s and restarts via systemd if health fails.
+# Watchdog for all 4 options bots + webhook router.
+# Checks all services every 30s and restarts via systemd if health fails.
 
 CHECK_INTERVAL=30
 MAX_FAILURES=3
 
-declare -A FAILURES=([ce-otm]=0 [ce-itm]=0)
+declare -A FAILURES=([ce-otm]=0 [ce-itm]=0 [pe-otm]=0 [pe-itm]=0 [webhook-router]=0)
 
-declare -A PORTS=([ce-otm]=8081 [ce-itm]=8080)
-declare -A SERVICES=([ce-otm]=ce-otm.service [ce-itm]=ce-itm.service)
+declare -A PORTS=([ce-otm]=8081 [ce-itm]=8080 [pe-otm]=8082 [pe-itm]=8083 [webhook-router]=80)
+declare -A SERVICES=([ce-otm]=ce-otm.service [ce-itm]=ce-itm.service [pe-otm]=pe-otm.service [pe-itm]=pe-itm.service [webhook-router]=webhook-router.service)
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 
@@ -55,12 +55,12 @@ check_bot() {
     fi
 }
 
-log "CE Options Watchdog started | OTM=8081 ITM=8080 | interval=${CHECK_INTERVAL}s"
+log "Options Watchdog started | CE-ITM=8080 CE-OTM=8081 PE-OTM=8082 PE-ITM=8083 webhook-router=80 | interval=${CHECK_INTERVAL}s"
 
 trap 'log "Watchdog stopped"; exit 0' SIGTERM SIGINT
 
 while true; do
-    for bot in ce-otm ce-itm; do
+    for bot in ce-itm ce-otm pe-itm pe-otm webhook-router; do
         check_bot "$bot"
     done
     sleep "$CHECK_INTERVAL"

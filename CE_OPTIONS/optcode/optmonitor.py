@@ -15,7 +15,7 @@ from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-from .optconfig import OptionsCapitalConfig, OptionsTradingConfig, BASE_DIR, DATA_DIR
+from .optconfig import OptionsCapitalConfig, OptionsTradingConfig, BASE_DIR, DATA_DIR, BOT_MODE
 from .angelone_options import AngelOneOptionsBroker, get_options_broker
 from .optlogging import logger, log_position, log_pnl, log_event
 from .fake_move_detector import get_fake_move_detector, get_decay_monitor
@@ -235,7 +235,10 @@ class OptionPosition:
         self.order_id = order_id
         self.trade_id = None  # Track trade_id from trade_logger
         self.underlying_alert_price = underlying_alert_price
-        
+        # Track latest underlying LTP (refreshed each greeks cycle) so we can record the
+        # underlying's move during the trade — needed for OTM vs ITM PnL divergence analysis.
+        self.current_underlying_price = underlying_alert_price
+
         # Sector strength at entry (LIVE mode logging only)
         # Use passed sector_data if it's not None, otherwise use defaults
         # Important: Empty dict {} should be preserved, not replaced with defaults
@@ -344,6 +347,7 @@ class OptionPosition:
         self.trial_sl_update_count = 0  # Count of TRIAL SL adjustments
         self.trial_sl_expected_threshold = None  # Expected threshold (5% or 10%) based on market at entry time
         self.hard_sl_price = None  # Hard SL: -20% from entry (default)
+        self.breakeven_floor_active = False  # Profit-floor engaged: hard SL raised to breakeven after being green
         
         # Rate limit optimization for modify_order (HYBRID strategy)
         self.last_modify_time = None  # When SL was last modified on broker
@@ -470,6 +474,39 @@ class OptionPosition:
             'market_trend':   self.market_trend,
             'trend_strength': self.trend_strength,
             'entry_context': self.entry_context,
+            # ── EXIT-CHANGE ANALYSIS (v2026-06-21: profit floor + trail-arm @4%) ──
+            # Lets us measure, after 2-3 days, how the new exit rules behaved per trade.
+            'peak_pct': ((self.highest_premium - self.entry_premium) / self.entry_premium * 100) if self.entry_premium else 0,
+            'breakeven_floor_active': getattr(self, 'breakeven_floor_active', False),
+            'trial_sl_activation_threshold': getattr(self, 'trial_sl_expected_threshold', None),
+            'hard_sl_price': getattr(self, 'hard_sl_price', None),
+            # ── OTM / ITM DIVERGENCE ANALYSIS ──
+            # Same TradingView alert is fanned out to both OTM and ITM bots; they pick
+            # different strikes and diverge in PnL. These fields let us pair the two legs
+            # (alert_key) and decompose the divergence (moneyness + underlying move).
+            'bot_mode': BOT_MODE,
+            'strike': self.strike,
+            'strike_offset': getattr(OptionsTradingConfig, 'STRIKE_OFFSET', None),
+            # moneyness at entry: PE is ITM when strike > underlying; CE when strike < underlying.
+            'moneyness_pct': (
+                ((self.strike - self.underlying_alert_price) / self.underlying_alert_price * 100)
+                if (self.contract_type == 'PE' and self.underlying_alert_price)
+                else ((self.underlying_alert_price - self.strike) / self.underlying_alert_price * 100)
+                if (self.contract_type == 'CE' and self.underlying_alert_price)
+                else None
+            ),
+            'underlying_entry_price': self.underlying_alert_price,
+            'underlying_exit_price': getattr(self, 'current_underlying_price', self.underlying_alert_price),
+            'underlying_move_pct': (
+                (getattr(self, 'current_underlying_price', self.underlying_alert_price) - self.underlying_alert_price)
+                / self.underlying_alert_price * 100
+            ) if self.underlying_alert_price else None,
+            # alert_key pairs the OTM and ITM legs of the SAME alert: same underlying, same
+            # alert price, same minute. Round price to 2dp and time to the minute for matching.
+            'alert_key': (
+                f"{self.underlying}|{round(self.underlying_alert_price, 2)}|"
+                f"{(self.entry_time.strftime('%Y-%m-%dT%H:%M') if isinstance(self.entry_time, datetime) else str(self.entry_time)[:16])}"
+            ) if self.underlying_alert_price else None,
         }
     
     # =========================================================================
@@ -957,8 +994,62 @@ class OptionPositionMonitor:
             trailing_gap = max(trailing_gap, OptionsTradingConfig.TRIAL_SL_RUNNER_GAP)
             profile = "RUNNER"
 
+        # Cap the arm threshold so the trail engages early and protects the +3-6% give-back zone.
+        # Trailing still follows peak-minus-gap upward, so upside is unaffected.
+        activation_threshold = min(activation_threshold, OptionsTradingConfig.TRIAL_SL_BASE_ACTIVATION_PCT)
+
         return activation_threshold, trailing_gap, profile
-    
+
+    def _apply_profit_floor(self, symbol: str, position: 'OptionPosition') -> bool:
+        """Breakeven profit-floor: once a trade has been green >= TRIGGER%, raise the hard SL to
+        the LOCK% floor and shield it from stale/dead exits that would book a sub-floor loss.
+
+        Returns True if the caller should SKIP its loss-booking exit (the breakeven hard SL is now
+        guarding the downside; let it ride or get stopped at the floor instead of dumping at a loss).
+        """
+        if not OptionsTradingConfig.ENABLE_PROFIT_FLOOR:
+            return False
+        # Trail already protecting profit — nothing to add.
+        if position.trial_sl_enabled:
+            return False
+        if not position.entry_premium or position.entry_premium <= 0:
+            return False
+
+        peak_pct = (position.highest_premium - position.entry_premium) / position.entry_premium * 100
+        if peak_pct < OptionsTradingConfig.PROFIT_FLOOR_TRIGGER_PCT:
+            return False  # never got green enough to deserve a floor
+
+        # Raise hard SL up to the breakeven floor (one-way ratchet).
+        floor_price = self._round_to_10_paise(
+            position.entry_premium * (1 + OptionsTradingConfig.PROFIT_FLOOR_LOCK_PCT / 100)
+        )
+        if (position.hard_sl_price or 0) < floor_price:
+            old_sl = position.hard_sl_price
+            position.hard_sl_price = floor_price
+            position.breakeven_floor_active = True
+            self._save_positions()
+            logger.warning(
+                f"PROFIT_FLOOR_ARMED: {symbol} | peaked +{peak_pct:.1f}% | "
+                f"hard SL raised {old_sl} -> ₹{floor_price:.2f} (breakeven floor)"
+            )
+            log_event(
+                "PROFIT_FLOOR_ARMED",
+                f"🛡️ Breakeven floor armed for {symbol} (peaked +{peak_pct:.1f}%)",
+                symbol=symbol,
+                peak_pct=round(peak_pct, 2),
+                old_sl=old_sl,
+                floor_price=floor_price,
+                entry_premium=position.entry_premium,
+            )
+            # LIVE: push the raised stop to the broker.
+            self.modify_sl_order(symbol, floor_price, position.sl_order_id)
+
+        # Block any sub-floor loss exit; the breakeven hard SL now guards the downside.
+        cur_pct = (position.current_premium - position.entry_premium) / position.entry_premium * 100
+        if cur_pct < OptionsTradingConfig.PROFIT_FLOOR_LOCK_PCT:
+            return True
+        return False
+
     def add_position(self,
                     symbol: str,
                     underlying: str,
@@ -1064,22 +1155,10 @@ class OptionPositionMonitor:
             )
             
             # 🔧 PRE-CALCULATE TRIAL_SL THRESHOLD based on current market conditions
-            # This ensures STALE_CONSOLIDATION can use the expected threshold without waiting for next monitoring cycle
+            # Use the detector's cached Nifty data (updated every 4s by monitoring loop) —
+            # avoid a fresh rate-limited API call here which delays SL placement.
             market_detector = get_market_condition_detector()
-            nifty_ltp = None
-            nifty_open = None
-            try:
-                nifty_market_data = self.broker.get_market_data("NIFTY", exchange="NSE")
-                if nifty_market_data:
-                    nifty_ltp = nifty_market_data.get('ltp')
-                    nifty_open = nifty_market_data.get('open')
-                    if nifty_ltp and nifty_open:
-                        market_detector.update_market_data(nifty_ltp=nifty_ltp, nifty_open=nifty_open)
-            except Exception as e:
-                logger.debug(f"POSITION_ADD: Could not fetch Nifty for threshold | {str(e)}")
-            
-            # Get expected TRIAL_SL threshold for this trade
-            expected_threshold, market_reason = market_detector.get_trial_sl_threshold(nifty_ltp=nifty_ltp)
+            expected_threshold, market_reason = market_detector.get_trial_sl_threshold()
             position.trial_sl_expected_threshold = expected_threshold
             logger.info(f"POSITION_ADD: TRIAL_SL_THRESHOLD_SET | {symbol} | Threshold={expected_threshold:.0f}% | Market={market_reason}")
             
@@ -1314,6 +1393,44 @@ class OptionPositionMonitor:
                 self._closing_symbols.discard(symbol)
             return None
     
+    def _capture_live_greeks(self, position: 'OptionPosition') -> Optional[Dict[str, float]]:
+        """Best-effort fetch of the position's CURRENT greeks from the live option chain.
+        Used at exit so exit_greeks reflect reality instead of stale init defaults
+        (refresh_position_greeks is not wired into the loop). Returns None on any failure
+        so the caller falls back gracefully — must never block an exit.
+        """
+        if not self.broker:
+            return None
+        try:
+            underlying_ltp = position.current_underlying_price or position.underlying_alert_price
+            option_chain = self.broker.fetch_option_chain(
+                position.underlying, position.expiry, current_price=underlying_ltp
+            )
+            if not option_chain:
+                return None
+            contract = option_chain.get_contract(position.strike, position.contract_type)
+            if not contract or (contract.delta == 0.0 and contract.gamma == 0.0
+                                and contract.theta == 0.0 and contract.vega == 0.0):
+                return None
+            from .volatility_calculator import get_volatility_calculator
+            vol_calc = get_volatility_calculator()
+            real_iv = contract.iv if contract.iv > 0 else vol_calc.get_dynamic_iv(position.symbol, default_iv=0.25)
+            greeks = {
+                'delta': contract.delta,
+                'gamma': contract.gamma,
+                'theta': contract.theta,
+                'vega': contract.vega,
+                'iv': real_iv,
+            }
+            # Keep current_greeks in sync so any downstream reader sees fresh values too.
+            position.current_greeks = {k: greeks[k] for k in ('delta', 'gamma', 'theta', 'vega')}
+            position.current_iv = real_iv
+            logger.debug(f"EXIT_GREEKS_LIVE: {position.symbol} | delta={contract.delta:.3f} | iv={real_iv:.3f}")
+            return greeks
+        except Exception as e:
+            logger.debug(f"EXIT_GREEKS_LIVE: fetch failed | {position.symbol} | {str(e)}")
+            return None
+
     def _close_position_inner(
         self,
         symbol: str,
@@ -1333,7 +1450,9 @@ class OptionPositionMonitor:
                 logger.warning(f"POSITION_CLOSE: INNER_NOT_FOUND | {symbol}")
                 return None
             
-            # CAPTURE EXIT GREEKS for ML learning
+            # EXIT GREEKS (for ML learning) start as the cheap fallback so the critical exit
+            # path — SL cancel + MARKET SELL — is NOT delayed by a chain fetch. The accurate
+            # live greeks are captured AFTER the SELL is placed, just before PnL booking (below).
             exit_greeks = {
                 'delta': position.current_greeks.get('delta', 0.5),
                 'gamma': position.current_greeks.get('gamma', 0.05),
@@ -1341,7 +1460,7 @@ class OptionPositionMonitor:
                 'vega': position.current_greeks.get('vega', 0.1),
                 'iv': position.current_iv
             }
-            
+
             original_sl_order_id = position.sl_order_id
             if position.modify_pending:
                 self._sync_active_sl_order_id(position)
@@ -1370,14 +1489,47 @@ class OptionPositionMonitor:
                              exit_reason=exit_reason)
                     position.sl_order_id = None
                 else:
-                    logger.error(f"POSITION_CLOSE: SL_CANCEL_FAILED_ALL_ATTEMPTS | {symbol} | order_id={position.sl_order_id} | blocking manual SELL to avoid double fill")
-                    log_event("SL_CANCEL_FAILED",
-                             f"⚠️ Failed to cancel SL order for {symbol} after 3 attempts - manual SELL blocked",
-                             symbol=symbol,
-                             sl_order_id=position.sl_order_id,
-                             exit_reason=exit_reason,
-                             risk="Position left open until SL cancel succeeds")
-                    return None
+                    # All 3 cancel attempts failed. Check if the SL order already fired
+                    # (cancel rejected because order was COMPLETE) or is genuinely stuck.
+                    failed_sl_id = position.sl_order_id
+                    sl_already_filled = False
+                    sl_fill_price = None
+                    try:
+                        order_status = self.broker.get_order_status(failed_sl_id) if self.broker else None
+                        if order_status:
+                            s = str(order_status.get('status', '')).upper()
+                            if s in ('COMPLETE', 'FILLED', 'FULLY_FILLED'):
+                                sl_already_filled = True
+                                sl_fill_price = order_status.get('average_price') or position.sl_order_price
+                    except Exception:
+                        pass
+
+                    if sl_already_filled:
+                        # SL fired while we were trying to cancel — use fill price
+                        logger.warning(
+                            f"POSITION_CLOSE: SL_FIRED_DURING_CANCEL | {symbol} | "
+                            f"order_id={failed_sl_id} | exit=₹{sl_fill_price} | closing as broker_managed"
+                        )
+                        exit_premium = sl_fill_price or exit_premium
+                        broker_managed_exit = True
+                        exit_order_id = failed_sl_id
+                        position.sl_order_id = None
+                    else:
+                        # SL is still open OR status unknown. Proceed with SELL anyway.
+                        # AngelOne will reject one of the two conflicting SELL orders;
+                        # leaving the position permanently open is worse than the tiny
+                        # double-fill risk from a SL that may execute a millisecond later.
+                        logger.error(
+                            f"POSITION_CLOSE: SL_CANCEL_FAILED_PROCEEDING | {symbol} | "
+                            f"order_id={failed_sl_id} | placing MARKET SELL despite cancel failure"
+                        )
+                        log_event("SL_CANCEL_FAILED",
+                                 f"⚠️ SL cancel failed for {symbol} — proceeding with MARKET SELL",
+                                 symbol=symbol,
+                                 sl_order_id=failed_sl_id,
+                                 exit_reason=exit_reason,
+                                 action="MARKET_SELL_PROCEEDING")
+                        position.sl_order_id = None
             elif skip_sl_cancel and position.sl_order_id:
                 position.sl_order_id = None
             
@@ -1482,8 +1634,35 @@ class OptionPositionMonitor:
                              risk="Position may remain open on broker - manual intervention may be needed")
                     return None
             
+            # ── EXIT SLIPPAGE MODELING (PAPER): book the realistic bid fill, not the trigger ──
+            # broker_managed_exit means a real broker SL fill price is already set — don't override.
+            exit_slippage_meta = None
+            if not broker_managed_exit:
+                exit_slippage_meta = self._model_paper_exit_slippage(position, exit_premium, exit_reason)
+                if exit_slippage_meta.get('applied'):
+                    _ideal_exit = exit_premium
+                    exit_premium = exit_slippage_meta['fill']
+                    logger.info(
+                        f"SLIPPAGE_EXIT: {symbol} | reason={exit_reason} | ideal=₹{_ideal_exit:.2f} "
+                        f"| bid_fill=₹{exit_premium:.2f} | slippage={exit_slippage_meta['slippage_pct']:.2f}%"
+                    )
+                log_event(
+                    "SLIPPAGE_EXIT",
+                    f"📐 Exit slippage modeled for {symbol}",
+                    symbol=symbol,
+                    **exit_slippage_meta,
+                )
+
+            # Now that the SELL is placed/filled, capture accurate live greeks for ML (off the
+            # critical path). Best-effort — falls back to the cheap greeks set above on failure.
+            live_greeks = self._capture_live_greeks(position)
+            if live_greeks:
+                exit_greeks = live_greeks
+
             pnl_info = position.close_position(exit_premium, exit_reason, exit_greeks=exit_greeks)  # ADDED: Pass exit Greeks
-            
+            if exit_slippage_meta is not None and isinstance(pnl_info, dict):
+                pnl_info['exit_slippage'] = exit_slippage_meta
+
             # Log trade exit to CSV
             try:
                 trade_logger = get_trade_logger()
@@ -1570,8 +1749,10 @@ class OptionPositionMonitor:
                 except Exception as cleanup_error:
                     logger.error(f"POSITION_CLOSE: ORDER_CLEANUP_ERROR | {symbol} | {str(cleanup_error)}")
             
-            # Move to history
+            # Move to history (cap at 100 to prevent unbounded memory growth)
             self.closed_positions.append(position)
+            if len(self.closed_positions) > 100:
+                self.closed_positions = self.closed_positions[-100:]
             with self._positions_lock:
                 self.positions.pop(symbol, None)
             self._realtime_fade_last_check.pop(symbol, None)
@@ -1635,10 +1816,13 @@ class OptionPositionMonitor:
         filled_statuses = {'COMPLETE', 'FILLED', 'FULLY_FILLED'}
         inactive_statuses = {'REJECTED', 'CANCELLED', 'EXPIRED'}
 
+        # Poll at 1.0s — AngelOne caps getOrderBook (the source of get_order_status) at 1/sec
+        # per client. Polling faster just gets denied by the per-endpoint gate and wastes cycles.
+        poll_interval = 1.0
         while time.time() - start_time < timeout:
             order_status = self.broker.get_order_status(order_id)
             if not order_status:
-                time.sleep(0.5)
+                time.sleep(poll_interval)
                 continue
 
             status = str(order_status.get('status', '')).upper()
@@ -1653,7 +1837,7 @@ class OptionPositionMonitor:
                 return None
 
             logger.debug(f"EXIT_FILL_WAITING: {symbol} | order_id={order_id} | status={status}")
-            time.sleep(0.5)
+            time.sleep(poll_interval)
 
         logger.error(f"EXIT_FILL_TIMEOUT: {symbol} | order_id={order_id} | waited={timeout}s")
         return None
@@ -1707,6 +1891,58 @@ class OptionPositionMonitor:
         except Exception as sync_error:
             logger.debug(f"SL_ORDER_SYNC: SKIPPED | {position.symbol} | {str(sync_error)}")
             return position.sl_order_id
+
+    def _model_paper_exit_slippage(self, position, intended_exit: float, exit_reason: str) -> Dict[str, Any]:
+        """
+        PAPER-mode exit slippage model. The old PAPER path booked the SL trigger / current LTP as
+        the exit (zero slippage). A real SELL of a long option fills at the BID. This fetches the
+        live bid and returns the realistic fill + metadata for analysis. LIVE is untouched (it
+        already books the broker fill). Falls back to intended_exit if depth is unavailable.
+        """
+        meta = {
+            'intended_exit': round(float(intended_exit or 0.0), 2),
+            'reason': exit_reason,
+            'mode': OptionsTradingConfig.TRADING_MODE,
+            'applied': False,
+        }
+        if OptionsTradingConfig.TRADING_MODE == "LIVE":
+            return meta  # LIVE already books the real broker average_price
+        try:
+            md = self.broker.get_market_data(position.symbol, "NFO") if self.broker else None
+        except Exception as e:
+            logger.debug(f"SLIPPAGE_EXIT: depth fetch failed | {position.symbol} | {str(e)[:60]}")
+            md = None
+        if not md:
+            meta['note'] = 'no_depth'
+            return meta
+        bid = float(md.get('bid') or 0.0)
+        ask = float(md.get('ask') or 0.0)
+        ltp = float(md.get('ltp') or 0.0)
+        spread_pct = md.get('bid_ask_spread_pct')
+        if spread_pct is None and bid > 0 and ask > 0 and ltp > 0:
+            spread_pct = (ask - bid) / ltp * 100.0
+        # Synthetic guard: chain fallback makes bid=ltp*0.98 / ask=ltp*1.02.
+        synthetic = bool(
+            ltp > 0 and bid > 0 and ask > 0
+            and abs(bid - ltp * 0.98) < 0.01 and abs(ask - ltp * 1.02) < 0.01
+        )
+        meta.update({
+            'real_bid': round(bid, 2),
+            'real_ask': round(ask, 2),
+            'ltp': round(ltp, 2),
+            'spread_pct': round(float(spread_pct), 3) if spread_pct is not None else None,
+            'spread_is_synthetic': synthetic,
+        })
+        if OptionsTradingConfig.PAPER_SLIPPAGE_MODELING and bid > 0 and not synthetic:
+            meta['fill'] = round(bid, 2)
+            meta['slippage_pct'] = (
+                round((bid - intended_exit) / intended_exit * 100, 3) if intended_exit > 0 else 0.0
+            )
+            meta['applied'] = True
+        else:
+            meta['fill'] = round(float(intended_exit or 0.0), 2)
+            meta['slippage_pct'] = 0.0
+        return meta
 
     def _reconcile_broker_stop_exit(self, symbol: str, expected_exit_price: float, exit_reason: str) -> Optional[Dict[str, Any]]:
         """Finalize local position state only after the broker stop order reaches a terminal state."""
@@ -1931,30 +2167,18 @@ class OptionPositionMonitor:
             return False  # Skipped due to rate limiting or adaptive logic
         
         try:
-            # Get rate limiter
-            rate_limiter = get_options_rate_limiter()
-            
-            # Wait for rate limit permission with timeout
-            if not rate_limiter.wait_for_call_permission(timeout=10.0, request_type="modify_sl"):
-                # Rate limited - queue for retry
-                logger.warning(f"MODIFY_SL: RATE_LIMITED | {symbol} | queuing for retry")
-                position.modify_pending = True
-                
-                # Queue the modify request
-                def modify_callback():
-                    return self.modify_sl_order(symbol, new_sl_price)
-                
-                rate_limiter.queue_request(
-                    request_type=f"modify_sl_{symbol}",
-                    callback=modify_callback,
-                    request_key=f"modify_sl::{symbol}"
-                )
-                return True  # Queued
-            
+            rate_limiter = get_options_rate_limiter()  # kept for record_call() stats only
+
+            # NO rate-limiter slot wait here. broker.modify_order hits AngelOne's modifyOrder
+            # endpoint directly (separate, NOT gated by the shared market-data limiter) and does
+            # NO market fetch (local token lookup only). Acquiring a slot here just added latency
+            # to the TRIAL_SL trail for no protection — the should_modify_sl gate already throttles
+            # modify frequency (skips <1% changes). Trail now modifies in milliseconds.
+
             # Update position tracking (last_modify_time first; last_modified_sl_price set ONLY on confirmed broker success)
             position.last_modify_time = datetime.now()
             position.modify_pending = False
-            
+
             new_sl_price = self._round_to_10_paise(new_sl_price)
             active_order_id = order_id or position.sl_order_id
 
@@ -2005,7 +2229,9 @@ class OptionPositionMonitor:
             # Record successful modify
             rate_limiter.record_call("modify_order", True)
             
-            logger.info(f"MODIFY_SL: SUCCESS | {symbol} | new_sl=₹{new_sl_price:.2f} | previous=₹{position.trial_sl_price:.2f}")
+            # previous SL may be None when the breakeven floor moves the SL before the trail arms.
+            _prev_sl = position.trial_sl_price if position.trial_sl_price is not None else position.hard_sl_price
+            logger.info(f"MODIFY_SL: SUCCESS | {symbol} | new_sl=₹{new_sl_price:.2f} | previous=₹{(_prev_sl or 0.0):.2f}")
             log_event("MODIFY_SL",
                      f"✅ SL modified for {symbol}",
                      symbol=symbol,
@@ -2462,8 +2688,15 @@ class OptionPositionMonitor:
             
             if position.current_premium <= effective_sl:
                 # 🎯 SL HIT - Close position at SL price (not slippage price)
-                sl_type = "TRIAL_SL" if is_trial_sl_enabled else "HARD_SL"
-                
+                # When the breakeven profit-floor raised the hard SL to ~entry, label it as
+                # BREAKEVEN_FLOOR (not HARD_SL) — it's a protected give-back, not a -10% loss.
+                if is_trial_sl_enabled:
+                    sl_type = "TRIAL_SL"
+                elif getattr(position, 'breakeven_floor_active', False):
+                    sl_type = "BREAKEVEN_FLOOR"
+                else:
+                    sl_type = "HARD_SL"
+
                 logger.warning(f"SL_HIT: {symbol} | Type: {sl_type} | SL: ₹{effective_sl:.2f} | "
                              f"Current: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f}")
                 
@@ -2537,12 +2770,14 @@ class OptionPositionMonitor:
                            f"SL: ₹{position.hard_sl_price:.2f} | Current: ₹{position.current_premium:.2f} | "
                            f"Loss: {loss_percent:.1f}%")
                 
+                # Distinguish a true -10% hard stop from a breakeven-floor give-back.
+                _sl_label = "BREAKEVEN_FLOOR_HIT" if getattr(position, 'breakeven_floor_active', False) else "HARD_SL_HIT"
                 pnl = self._reconcile_broker_stop_exit(
                     symbol,
                     position.hard_sl_price,
-                    f"HARD_SL_HIT (SL: ₹{position.hard_sl_price:.2f})"
+                    f"{_sl_label} (SL: ₹{position.hard_sl_price:.2f})"
                 )
-                
+
                 if pnl:
                     closed.append(pnl)
                     logger.error(f"HARD_SL_EXIT_EXECUTED: {symbol} | PnL: ₹{pnl.get('pnl', 0):.2f} | "
@@ -3144,7 +3379,7 @@ class OptionPositionMonitor:
         )
         
         # Threshold from data analysis
-        stale_hold_time_min = 20  # 20 minutes (stale consolidation period) - increased from 15min to allow more trend development
+        stale_hold_time_min = 10  # 10 minutes: if TRIAL_SL not activated by 10min, trade is dead
         
         positions = self._snapshot_positions_items()
         logger.info(f"STALE_CONSOLIDATION_CHECK: Starting | positions={len(positions)} | "
@@ -3173,7 +3408,16 @@ class OptionPositionMonitor:
             logger.debug(f"STALE_CONSOL_CHECK: {symbol} | Hold: {hold_time_min:.1f}min | "
                         f"Trial_SL_Enabled: {position.trial_sl_enabled} | Peak: +{peak_profit_pct*100:.2f}% | "
                         f"Current: {current_pnl_pct*100:.2f}%")
-            
+
+            # 🛡️ PROFIT FLOOR: if this trade was meaningfully green, don't let a stale/dead exit
+            # book it below breakeven — raise the hard SL to the floor and let that guard the downside.
+            if self._apply_profit_floor(symbol, position):
+                logger.info(
+                    f"PROFIT_FLOOR_HOLD: {symbol} | peaked +{peak_profit_pct*100:.1f}% | "
+                    f"current {current_pnl_pct*100:.1f}% below floor — breakeven SL protects, skipping stale/dead exit"
+                )
+                continue
+
             # Check stale consolidation pattern
             # Exit if:
             # 1. Been holding for 15+ minutes (stale period)
@@ -3186,6 +3430,49 @@ class OptionPositionMonitor:
             # Reality: Price can reach threshold, consolidate, and never activate trial_sl
             # Solution: Exit after 15 mins if trial_sl not activated (PERIOD)
             
+            # RULE 1 — PER-MINUTE CHECK at marks 5,6,7,8,9:
+            # Sample PnL ONCE per whole minute between 5-9 min. If current PnL < 3% at that snapshot,
+            # exit. Avoids killing momentary dips (2.9% that recovers to 4% within seconds).
+            # TRIAL_SL activation (option running strongly) overrides this entirely.
+            minute_mark = int(hold_time_min)
+            last_checked_min = getattr(position, '_slide_check_min', 0)
+            if (5 <= minute_mark <= 9 and
+                    minute_mark > last_checked_min and
+                    not position.trial_sl_enabled and
+                    current_pnl_pct < 0.03):
+                position._slide_check_min = minute_mark
+                logger.warning(
+                    f"DEAD_TRADE_5MIN: {symbol} | Hold: {hold_time_min:.1f}min (min={minute_mark}) | "
+                    f"Current: {current_pnl_pct*100:.2f}% (<3% at {minute_mark}min mark) | "
+                    f"Peak: +{peak_profit_pct*100:.2f}% | Exiting"
+                )
+                log_event(
+                    'DEAD_TRADE_5MIN',
+                    f"Per-min slide exit at {minute_mark}min | {symbol} | current={current_pnl_pct*100:.2f}% peak={peak_profit_pct*100:.2f}%",
+                    symbol=symbol,
+                    hold_time_min=round(hold_time_min, 1),
+                    minute_mark=minute_mark,
+                    peak_profit_pct=round(peak_profit_pct * 100, 2),
+                    current_pnl_pct=round(current_pnl_pct * 100, 2),
+                    entry_premium=position.entry_premium,
+                    highest_premium=position.highest_premium,
+                    current_premium=getattr(position, 'current_premium', None),
+                    entry_time=position.entry_time.isoformat() if position.entry_time else None,
+                )
+                pnl = self.close_position(
+                    symbol,
+                    position.current_premium,
+                    f"STALE_CONSOLIDATION (Current {current_pnl_pct*100:.1f}%, Peak +{peak_profit_pct*100:.1f}%, {minute_mark}min check)"
+                )
+                if pnl is not None:
+                    # Append the full close_position dict (pnl['pnl'] is the number, plus
+                    # symbol/duration/pnl_percent) — matches what the monitor loop expects.
+                    # Wrapping it as {'pnl': pnl} put a dict under 'pnl' and crashed f-string formatting.
+                    closed.append(pnl)
+                continue
+            elif 5 <= minute_mark <= 9 and minute_mark > last_checked_min:
+                position._slide_check_min = minute_mark  # mark checked even if PnL >= 3%
+
             if (hold_time_min >= stale_hold_time_min and  # Been stale for 15+ mins
                 not position.trial_sl_enabled):  # Trial SL not activated (regardless of peak)
                 
@@ -3203,7 +3490,7 @@ class OptionPositionMonitor:
                     logger.warning(f"STALE_CONSOLIDATION_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
                                  f"Trial_SL: {position.trial_sl_enabled} | Peak: +{peak_profit_pct*100:.2f}% | "
                                  f"Current: {current_pnl_pct*100:.2f}% | "
-                                 f"Action: Exit stale position (15+ min held, TRIAL_SL inactive)")
+                                 f"Action: Exit stale position (10+ min held, TRIAL_SL inactive)")
                     
                     pnl = self.close_position(
                         symbol,
@@ -3217,7 +3504,7 @@ class OptionPositionMonitor:
                             f"Entry: ₹{position.entry_premium:.2f} | Peak: ₹{position.highest_premium:.2f} (+{peak_profit_pct*100:.1f}%) | "
                             f"Exit: ₹{position.current_premium:.2f} ({current_pnl_pct*100:+.1f}%) | "
                             f"PnL: ₹{pnl['pnl']:.2f} | "
-                            f"Exited after 15min stale (TRIAL_SL not activated)"
+                            f"Exited after 10min stale (TRIAL_SL not activated)"
                         )
         
         return closed
@@ -3275,11 +3562,20 @@ class OptionPositionMonitor:
                         f"Price Change: {price_change_pct*100:.2f}% | Abs Move: {abs_price_change_pct*100:.2f}% | "
                         f"P&L: {unrealized_pnl_pct*100:.2f}%")
             
+            # 🛡️ PROFIT FLOOR: previously-green trades must not be dumped at a sub-breakeven loss
+            # by the stale-timeout path either — the breakeven hard SL handles their downside.
+            if self._apply_profit_floor(symbol, position):
+                logger.info(
+                    f"PROFIT_FLOOR_HOLD: {symbol} | stale-timeout skipped — breakeven SL protecting "
+                    f"previously-green trade (current {unrealized_pnl_pct*100:.1f}%)"
+                )
+                continue
+
             # Check staleness criteria ONLY if position has aged beyond threshold
             if hold_time_min >= hold_time_threshold / 60:  # 20 minutes
                 is_stale = False
                 stale_reason = ""
-                
+
                 # Check if position shows no momentum (very small price movement despite long hold)
                 # This catches positions that are stuck/consolidating
                 if abs_price_change_pct < momentum_threshold and unrealized_pnl_pct <= 0:
@@ -3998,8 +4294,11 @@ class OptionPositionMonitor:
                 greeks_stats['positions_checked'] += 1
                 
                 underlying_ltp = underlying_ltps.get(position.underlying)
+                # Track underlying move for OTM/ITM divergence analysis.
+                if underlying_ltp:
+                    position.current_underlying_price = underlying_ltp
                 monthly_expiry_iso = position.expiry
-                
+
                 # Fetch option chain (with cache)
                 try:
                     option_chain = self.broker.fetch_option_chain(
@@ -4720,7 +5019,45 @@ class OptionPositionMonitor:
                 self.symbol_pool.add_symbol(symbol, entry_time=position.entry_time)
                 
             logger.info(f"POSITION_LOAD: Loaded {len(self._snapshot_positions_values())} positions | Active symbols in pool: {len(self.symbol_pool.get_active_symbols())}")
-                
+
+            # Verify any restored sl_order_ids against broker on startup.
+            # If the bot was down and the broker SL fired, the stored sl_order_id
+            # refers to a COMPLETE order. Attempting to cancel it later blocks the exit.
+            if OptionsTradingConfig.TRADING_MODE == "LIVE" and self.broker:
+                for symbol, position in self._snapshot_positions_items():
+                    if not position.sl_order_id:
+                        continue
+                    try:
+                        order_status = self.broker.get_order_status(position.sl_order_id)
+                        if not order_status:
+                            continue
+                        status = str(order_status.get('status', '')).upper()
+                        if status in ('COMPLETE', 'FILLED', 'FULLY_FILLED'):
+                            # SL fired while bot was down — close position at SL price
+                            actual_price = order_status.get('average_price') or position.sl_order_price or position.entry_premium * 0.9
+                            logger.warning(
+                                f"POSITION_LOAD: SL_FILLED_DURING_DOWNTIME | {symbol} | "
+                                f"order_id={position.sl_order_id} | exit=₹{actual_price}"
+                            )
+                            self.close_position(
+                                symbol, actual_price,
+                                "SL_FILLED_DURING_DOWNTIME",
+                                broker_managed_exit=True,
+                                skip_sl_cancel=True,
+                                exit_order_id=position.sl_order_id,
+                            )
+                        elif status in ('REJECTED', 'CANCELLED', 'EXPIRED'):
+                            # SL order is dead — clear it so retry_failed_sl_orders places a fresh one
+                            logger.warning(
+                                f"POSITION_LOAD: SL_ORDER_DEAD | {symbol} | "
+                                f"order_id={position.sl_order_id} | status={status} | clearing for re-placement"
+                            )
+                            position.sl_order_id = None
+                            position.sl_order_price = None
+                            self._save_positions()
+                    except Exception as verify_err:
+                        logger.warning(f"POSITION_LOAD: SL_VERIFY_ERROR | {symbol} | {verify_err}")
+
         except Exception as e:
             print(f"⚠️ Error loading positions: {str(e)}")
     
@@ -4729,13 +5066,25 @@ class OptionPositionMonitor:
         try:
             if not self.pnl_history_file.parent.exists():
                 self.pnl_history_file.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Load existing history
             history = []
             if self.pnl_history_file.exists():
                 with open(self.pnl_history_file, 'r') as f:
                     history = json.load(f)
-            
+
+            # Dedup guard: skip if same symbol + entry_time already recorded today
+            # (prevents double-write when two bot processes close the same position)
+            symbol = pnl_info.get('symbol', '')
+            entry_time = pnl_info.get('entry_time', '')
+            today = datetime.now().date().isoformat()
+            for existing in history:
+                if (existing.get('symbol') == symbol and
+                        existing.get('entry_time') == entry_time and
+                        (existing.get('closed_at', '') or '').startswith(today)):
+                    logger.warning(f"PNL_HISTORY: DUPLICATE_SKIPPED | {symbol} | entry={entry_time} | already recorded today")
+                    return
+
             # Add new entry
             pnl_info['closed_at'] = datetime.now().isoformat()
             history.append(pnl_info)

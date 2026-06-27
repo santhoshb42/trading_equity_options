@@ -57,6 +57,8 @@ class OptionsSignalValidator:
             return OptionsTradingConfig.MIN_CONFIDENCE_PULLBACK
         if normalized == 'MOMENTUM':
             return OptionsTradingConfig.MIN_CONFIDENCE_MOMENTUM
+        if normalized == 'MOMENTUM_CONTINUATION':
+            return OptionsTradingConfig.MIN_CONFIDENCE_MOMENTUM_CONTINUATION
         if normalized == 'MACD_REVERSAL':
             return OptionsTradingConfig.MIN_CONFIDENCE_MACD_REVERSAL
         if normalized == 'DEEP_MACD_REVERSAL':

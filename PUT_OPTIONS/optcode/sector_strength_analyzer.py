@@ -20,7 +20,7 @@ try:
     from .optconfig import DATA_DIR as _DATA_DIR
     _DEFAULT_SECTOR_FILE = str(_DATA_DIR / "symbol_sectors.json")
 except ImportError:
-    _DEFAULT_SECTOR_FILE = "/root/santhosh/trading/ITM_put_options/data/symbol_sectors.json"
+    _DEFAULT_SECTOR_FILE = str(Path(__file__).parent.parent / 'data' / 'symbol_sectors.json')
 
 # Setup basic logging for standalone testing
 logging.basicConfig(

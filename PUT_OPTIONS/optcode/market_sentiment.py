@@ -40,7 +40,12 @@ class MarketSentiment:
         # CRITICAL: Lock to prevent multiple threads from hitting broker API simultaneously
         # Without this, 2 threads can both check cache (both see stale), both hit broker = rate limit
         self.pcr_fetch_lock = threading.Lock()
-    
+        # OI buildup cache — mirrors PCR cache pattern
+        self.oi_cache: Dict[str, Any] = {}           # key=(buildup_type, expiry_type) -> result dict
+        self.oi_cache_timestamps: Dict[str, float] = {}
+        self.oi_cache_ttl = 90.0                     # reuse for 90s (OI changes slowly intraday)
+        self.oi_fetch_lock = threading.Lock()
+
     # =========================================================================
     # PCR Ratio Fetching
     # =========================================================================
@@ -184,15 +189,37 @@ class MarketSentiment:
     def fetch_oi_buildup(self, buildup_type: str = 'Long Built Up',
                         expiry_type: str = 'NEAR') -> Dict[str, Dict]:
         """
-        Fetch OI Buildup data
-        
+        Fetch OI Buildup data with 90-second in-process cache.
+
         Args:
             buildup_type: 'Long Built Up', 'Short Built Up', 'Short Covering', 'Long Unwinding'
             expiry_type: 'NEAR', 'NEXT', 'FAR'
-        
+
         Returns:
             {symbol: {'oi_change': value, 'ltp': price, ...}, ...}
         """
+        import time as _time
+        cache_key = f"{buildup_type}:{expiry_type}"
+        now = _time.time()
+
+        cached_ts = self.oi_cache_timestamps.get(cache_key, 0)
+        if now - cached_ts < self.oi_cache_ttl and cache_key in self.oi_cache:
+            logger.debug(f"OI_BUILDUP_FETCH: CACHE_HIT | type={buildup_type} | age={now - cached_ts:.1f}s")
+            return self.oi_cache[cache_key]
+
+        with self.oi_fetch_lock:
+            cached_ts = self.oi_cache_timestamps.get(cache_key, 0)
+            if now - cached_ts < self.oi_cache_ttl and cache_key in self.oi_cache:
+                logger.debug(f"OI_BUILDUP_FETCH: CACHE_HIT (post-lock) | type={buildup_type}")
+                return self.oi_cache[cache_key]
+
+            result = self._fetch_oi_buildup_live(buildup_type, expiry_type)
+            self.oi_cache[cache_key] = result
+            self.oi_cache_timestamps[cache_key] = _time.time()
+            return result
+
+    def _fetch_oi_buildup_live(self, buildup_type: str, expiry_type: str) -> Dict[str, Dict]:
+        """Internal — performs the actual API call for OI buildup data."""
         try:
             import re
 

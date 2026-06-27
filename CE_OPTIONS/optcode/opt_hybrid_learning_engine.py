@@ -416,7 +416,7 @@ class OptionsHybridLearningEngine:
     """
     
     def __init__(self, data_dir: Path = None):
-        self.data_dir = data_dir or (_DATA_DIR / 'learning' if _DATA_DIR else Path('/root/santhosh/trading/options/data/learning'))
+        self.data_dir = data_dir or (_DATA_DIR / 'learning' if _DATA_DIR else Path(__file__).parent.parent / 'data' / 'learning')
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         # Sub-engines

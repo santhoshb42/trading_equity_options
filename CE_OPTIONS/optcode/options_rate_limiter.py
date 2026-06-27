@@ -22,15 +22,56 @@ import fcntl
 
 from .optlogging import logger, log_event
 
-# AngelOne rate limits for options trading
-REQUESTS_PER_SECOND = 8  # Conservative for options
-REQUESTS_PER_MINUTE = 180
-SHARED_RATE_LIMIT_STATE_FILE = "/tmp/angelone_options_shared_rate_limit.json"
+# ── Account-level GLOBAL backstop (defense-in-depth) ──────────────────────────
+# Was a single 8/sec · 180/min pool that ALL endpoints shared — which throttled cheap
+# LTP/quote calls (real cap 500/min) down to the candle endpoint's 180/min. That global
+# pool was the root cause of ~20s alert→order latency. We now enforce per-endpoint budgets
+# (below) and keep only a generous global backstop here so the account is never hammered.
+REQUESTS_PER_SECOND = 35   # global backstop / sec — set NOT to bind (≈ sum of per-endpoint limits);
+REQUESTS_PER_MINUTE = 1500 # per-endpoint caps below are the real gate. (was 18/800 = over-throttled
+                           # the aggregate to ~half of what AngelOne allows across 4 bots.)
+GLOBAL_PER_SECOND = REQUESTS_PER_SECOND
+GLOBAL_PER_MINUTE = REQUESTS_PER_MINUTE
+# v2 state file: new per-endpoint schema. Renamed so a half-restarted fleet (mixed old/new
+# code) never reads an incompatible schema from the same file.
+SHARED_RATE_LIMIT_STATE_FILE = "/tmp/angelone_options_shared_rate_limit_v2.json"
 
-# Reserve a slice of capacity for trading-critical operations so low-value
+# Reserve a slice of the GLOBAL backstop for trading-critical operations so low-value
 # background work cannot starve live trading and position protection.
-CRITICAL_SECOND_RESERVE = 2
-CRITICAL_MINUTE_RESERVE = 30
+CRITICAL_SECOND_RESERVE = 3
+CRITICAL_MINUTE_RESERVE = 60
+
+# ── PER-ENDPOINT limits (the real fix) ────────────────────────────────────────
+# Set BELOW AngelOne's documented per-client caps (verified against the SmartAPI rate-limit
+# doc): getLtpData 10/s·500/min ; getMarketData(FULL)/quote 10/s·500/min ;
+# getCandleData 3/s·180/min ; order APIs 20/s·500/min. Each class is enforced INDEPENDENTLY
+# across all 4 bots via the shared file lock — so LTP/quote no longer wait behind candle quota.
+ENDPOINT_LIMITS = {
+    # class:   (per_second, per_minute) — AngelOne documented per-endpoint caps with a thin margin.
+    # Shared across all 4 bots (CE+PE) on the one account via the file lock. PE carries more load,
+    # so these are account-wide budgets, not per-bot.
+    'ltp':    (10, 490),   # getLtpData: 10/s, 500/min
+    'quote':  (10, 490),   # getMarketData (LTP/OHLC/FULL): 10/s, 500/min
+    'candle': (3, 178),    # getCandleData: 3/s, 180/min
+    'order':  (19, 490),   # order APIs: 20/s, 500/min
+}
+DEFAULT_ENDPOINT_LIMIT = (6, 200)  # conservative cap for any unmapped request_type
+
+# request_type prefix → endpoint class (request_type strings come from angelone_options.py)
+ENDPOINT_CLASS_PREFIXES = (
+    ('bulk_ltp_quote', 'ltp'),
+    ('ltp_fetch', 'ltp'),
+    ('fetch_chain', 'ltp'),
+    ('market_data', 'quote'),
+    ('oi_fetch', 'quote'),
+    ('pcr_oi', 'quote'),
+    ('historical', 'candle'),
+    ('place_order', 'order'),
+    ('modify_order', 'order'),
+    ('modify_sl', 'order'),
+    ('cancel_order', 'order'),
+    ('close_position', 'order'),
+)
 
 CRITICAL_REQUEST_PREFIXES = (
     "place_order",
@@ -42,9 +83,37 @@ CRITICAL_REQUEST_PREFIXES = (
     "ltp_fetch",
 )
 
+# AngelOne caps these endpoints at 1 request/second PER CLIENT (shared across all 4 bots).
+# The global 8/sec gate is too loose for them, so they get a dedicated 1/sec sub-limit.
+# On denial the callers fall back to their stale cache rather than breaching the API.
+ONE_PER_SECOND_PREFIXES = (
+    "get_order_book",
+    "get_trade_book",
+    "get_position",
+    "get_holding",
+    "search_scrip",
+)
+
+
+def _one_per_second_endpoint(request_type: Optional[str]) -> Optional[str]:
+    normalized = _normalize_request_type(request_type)
+    for prefix in ONE_PER_SECOND_PREFIXES:
+        if normalized.startswith(prefix):
+            return prefix
+    return None
+
 
 def _normalize_request_type(request_type: Optional[str]) -> str:
     return (request_type or "api_call").lower()
+
+
+def _endpoint_class(request_type: Optional[str]) -> str:
+    """Map a request_type to its AngelOne endpoint class for per-endpoint rate limiting."""
+    normalized = _normalize_request_type(request_type)
+    for prefix, cls in ENDPOINT_CLASS_PREFIXES:
+        if normalized.startswith(prefix):
+            return cls
+    return 'default'
 
 
 def is_critical_request(request_type: Optional[str]) -> bool:
@@ -65,6 +134,8 @@ class SharedRateLimiterState:
     def try_acquire_slot(self, request_type: str) -> tuple[bool, str]:
         now = time.time()
         critical = is_critical_request(request_type)
+        ep_class = _endpoint_class(request_type)
+        one_per_sec = _one_per_second_endpoint(request_type)
 
         with open(self.state_file, 'a+', encoding='ascii') as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -76,37 +147,79 @@ class SharedRateLimiterState:
             except json.JSONDecodeError:
                 state = {}
 
-            second_calls = [ts for ts in state.get('second_calls', []) if now - ts < 1.0]
-            minute_calls = [ts for ts in state.get('minute_calls', []) if now - ts < 60.0]
+            # Global account backstop windows (all endpoints).
+            g_sec = [ts for ts in state.get('global_second', []) if now - ts < 1.0]
+            g_min = [ts for ts in state.get('global_minute', []) if now - ts < 60.0]
+            # AngelOne 1/sec endpoints (order book / trade book / position / scrip).
+            endpoint_calls = {
+                ep: [ts for ts in calls if now - ts < 1.0]
+                for ep, calls in (state.get('endpoint_calls', {}) or {}).items()
+            }
+            # Per-endpoint-class windows (ltp / quote / candle / order / default).
+            class_sec = {
+                c: [ts for ts in calls if now - ts < 1.0]
+                for c, calls in (state.get('class_second', {}) or {}).items()
+            }
+            class_min = {
+                c: [ts for ts in calls if now - ts < 60.0]
+                for c, calls in (state.get('class_minute', {}) or {}).items()
+            }
 
-            if len(second_calls) >= REQUESTS_PER_SECOND:
+            def deny(reason: str) -> tuple[bool, str]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                return False, f"Shared rate limit: {REQUESTS_PER_SECOND} calls/second exceeded"
+                return False, reason
 
-            if len(minute_calls) >= REQUESTS_PER_MINUTE:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                return False, f"Shared rate limit: {REQUESTS_PER_MINUTE} calls/minute exceeded"
+            # 1) AngelOne 1/sec endpoints — enforce FIRST (hard per-client cap).
+            if one_per_sec is not None and len(endpoint_calls.get(one_per_sec, [])) >= 1:
+                return deny(f"Shared per-endpoint 1/sec limit reached ({one_per_sec})")
 
+            # 2) Per-endpoint-class limits — the real AngelOne caps, enforced independently
+            #    so cheap LTP/quote calls are never throttled by the candle budget.
+            sec_lim, min_lim = ENDPOINT_LIMITS.get(ep_class, DEFAULT_ENDPOINT_LIMIT)
+            if len(class_sec.get(ep_class, [])) >= sec_lim:
+                return deny(f"Per-endpoint {ep_class} limit reached ({sec_lim}/sec)")
+            if len(class_min.get(ep_class, [])) >= min_lim:
+                return deny(f"Per-endpoint {ep_class} limit reached ({min_lim}/min)")
+
+            # 3) Global account backstop (defense-in-depth), with a reserve for critical ops.
+            if len(g_sec) >= GLOBAL_PER_SECOND:
+                return deny(f"Global backstop {GLOBAL_PER_SECOND}/sec reached")
+            if len(g_min) >= GLOBAL_PER_MINUTE:
+                return deny(f"Global backstop {GLOBAL_PER_MINUTE}/min reached")
             if not critical:
-                if len(second_calls) >= REQUESTS_PER_SECOND - CRITICAL_SECOND_RESERVE:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                    return False, f"Shared per-second reserve held for critical requests ({request_type})"
-                if len(minute_calls) >= REQUESTS_PER_MINUTE - CRITICAL_MINUTE_RESERVE:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                    return False, f"Shared per-minute reserve held for critical requests ({request_type})"
+                if len(g_sec) >= GLOBAL_PER_SECOND - CRITICAL_SECOND_RESERVE:
+                    return deny(f"Global per-second reserve held for critical ({request_type})")
+                if len(g_min) >= GLOBAL_PER_MINUTE - CRITICAL_MINUTE_RESERVE:
+                    return deny(f"Global per-minute reserve held for critical ({request_type})")
 
-            second_calls.append(now)
-            minute_calls.append(now)
+            # Acquire across all relevant windows.
+            g_sec.append(now)
+            g_min.append(now)
+            class_sec.setdefault(ep_class, []).append(now)
+            class_min.setdefault(ep_class, []).append(now)
+            if one_per_sec is not None:
+                endpoint_calls.setdefault(one_per_sec, []).append(now)
+
+            # Keep the file small: drop fully-aged buckets.
+            endpoint_calls = {ep: c for ep, c in endpoint_calls.items() if c}
+            class_sec = {c: v for c, v in class_sec.items() if v}
+            class_min = {c: v for c, v in class_min.items() if v}
 
             handle.seek(0)
             handle.truncate()
             json.dump({
-                'second_calls': second_calls,
-                'minute_calls': minute_calls,
+                'global_second': g_sec,
+                'global_minute': g_min,
+                'endpoint_calls': endpoint_calls,
+                'class_second': class_sec,
+                'class_minute': class_min,
                 'updated_at': now,
             }, handle)
             handle.flush()
-            os.fsync(handle.fileno())
+            # NO os.fsync — this is an ephemeral /tmp coordination file. flush() makes the write
+            # visible to other processes via the page cache (which is all the flock peers need).
+            # fsync forces a DISK write under the exclusive lock — ~ms each — and was serializing
+            # every parallel alert thread on the rate limiter. Durability is irrelevant here.
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
         return True, "OK"

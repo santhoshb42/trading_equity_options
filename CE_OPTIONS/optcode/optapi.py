@@ -18,6 +18,11 @@ from threading import RLock
 import atexit
 import os
 
+# Per-bot concurrency cap: limits simultaneous broker-heavy alert threads to prevent OOM.
+# Threads start immediately (webhook returns 202 at once); only the broker work is gated.
+# Configurable via OPTIONS_ALERT_CONCURRENCY env var. Default 4 for 2GB VPS; raise on larger hosts.
+_ALERT_SEMAPHORE = threading.Semaphore(int(os.environ.get('OPTIONS_ALERT_CONCURRENCY', '4')))
+
 try:
     from flask import Flask, request, jsonify
 except ImportError:
@@ -118,9 +123,11 @@ def create_options_api_app():
         'entry_filter': None,  # Will be initialized below
         'alert_manager': None,  # Will be set by main bot
         'active': False,
-        'startup_time': None
+        'startup_time': None,
+        'entry_in_progress': set(),
+        'entry_in_progress_lock': threading.Lock(),
     }
-    
+
     # Initialize entry filter if available
     if HAS_ENTRY_FILTER:
         try:
@@ -145,36 +152,35 @@ def create_options_api_app():
     ALERT_QUEUE = queue.Queue(maxsize=1000)  # Max 1000 queued alerts
     WEBHOOK_WORKER_ACTIVE = True
     state_lock = RLock()  # Thread-safe access to state dict
-    
+    NUM_ALERT_WORKERS = int(os.getenv('OPTIONS_ALERT_WORKERS', '3'))
+
     def webhook_alert_worker():
         """Background worker that processes alerts from queue"""
-        logger.info("WEBHOOK_WORKER: Starting background alert worker thread")
+        thread_name = threading.current_thread().name
+        logger.info(f"WEBHOOK_WORKER [{thread_name}]: Starting background alert worker thread")
         while WEBHOOK_WORKER_ACTIVE:
             try:
-                # Wait for alert with timeout
                 alert_data = ALERT_QUEUE.get(timeout=1)
                 if alert_data is None:  # Shutdown signal
-                    logger.info("WEBHOOK_WORKER: Received shutdown signal")
+                    logger.info(f"WEBHOOK_WORKER [{thread_name}]: Received shutdown signal")
                     break
-                
+
                 alert, local_state = alert_data
                 symbol = alert.get('symbol', 'UNKNOWN')
-                
-                # 🔧 NEW: Log at bot level - what we pulled from webhook queue
-                logger.info(f"WEBHOOK_WORKER: Pulled from queue | symbol={symbol} | action={alert.get('action', '?')} | price={alert.get('price', '?')} | queue_remaining={ALERT_QUEUE.qsize()}")
+
+                logger.info(f"WEBHOOK_WORKER [{thread_name}]: Pulled from queue | symbol={symbol} | action={alert.get('action', '?')} | price={alert.get('price', '?')} | queue_remaining={ALERT_QUEUE.qsize()}")
                 log_alert(alert=alert, status='bot_processing_started', details={
-                    'queue_remaining': ALERT_QUEUE.qsize()
+                    'queue_remaining': ALERT_QUEUE.qsize(),
+                    'worker': thread_name,
                 })
-                
+
                 try:
-                    # Process the alert (this may take 30+ seconds)
                     start_time = time.time()
                     result = _process_options_alert(alert, local_state)
                     elapsed = time.time() - start_time
                     result_status = result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'
-                    
-                    # 🔧 NEW: Log processing result
-                    logger.info(f"WEBHOOK_WORKER: Alert processed | symbol={symbol} | status={result_status} | elapsed_ms={elapsed*1000:.1f}")
+
+                    logger.info(f"WEBHOOK_WORKER [{thread_name}]: Alert processed | symbol={symbol} | status={result_status} | elapsed_ms={elapsed*1000:.1f}")
                     log_alert(
                         alert=alert,
                         status='bot_processing_completed',
@@ -182,7 +188,7 @@ def create_options_api_app():
                     )
                 except Exception as e:
                     elapsed = time.time() - start_time
-                    logger.error(f"WEBHOOK_WORKER: Alert processing failed | symbol={symbol} | error={str(e)} | elapsed_ms={elapsed*1000:.1f}", exc_info=True)
+                    logger.error(f"WEBHOOK_WORKER [{thread_name}]: Alert processing failed | symbol={symbol} | error={str(e)} | elapsed_ms={elapsed*1000:.1f}", exc_info=True)
                     log_alert(alert=alert, status='bot_processing_error', details={
                         'error': str(e),
                         'elapsed_ms': round(elapsed * 1000, 2),
@@ -191,13 +197,12 @@ def create_options_api_app():
                         'alert_price': alert.get('price'),
                     })
             except queue.Empty:
-                # Normal timeout waiting for next alert
                 continue
             except Exception as e:
-                logger.error(f"WEBHOOK_WORKER: Fatal error | {str(e)}", exc_info=True)
+                logger.error(f"WEBHOOK_WORKER [{thread_name}]: Fatal error | {str(e)}", exc_info=True)
                 break
-        
-        logger.info("WEBHOOK_WORKER: Background worker thread stopped")
+
+        logger.info(f"WEBHOOK_WORKER [{thread_name}]: Background worker thread stopped")
 
     def webhook_alert_worker_with_restart():
         """Wraps webhook_alert_worker so a fatal exception causes an automatic restart."""
@@ -209,21 +214,64 @@ def create_options_api_app():
                 time.sleep(2)
         logger.info("WEBHOOK_WORKER: Restart-wrapper exiting (shutdown requested)")
 
-    # Start background worker thread (daemon=True — process can exit cleanly via atexit)
+    def _process_alert_in_thread(alert, local_state):
+        """Process ONE alert in its own thread — true per-alert parallelism (no fixed worker
+        pool, no queue wait). Each alert starts immediately and overlaps its broker I/O with
+        others; the per-endpoint rate limiter is the only throughput ceiling. Non-blocking for
+        TradingView (the webhook already returned 202)."""
+        symbol = alert.get('symbol', 'UNKNOWN')
+        tname = threading.current_thread().name
+        log_alert(alert=alert, status='bot_processing_started', details={'worker': tname, 'parallel': True})
+        start_time = time.time()
+        try:
+            _sem_t0 = time.time()
+            with _ALERT_SEMAPHORE:  # gate broker-heavy work; prevents OOM under large bursts
+                sem_wait_ms = (time.time() - _sem_t0) * 1000  # queue wait (starvation metric)
+                _proc_t0 = time.time()
+                result = _process_options_alert(alert, local_state)
+                proc_ms = (time.time() - _proc_t0) * 1000     # alert→order processing
+            elapsed = time.time() - start_time
+            result_status = result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'
+            logger.info(f"ALERT_TIMING [{tname}]: symbol={symbol} | status={result_status} | sem_wait_ms={sem_wait_ms:.0f} | proc_ms={proc_ms:.0f} | total_ms={elapsed*1000:.0f}")
+            _details = _build_alert_completion_details(alert, result, elapsed * 1000)
+            if isinstance(_details, dict):
+                _details['sem_wait_ms'] = round(sem_wait_ms, 0)
+                _details['proc_ms'] = round(proc_ms, 0)
+            log_alert(alert=alert, status='bot_processing_completed', details=_details)
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"ALERT_THREAD [{tname}]: failed | symbol={symbol} | error={str(e)} | elapsed_ms={elapsed*1000:.1f}", exc_info=True)
+            log_alert(alert=alert, status='bot_processing_error', details={
+                'error': str(e), 'elapsed_ms': round(elapsed * 1000, 2), 'attempted_symbol': symbol,
+            })
+
+    # Expose for the webhook route (per-alert parallel dispatch).
+    state['_process_alert_in_thread'] = _process_alert_in_thread
+
+    # NOTE: the fixed ALERT_QUEUE + worker pool below is now a VESTIGIAL fallback (kept for the
+    # shutdown machinery). Live alerts are dispatched per-alert in parallel by the webhook route,
+    # so these workers idle on an empty queue.
+    # Start N parallel worker threads (daemon=True — process can exit cleanly via atexit)
     try:
-        _worker_thread = threading.Thread(target=webhook_alert_worker_with_restart, daemon=True, name="WebhookAlertWorker")
-        _worker_thread.start()
-        logger.info("API: Background webhook worker thread started")
+        for _wi in range(NUM_ALERT_WORKERS):
+            _t = threading.Thread(
+                target=webhook_alert_worker_with_restart,
+                daemon=True,
+                name=f"WebhookAlertWorker-{_wi + 1}"
+            )
+            _t.start()
+        logger.info(f"API: {NUM_ALERT_WORKERS} parallel webhook worker threads started")
     except Exception as e:
-        logger.error(f"API: Failed to start webhook worker thread | {str(e)}")
-    
+        logger.error(f"API: Failed to start webhook worker threads | {str(e)}")
+
     def shutdown_webhook_worker():
-        """Stop the background worker thread gracefully"""
+        """Stop all background worker threads gracefully"""
         global WEBHOOK_WORKER_ACTIVE
         WEBHOOK_WORKER_ACTIVE = False
         try:
-            ALERT_QUEUE.put(None)  # Send shutdown signal
-            logger.info("WEBHOOK_WORKER: Shutdown signal sent")
+            for _ in range(NUM_ALERT_WORKERS):
+                ALERT_QUEUE.put(None)  # One shutdown signal per worker thread
+            logger.info(f"WEBHOOK_WORKER: Shutdown signals sent to {NUM_ALERT_WORKERS} workers")
         except:
             pass
     
@@ -339,29 +387,32 @@ def create_options_api_app():
             except Exception as cb_err:
                 logger.warning(f"WEBHOOK: Circuit breaker check failed | proceeding")
             
-            # ✅ CRITICAL FIX: Queue alerts for background processing
-            # Return IMMEDIATELY WITHOUT waiting for processing
-            queued_count = 0
+            # ✅ PER-ALERT PARALLEL DISPATCH: every alert gets its OWN thread immediately —
+            # no fixed worker pool, no queue wait. Alerts overlap their broker I/O; the
+            # per-endpoint rate limiter is the only throughput ceiling. Returns 202 instantly.
+            spawned = 0
             for alert in alerts:
                 try:
-                    # Non-blocking queue with timeout
-                    ALERT_QUEUE.put((alert, state), timeout=1)
-                    queued_count += 1
                     symbol = alert.get('symbol', 'UNKNOWN')
-                    logger.debug(f"WEBHOOK: Alert queued | symbol={symbol} | action={alert.get('action', '?')} | price={alert.get('price', '?')}")
-                    # 🔧 NEW: Log parsed alert at bot level
-                    log_alert(alert=alert, status='queued', details={'bot_level': True})
-                except queue.Full:
-                    logger.warning(f"WEBHOOK: Alert queue full | symbol={alert.get('symbol')} | dropped")
-                    log_alert(alert=alert, status='dropped', details={'reason': 'queue_full'})
-                    # Queue is full - alert will be lost, but we return success to avoid TradingView resend
-            
+                    log_alert(alert=alert, status='queued', details={'bot_level': True, 'parallel': True})
+                    threading.Thread(
+                        target=state['_process_alert_in_thread'],
+                        args=(alert, state),
+                        daemon=True,
+                        name=f"alert-{symbol}",
+                    ).start()
+                    spawned += 1
+                    logger.debug(f"WEBHOOK: Alert dispatched (parallel) | symbol={symbol} | action={alert.get('action', '?')} | price={alert.get('price', '?')}")
+                except Exception as _disp_err:
+                    logger.error(f"WEBHOOK: Dispatch failed | symbol={alert.get('symbol')} | {str(_disp_err)}")
+                    log_alert(alert=alert, status='dropped', details={'reason': f'dispatch_error: {_disp_err}'})
+
             # ✅ IMMEDIATE RESPONSE to TradingView (before any processing!)
-            logger.info(f"WEBHOOK: Returning immediately | queued={queued_count}/{len(alerts)} | response_time=<100ms")
+            logger.info(f"WEBHOOK: Returning immediately | dispatched={spawned}/{len(alerts)} parallel | response_time=<100ms")
             return jsonify({
                 'status': 'accepted',
-                'message': f'Queued {queued_count} alert(s) for background processing',
-                'queued': queued_count,
+                'message': f'Processing {spawned} alert(s) in parallel',
+                'processing': spawned,
                 'total': len(alerts)
             }), 202  # 202 Accepted = processing asynchronously
         
@@ -779,9 +830,54 @@ def create_options_api_app():
             
             log_event("EOD_SQUARE_OFF_COMPLETE", 
                      f"✅ EOD square-off complete | Active closed: {closed_count}/{len(positions_to_close)} | Stagnant: {stagnant_count} | Already closed: {len(all_positions) - len(positions_to_close)} | PnL: ₹{total_pnl:.2f}",
-                     closed=closed_count, stagnant=stagnant_count, total=len(positions_to_close), 
+                     closed=closed_count, stagnant=stagnant_count, total=len(positions_to_close),
                      already_closed=len(all_positions) - len(positions_to_close), pnl=round(total_pnl, 2))
-            
+
+            # ── BROKER ORPHAN SWEEP (LIVE safety net) ──────────────────────────────
+            # Close any position OPEN AT THE BROKER that the monitor isn't tracking (lost after a
+            # crash/restart, or a fill that arrived post-desync). Without this, an orphan stays
+            # open past 3:30 = unhedged overnight risk. Re-verify AFTER the normal close loop.
+            orphan_closed = 0
+            orphan_errors = []
+            try:
+                if OptionsTradingConfig.TRADING_MODE == "LIVE" and state.get('broker'):
+                    tracked_symbols = {str(p.get('symbol')) for p in all_positions if p.get('symbol')}
+                    reverify = state['broker'].verify_positions_with_broker() or {}
+                    broker_net = reverify.get('net_positions', {}) or {}
+                    for b_sym, b_qty in broker_net.items():
+                        try:
+                            qty = int(b_qty)
+                        except (TypeError, ValueError):
+                            continue
+                        if qty <= 0 or b_sym in tracked_symbols:
+                            continue  # flat/short (bot is long-only) or already handled above
+                        logger.error(f"EOD_ORPHAN: untracked broker position {b_sym} qty={qty} → force MARKET SELL")
+                        log_event("EOD_ORPHAN_DETECTED",
+                                 f"⚠️ Untracked broker position {b_sym} qty={qty} — force-closing",
+                                 symbol=b_sym, quantity=qty)
+                        try:
+                            state['broker'].cancel_outstanding_orders_for_symbol(b_sym, [])
+                        except Exception as _ce:
+                            logger.warning(f"EOD_ORPHAN: cancel outstanding failed | {b_sym} | {str(_ce)}")
+                        sell_id = state['broker'].place_options_order(
+                            symbol=b_sym, action='SELL', quantity=qty,
+                            order_type='MARKET', product_type='INTRADAY', allow_queue=False,
+                        )
+                        if sell_id:
+                            orphan_closed += 1
+                            log_event("EOD_ORPHAN_CLOSED", f"✅ Force-closed orphan {b_sym}",
+                                     symbol=b_sym, quantity=qty, order_id=sell_id)
+                        else:
+                            orphan_errors.append(b_sym)
+                            log_event("EOD_ORPHAN_CLOSE_FAILED", f"❌ Failed to close orphan {b_sym}",
+                                     symbol=b_sym, quantity=qty)
+                    if orphan_closed or orphan_errors:
+                        log_event("EOD_ORPHAN_SWEEP_COMPLETE",
+                                 f"Orphan sweep: closed={orphan_closed} | failed={len(orphan_errors)}",
+                                 closed=orphan_closed, failed=orphan_errors)
+            except Exception as orphan_err:
+                logger.error(f"EOD_ORPHAN_SWEEP_ERROR: {str(orphan_err)}")
+
             # CLEANUP: Remove closed positions from the positions dictionary and save
             try:
                 closed_symbols = []
@@ -814,6 +910,8 @@ def create_options_api_app():
                 "positions_total": len(positions_to_close),
                 "broker_verified_open": len(broker_open_positions),
                 "broker_positions": broker_open_positions,
+                "orphans_closed": orphan_closed,
+                "orphan_errors": orphan_errors if orphan_errors else None,
                 "positions_remaining": len(monitor.positions),  # After cleanup
                 "total_pnl": round(total_pnl, 2),
                 "errors": errors if errors else None,
@@ -1056,6 +1154,30 @@ def _evaluate_entry_limits(
     base_context: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """Enforce total deployed capital and daily trade count before entry."""
+
+    # Reject if this underlying already has an open position (prevents duplicate trades on same stock)
+    existing_for_underlying = [
+        sym for sym, pos in state['monitor']._snapshot_positions_items()
+        if pos.underlying == underlying
+    ]
+    if existing_for_underlying:
+        logger.warning(
+            f"ALERT_PROCESS: UNDERLYING_ALREADY_ACTIVE | symbol={symbol} | underlying={underlying} "
+            f"| existing_position={existing_for_underlying[0]}"
+        )
+        log_alert(alert=alert, status='duplicate_underlying_rejected', details={
+            'underlying': underlying,
+            'existing_position': existing_for_underlying[0],
+        })
+        return {
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'status': 'rejected',
+            'reason': f'Underlying {underlying} already has an open position ({existing_for_underlying[0]})',
+            'stage': 'duplicate_underlying_check',
+            **base_context,
+        }
+
     used_capital = _get_open_position_capital_used(state)
     available_capital = OptionsCapitalConfig.get_available_capital(used_capital)
     if available_capital < cap_this_trade:
@@ -1381,16 +1503,30 @@ def _build_alert_indicator_snapshot(*, alert: Dict[str, Any], market_trend: str,
 
 def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     """Process single options alert with detailed logging"""
+    _entry_ip: set = state.get('entry_in_progress', set())
+    _entry_ip_lock: threading.Lock = state.get('entry_in_progress_lock')
+    _underlying_reserved = False
+    _underlying_for_cleanup = None
+
     try:
         timestamp = datetime.now().isoformat()
         symbol = alert.get('symbol', 'UNKNOWN')
-        
+
         # Initialize neural ML signal as None (disabled)
         neural_ml_signal = None
         neural_ml_multiplier = 1.0
-        
+
         logger.debug(f"ALERT_PROCESS: START | symbol={symbol} | action={alert.get('action')}")
-        
+
+        # ── LATENCY INSTRUMENTATION (read-only; never affects the entry) ──
+        # Sub-stage timing so we can see WHICH part of alert→order is slow (target <2s).
+        _entry_timing = {'t0': time.monotonic()}
+        try:
+            from .options_rate_limiter import get_options_rate_limiter as _g_rl
+            _entry_timing['rl0'] = _g_rl().wait_time_total
+        except Exception:
+            _entry_timing['rl0'] = 0.0
+
         # CRITICAL: Check broker session health BEFORE processing alert
         # This prevents alerts from being silently dropped due to Invalid Token
         state['broker']._detect_and_fix_invalid_token()
@@ -1419,6 +1555,20 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         underlying = processed['underlying']
         action = processed['action']
         alert_price = float(alert.get('price', 0) or 0)
+
+        # Reserve this underlying so parallel workers don't double-enter the same stock
+        _underlying_for_cleanup = underlying
+        if _entry_ip_lock is not None:
+            with _entry_ip_lock:
+                if underlying in _entry_ip:
+                    logger.warning(f"ALERT_PROCESS: WORKER_RACE_BLOCKED | symbol={symbol} | underlying={underlying} | another worker is already processing this underlying")
+                    return {
+                        'symbol': symbol, 'timestamp': timestamp, 'status': 'rejected',
+                        'reason': f'Underlying {underlying} already being processed by another worker',
+                        'stage': 'entry_in_progress_check',
+                    }
+                _entry_ip.add(underlying)
+                _underlying_reserved = True
 
         # If no price in alert, fetch live spot price from broker for correct ATM selection
         # (critical for index underlyings where wrong ATM = wrong contract)
@@ -1601,13 +1751,14 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         expiry = state['broker'].get_next_expiry(underlying)
         
         # Try to fetch chain with exponential backoff retry logic
-        import time
+        # NOTE: do NOT 'import time' here — it makes `time` a function-local and breaks the
+        # latency instrumentation (time.monotonic) at the top of process_alert. Use module-level time.
         chain = None
         max_retries = 3
         retry_delays = [1, 2, 4]  # exponential backoff: 1s, 2s, 4s
         
         for attempt in range(max_retries):
-            chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None)
+            chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None, light=True)
             
             if chain:
                 if attempt > 0:
@@ -1917,6 +2068,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 
                 validators_passed = entry_details.get('validators_passed', 0)
                 logger.info(f"ENTRY_FILTER: PASSED | symbol={symbol} | action={action} | validators_passed={validators_passed} | data_collected={data_available}")
+                try: _entry_timing['t_filter'] = time.monotonic()
+                except Exception: pass
                 base_context['probation_snapshot'] = probation_snapshot
                 entry_context = _build_position_entry_context(alert, processed, market_trend, filter_inputs, entry_details)
             
@@ -1951,7 +2104,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     logger.warning(f"ALERT_PROCESS: STALE_CHAIN | {underlying} | alert_price=₹{alert_price} | available_strikes=[₹{min_strike}-₹{max_strike}] | gap=₹{abs(gap)} | re-fetching with expanded range")
                     
                     # Fetch fresh chain to ensure we have the right strikes
-                    fresh_chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price, force_refresh=True)
+                    fresh_chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price, force_refresh=True, light=True)
                     if fresh_chain:
                         chain = fresh_chain
                         logger.info(f"ALERT_PROCESS: CHAIN_REFRESHED | {underlying} | using fresh data for alert_price=₹{alert_price}")
@@ -1974,6 +2127,35 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         # Select contract based on action
         selected_contract = ce if contract_type == 'CE' else pe
+
+        # LIGHT chain skipped per-contract greeks (the ~2s bottleneck). Compute REAL greeks for
+        # the SELECTED contract ONLY — this is the only contract whose greeks are used (greeks
+        # check + ML + exit analysis). Selection above is by strike, so this changes nothing
+        # about WHICH contract we trade.
+        try:
+            from .angelone_options import estimate_greeks as _estimate_greeks
+            _dte = 7
+            try:
+                _exp_dt = datetime.strptime(expiry, "%Y-%m-%d")
+                _dte = max(1, (_exp_dt - datetime.now()).days)
+            except Exception:
+                pass
+            _sel_greeks = _estimate_greeks(
+                underlying=underlying,
+                strike=selected_contract.strike,
+                spot=alert_price if alert_price > 0 else selected_contract.strike,
+                contract_type=contract_type,
+                time_to_expiry_days=_dte,
+                iv=0.25,
+            )
+            selected_contract.delta = _sel_greeks.get('delta', 0.5 if contract_type == 'CE' else -0.5)
+            selected_contract.gamma = _sel_greeks.get('gamma', 0.05)
+            selected_contract.theta = _sel_greeks.get('theta', -0.02)
+            selected_contract.vega = _sel_greeks.get('vega', 0.1)
+            logger.debug(f"SELECTED_GREEKS: {selected_contract.symbol} | D={selected_contract.delta:.3f} G={selected_contract.gamma:.4f} (light-chain, selected-only)")
+        except Exception as _ge:
+            logger.warning(f"SELECTED_GREEKS: estimation failed | {selected_contract.symbol} | {str(_ge)} — using chain defaults")
+
         contract_context = {
             **base_context,
             'contract': selected_contract.symbol,
@@ -2092,10 +2274,12 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         # Calculate dynamic quantity based on budget utilization in whole exchange lots.
         lot_size = max(state['instrument_manager'].get_lot_size(selected_contract.symbol), 1)
+        # get_market_data (getMarketData FULL) already returns OI + volume — same source/extraction
+        # as get_oi_data, so a separate OI call is redundant. One call instead of two halves the
+        # broker round-trips in this (now-dominant) liquidity step.
         liquidity_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
-        liquidity_oi_map = state['broker'].get_oi_data([selected_contract.symbol], "NFO") or {}
         live_volume = int(liquidity_market_data.get('volume') or selected_contract.volume or 0)
-        live_oi = int(liquidity_oi_map.get(selected_contract.symbol) or liquidity_market_data.get('open_interest') or selected_contract.open_interest or 0)
+        live_oi = int(liquidity_market_data.get('open_interest') or selected_contract.open_interest or 0)
 
         if live_volume <= 0 or live_oi <= 0:
             logger.warning(
@@ -2104,27 +2288,62 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             )
             time.sleep(0.25)
             refetch_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
-            refetch_oi_map = state['broker'].get_oi_data([selected_contract.symbol], "NFO") or {}
             refetch_volume = int(refetch_market_data.get('volume') or 0)
-            refetch_oi = int(refetch_oi_map.get(selected_contract.symbol) or refetch_market_data.get('open_interest') or 0)
+            refetch_oi = int(refetch_market_data.get('open_interest') or 0)
             if refetch_volume > 0:
                 liquidity_market_data = refetch_market_data
                 live_volume = refetch_volume
             if refetch_oi > 0:
-                liquidity_oi_map = refetch_oi_map
                 live_oi = refetch_oi
             logger.info(
                 f"ALERT_PROCESS: LIQUIDITY_REFETCH_RESULT | contract={selected_contract.symbol} "
                 f"| volume={live_volume:,} | oi={live_oi:,}"
             )
 
+        try: _entry_timing['t_liquidity'] = time.monotonic()
+        except Exception: pass
         live_bid = float(liquidity_market_data.get('bid') or selected_contract.bid or 0.0)
         live_ask = float(liquidity_market_data.get('ask') or selected_contract.ask or 0.0)
         live_spread_pct = liquidity_market_data.get('bid_ask_spread_pct')
+        # Detect synthetic bid/ask (chain fallback sets bid=ltp*0.98, ask=ltp*1.02 → ~4.08% flat).
+        # Real depth comes from get_market_data; mark when the spread looks synthetic so analysis
+        # can exclude it rather than treat it as a real market spread.
+        _ltp_ref = float(selected_contract.ltp or 0.0)
+        spread_is_synthetic = bool(
+            _ltp_ref > 0 and live_bid > 0 and live_ask > 0
+            and abs(live_bid - _ltp_ref * 0.98) < 0.01 and abs(live_ask - _ltp_ref * 1.02) < 0.01
+        )
+        if live_spread_pct is None and live_bid > 0 and live_ask > 0 and _ltp_ref > 0:
+            live_spread_pct = (live_ask - live_bid) / _ltp_ref * 100.0
         selected_contract.volume = live_volume
         selected_contract.open_interest = live_oi
         selected_contract.bid = live_bid
         selected_contract.ask = live_ask
+
+        # ── REAL-SPREAD ENTRY GATE (advisory by default) ──────────────────────
+        # Logs the real spread on every entry so we can study the slippage distribution in PAPER.
+        # Only blocks when OPTIONS_ENTRY_SPREAD_GATE_ENFORCE=true (and the spread isn't synthetic).
+        if live_spread_pct is not None and not spread_is_synthetic:
+            _spread_breach = live_spread_pct > OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT
+            logger.info(
+                f"ENTRY_SPREAD_CHECK: {selected_contract.symbol} | spread={live_spread_pct:.2f}% "
+                f"| bid=₹{live_bid:.2f} ask=₹{live_ask:.2f} ltp=₹{_ltp_ref:.2f} "
+                f"| limit={OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}% | breach={_spread_breach} "
+                f"| enforce={OptionsTradingConfig.ENTRY_SPREAD_GATE_ENFORCE}"
+            )
+            if _spread_breach and OptionsTradingConfig.ENTRY_SPREAD_GATE_ENFORCE:
+                logger.warning(
+                    f"ALERT_PROCESS: SPREAD_TOO_WIDE | {selected_contract.symbol} | "
+                    f"spread={live_spread_pct:.2f}% > {OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}%"
+                )
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Bid-ask spread too wide: {live_spread_pct:.2f}% > {OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}% (slippage risk)',
+                    'stage': 'spread_gate',
+                    **contract_context,
+                }
 
         premium_response_ok, premium_response_reason, premium_response_metrics = _confirm_premium_response(
             state=state,
@@ -2173,6 +2392,25 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         effective_budget = cap_this_trade
         liquidity_scale_attempts = 0
         scaled_down_for_oi = False
+
+        # Lot cap: order lots = min(budget_lots, 10% of OI lots, 10% of volume lots), floored at 1.
+        # Never reject for thin OI/volume — always enter at least 1 lot if budget allows.
+        if lot_size > 0:
+            oi_max_lots  = max(1, int(live_oi     / lot_size * 0.10)) if live_oi     > 0 else None
+            vol_max_lots = max(1, int(live_volume  / lot_size * 0.10)) if live_volume > 0 else None
+            max_lots = min(x for x in [oi_max_lots, vol_max_lots] if x is not None) if (oi_max_lots or vol_max_lots) else None
+            if max_lots:
+                lot_cap_budget = max_lots * lot_size * pricing_premium
+                if lot_cap_budget < effective_budget:
+                    logger.info(
+                        f"ALERT_PROCESS: LOT_CAP | symbol={symbol} | contract={selected_contract.symbol} "
+                        f"| oi_lots={live_oi // lot_size if live_oi else 'n/a'} oi_max={oi_max_lots} "
+                        f"| vol_lots={live_volume // lot_size if live_volume else 'n/a'} vol_max={vol_max_lots} "
+                        f"| capped_lots={max_lots} | budget: ₹{effective_budget:.0f} → ₹{lot_cap_budget:.0f}"
+                    )
+                    effective_budget = lot_cap_budget
+                    scaled_down_for_oi = True
+
         quantity = 0
         affordable_lots = 0
         actual_cost = 0.0
@@ -2419,6 +2657,32 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         
         logger.info(f"ALERT_PROCESS: ORDER_PLACED | order_id={order_id} | attempts={_attempt + 1}")
 
+        # ── EMIT ENTRY_TIMING breakdown (read-only) — drives the <2s latency target ──
+        try:
+            _now = time.monotonic()
+            from .options_rate_limiter import get_options_rate_limiter as _g_rl
+            _rl_wait = _g_rl().wait_time_total - _entry_timing.get('rl0', 0.0)
+            _tf = _entry_timing.get('t_filter', _entry_timing['t0'])
+            _tl = _entry_timing.get('t_liquidity', _tf)
+            log_event(
+                "ENTRY_TIMING",
+                f"⏱ entry pipeline timing for {selected_contract.symbol}",
+                symbol=selected_contract.symbol,
+                chain_filter_ms=round((_tf - _entry_timing['t0']) * 1000, 1),
+                select_liquidity_ms=round((_tl - _tf) * 1000, 1),
+                pricing_order_ms=round((_now - _tl) * 1000, 1),
+                total_ms=round((_now - _entry_timing['t0']) * 1000, 1),
+                rate_limit_wait_ms=round(_rl_wait * 1000, 1),
+            )
+            logger.info(
+                f"ENTRY_TIMING: {selected_contract.symbol} | total={round((_now - _entry_timing['t0']) * 1000)}ms "
+                f"| chain+filter={round((_tf - _entry_timing['t0']) * 1000)}ms "
+                f"| sel+liq={round((_tl - _tf) * 1000)}ms | pricing+order={round((_now - _tl) * 1000)}ms "
+                f"| rl_wait={round(_rl_wait * 1000)}ms"
+            )
+        except Exception as _te:
+            logger.debug(f"ENTRY_TIMING: skipped | {_te}")
+
         actual_entry_premium = pricing_premium
 
         if OptionsTradingConfig.TRADING_MODE == "LIVE" and state.get('broker'):
@@ -2459,8 +2723,73 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"order_id={order_id} | using_order_price=₹{pricing_premium:.2f}"
                 )
 
+            # PARTIAL-FILL GUARD: size the position (and therefore the SL) to the qty actually
+            # filled, not the qty requested. If a market BUY partials, using the requested qty
+            # would place an SL for MORE than we own → the unfilled portion sells SHORT.
+            try:
+                _filled_qty = int(fill_status.get('filled_quantity') or 0)
+                if 0 < _filled_qty < quantity:
+                    logger.warning(
+                        f"BUY_CONFIRMATION: PARTIAL_FILL | {selected_contract.symbol} | "
+                        f"requested={quantity} | filled={_filled_qty} → sizing position/SL to filled qty"
+                    )
+                    log_event("PARTIAL_FILL", f"Partial BUY fill for {selected_contract.symbol}",
+                              symbol=selected_contract.symbol, requested_qty=quantity,
+                              filled_qty=_filled_qty, order_id=order_id)
+                    quantity = _filled_qty
+            except Exception as _pfe:
+                logger.debug(f"BUY_CONFIRMATION: filled-qty check skipped | {_pfe}")
+
+        # ── ENTRY SLIPPAGE MODELING + METADATA (PAPER analysis for LIVE readiness) ──
+        # LTP is the "ideal" entry the old PAPER booked; a real BUY fills at the ask.
+        # In PAPER (modeling ON) we book actual_entry_premium at the real ask so PnL reflects
+        # entry slippage. Metadata is captured on entry_context (persists to positions.jsonl) and
+        # logged as an event regardless of mode, so LIVE can be compared against this baseline.
+        _entry_ideal_ltp = float(selected_contract.ltp or pricing_premium or 0.0)
+        _real_ask = float(live_ask or 0.0)
+        _real_bid = float(live_bid or 0.0)
+        entry_slippage_meta = {
+            'ideal_ltp': round(_entry_ideal_ltp, 2),
+            'real_bid': round(_real_bid, 2),
+            'real_ask': round(_real_ask, 2),
+            'spread_pct': round(float(live_spread_pct), 3) if live_spread_pct is not None else None,
+            'spread_is_synthetic': spread_is_synthetic,
+            'order_type': entry_order_type,
+            'order_price': round(float(pricing_premium), 2),
+            'mode': OptionsTradingConfig.TRADING_MODE,
+        }
+        if (OptionsTradingConfig.TRADING_MODE != "LIVE"
+                and OptionsTradingConfig.PAPER_SLIPPAGE_MODELING
+                and _real_ask > 0 and not spread_is_synthetic):
+            actual_entry_premium = _real_ask
+            entry_slippage_meta['applied'] = True
+        else:
+            entry_slippage_meta['applied'] = False
+        entry_slippage_meta['fill'] = round(float(actual_entry_premium), 2)
+        entry_slippage_meta['slippage_pct'] = (
+            round((actual_entry_premium - _entry_ideal_ltp) / _entry_ideal_ltp * 100, 3)
+            if _entry_ideal_ltp > 0 else 0.0
+        )
+        try:
+            if isinstance(entry_context, dict):
+                entry_context['entry_slippage'] = entry_slippage_meta
+        except Exception:
+            pass
+        log_event(
+            "SLIPPAGE_ENTRY",
+            f"📐 Entry slippage modeled for {selected_contract.symbol}",
+            symbol=selected_contract.symbol,
+            **entry_slippage_meta,
+        )
+        logger.info(
+            f"SLIPPAGE_ENTRY: {selected_contract.symbol} | ideal_ltp=₹{_entry_ideal_ltp:.2f} "
+            f"| ask=₹{_real_ask:.2f} | fill=₹{actual_entry_premium:.2f} "
+            f"| slippage={entry_slippage_meta['slippage_pct']:.2f}% | applied={entry_slippage_meta['applied']} "
+            f"| synthetic_spread={spread_is_synthetic}"
+        )
+
         logger.info(f"BUY_ORDER: Filled | order_id={order_id} | {selected_contract.symbol}")
-        
+
         # Prepare entry Greek data for learning
         entry_greeks_data = {
             'delta': selected_contract.delta,
@@ -2483,7 +2812,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'ml_multiplier': 1.0
         }
         
-        # Fetch and log sector strength at entry (PAPER and LIVE modes)
+        # Sector strength is post-order ENRICHMENT (it fetches LTP for ~5 sector peers ≈ 1s) and
+        # is NOT an entry gate. It used to run here, BEFORE add_position — blocking SL placement and
+        # adding ~1s to position_created. Moved to a background thread after the position is in
+        # (see below), so order→SL→position stays fast. Position starts with placeholder sector_data.
         sector_data = {
             'sector': 'UNKNOWN',
             'sector_rsi': None,
@@ -2491,37 +2823,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'sector_participation': None,
             'sector_bullish': None
         }
-        
-        if state['sector_analyzer']:
-            try:
-                # 🔧 FIX: Get sector for this symbol (using underlying, not full contract symbol)
-                sector = state['sector_analyzer'].get_sector(symbol)
-                if sector and sector != 'UNKNOWN':
-                    sector_data['sector'] = sector
-                    logger.info(f"SECTOR_ENTRY_LOG | symbol={symbol} | sector={sector} | mapping_found=YES")
-                    
-                    # Get sector strength metrics
-                    performance = state['sector_analyzer'].get_sector_performance(sector)
-                    if performance:
-                        sector_data['sector_rsi'] = performance.get('rsi')
-                        sector_data['sector_performance'] = performance.get('performance_pct')
-                        sector_data['sector_participation'] = performance.get('participation_pct')
-                    
-                    # Check if sector is bullish
-                    is_bullish, reason = state['sector_analyzer'].is_sector_bullish(symbol, threshold=60)
-                    sector_data['sector_bullish'] = is_bullish
-                    
-                    logger.debug(f"SECTOR_DATA_COMPLETE | symbol={symbol} | sector={sector} | rsi={sector_data['sector_rsi']} | perf={sector_data['sector_performance']}% | participation={sector_data['sector_participation']}% | bullish={is_bullish}")
-                else:
-                    logger.warning(f"SECTOR_ENTRY_LOG | symbol={symbol} | sector=NOT_MAPPED | mapping_found=NO")
-                    
-                logger.debug(f"SECTOR_DATA_TO_POSITION | symbol={symbol} | sector_data={sector_data}")  # DEBUG
-            except Exception as e:
-                # Log error but don't block the trade
-                logger.error(f"SECTOR_ANALYZER: ENTRY_LOG_FAILED | symbol={symbol} | error={str(e)}")
-                import traceback
-                logger.debug(f"SECTOR_ANALYZER: TRACEBACK | {traceback.format_exc()}")
-        
+
         # 🔧 FIX: Check if position was successfully added before incrementing counter
         position_added = state['monitor'].add_position(
             symbol=selected_contract.symbol,
@@ -2540,7 +2842,36 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             trend_strength=float(alert.get('trend_strength', 0) or 0),  # NEW: raw emaSpread %
             entry_context=entry_context,
         )
-        
+
+        # BACKGROUND sector enrichment (peer-LTP fetch ~1s) — never blocks order→SL→position.
+        # Attaches real sector_data to the position once ready; entry decision already made.
+        if position_added and state.get('sector_analyzer'):
+            def _bg_sector(_sym=symbol, _contract=selected_contract.symbol):
+                try:
+                    sa = state['sector_analyzer']
+                    sec = sa.get_sector(_sym)
+                    if not sec or sec == 'UNKNOWN':
+                        logger.warning(f"SECTOR_ENTRY_LOG(bg) | symbol={_sym} | sector=NOT_MAPPED")
+                        return
+                    sd = {'sector': sec, 'sector_rsi': None, 'sector_performance': None,
+                          'sector_participation': None, 'sector_bullish': None}
+                    perf = sa.get_sector_performance(sec)
+                    if perf:
+                        sd['sector_rsi'] = perf.get('rsi')
+                        sd['sector_performance'] = perf.get('performance_pct')
+                        sd['sector_participation'] = perf.get('participation_pct')
+                    try:
+                        sd['sector_bullish'], _ = sa.is_sector_bullish(_sym, threshold=60)
+                    except Exception:
+                        pass
+                    pos = state['monitor']._get_position(_contract)
+                    if pos:
+                        pos.sector_data = sd
+                    logger.info(f"SECTOR_ENTRY_LOG(bg) | symbol={_sym} | sector={sec} | bullish={sd['sector_bullish']}")
+                except Exception as _se:
+                    logger.debug(f"SECTOR_BG: failed | {_sym} | {str(_se)}")
+            threading.Thread(target=_bg_sector, daemon=True, name=f"sector-{symbol}").start()
+
         # 🔧 CRITICAL: Only increment counter if position was actually added (not rejected as duplicate)
         if not position_added:
             logger.warning(f"ALERT_PROCESS: POSITION_NOT_ADDED | symbol={symbol} | contract={selected_contract.symbol} | order_id={order_id} | likely_duplicate")
@@ -2691,6 +3022,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             'stage': 'exception',
             'error': str(e)
         }
+    finally:
+        # Always release the underlying reservation so future alerts for this stock are not blocked
+        if _underlying_reserved and _underlying_for_cleanup and _entry_ip_lock is not None:
+            with _entry_ip_lock:
+                _entry_ip.discard(_underlying_for_cleanup)
 
 # =============================================================================
 # API Server Management

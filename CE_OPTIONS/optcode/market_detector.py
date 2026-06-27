@@ -23,11 +23,12 @@ class MarketConditionDetector:
         self.current_threshold = 10.0  # Default to 10%
         self.market_state = "UNKNOWN"
         self.nifty_open_recorded_at = None
-        
+        self._last_nifty_ltp = None     # Cached LTP from last update_market_data call
+
     def update_market_data(self, nifty_ltp: float, nifty_open: float = None, nifty_prev_close: float = None):
         """
         Update market data for condition analysis
-        
+
         Args:
             nifty_ltp: Current Nifty price
             nifty_open: Today's open (optional)
@@ -37,7 +38,9 @@ class MarketConditionDetector:
             self.nifty_open_price = nifty_open
         if nifty_prev_close:
             self.nifty_prev_close = nifty_prev_close
-            
+        if nifty_ltp:
+            self._last_nifty_ltp = nifty_ltp
+
         self.last_market_check = datetime.now()
         
     def get_trial_sl_threshold(self, nifty_ltp: float = None, 
@@ -51,28 +54,9 @@ class MarketConditionDetector:
         if current_time is None:
             current_time = datetime.now()
             
-        # If nifty_ltp not provided, try to fetch it dynamically
+        # If nifty_ltp not provided, use cached value from last monitoring update (no API call)
         if nifty_ltp is None:
-            try:
-                # Import broker here to avoid circular imports
-                from .angelone_options import get_options_broker
-                broker = get_options_broker()
-                nifty_data = broker.get_market_data("NIFTY", exchange="NSE")
-                if nifty_data:
-                    nifty_ltp = nifty_data.get('ltp')
-                    nifty_open = nifty_data.get('open')
-                    if nifty_ltp:
-                        # If we have open price, use it
-                        if nifty_open:
-                            self.update_market_data(nifty_ltp=nifty_ltp, nifty_open=nifty_open)
-                            logger.debug(f"MARKET_THRESHOLD: Dynamically fetched Nifty | LTP={nifty_ltp:.2f} | Open={nifty_open:.2f}")
-                        # Otherwise, set session open on first fetch of the day
-                        elif not self.nifty_session_open:
-                            self.nifty_session_open = nifty_ltp
-                            self.nifty_open_recorded_at = current_time
-                            logger.info(f"MARKET_THRESHOLD: Recorded session open at {current_time.time()} | Nifty={nifty_ltp:.2f}")
-            except Exception as e:
-                logger.debug(f"MARKET_THRESHOLD: Could not dynamically fetch Nifty | {str(e)}")
+            nifty_ltp = self._last_nifty_ltp
         
         # Determine reference open price (prefer actual open, fallback to session open)
         reference_open = self.nifty_open_price or self.nifty_session_open

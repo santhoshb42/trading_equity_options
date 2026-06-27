@@ -11,12 +11,23 @@ Uses instrument.json as reference for token mapping when available.
 
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 from .optconfig import BASE_DIR, OptionsTradingConfig
 from .optlogging import logger
+
+# =============================================================================
+# Process-wide instrument cache
+# instrument.json is ~36MB. Parsing it per-alert (per InstrumentCEExtractor())
+# spiked CPU under the GIL and memory (→ OOM) during bursts. Parse ONCE per
+# process, keyed on file mtime; all instances share the same read-only structures.
+# Reloaded automatically when instrument.json changes on disk (daily refresh).
+# =============================================================================
+_INSTRUMENT_CACHE = {'mtime': None, 'all_instruments': None, 'instruments': None, 'options_map': None}
+_INSTRUMENT_CACHE_LOCK = threading.Lock()
 
 # =============================================================================
 # CE/PE Symbol Format Reference
@@ -289,32 +300,51 @@ class InstrumentCEExtractor:
         self._load_instruments()
     
     def _load_instruments(self):
-        """Load instrument.json if available, otherwise use pure symbol generation"""
+        """Load instrument.json once per process (cached by mtime), shared across instances."""
         try:
-            if self.instrument_file.exists():
-                self._last_loaded_mtime = self.instrument_file.stat().st_mtime
-                with open(self.instrument_file, 'r') as f:
-                    data = json.load(f)
-                
-                # Keep ALL items (including duplicates with different expiry)
-                self.all_instruments = data
-                
-                # Also build quick lookup by symbol (for get_token_for_symbol)
-                # This will have the last occurrence, but all_instruments has all
-                for item in data:
-                    self.instruments[item['symbol']] = item
-                    
-                    # Store any NFO instruments separately
-                    if item.get('exch_seg') == 'NFO':
-                        self.options_map[item['symbol']] = item
-                
-                print(f"✅ Loaded {len(self.all_instruments)} instruments from {self.instrument_file}")
-                print(f"   {len(self.instruments)} unique symbols, {len(self.options_map)} NFO options")
-            else:
+            if not self.instrument_file.exists():
                 print(f"⚠️ Instrument file not found: {self.instrument_file}")
                 print("   ℹ️ Using pure algorithmic symbol generation (no token mapping)")
                 print("   💡 To enable token mapping, run: python3 tools/download_options_instruments.py")
-        
+                return
+
+            current_mtime = self.instrument_file.stat().st_mtime
+
+            with _INSTRUMENT_CACHE_LOCK:
+                # Reuse process-wide parse if file unchanged (the common, hot path)
+                if (_INSTRUMENT_CACHE['mtime'] == current_mtime
+                        and _INSTRUMENT_CACHE['all_instruments'] is not None):
+                    self.all_instruments = _INSTRUMENT_CACHE['all_instruments']
+                    self.instruments = _INSTRUMENT_CACHE['instruments']
+                    self.options_map = _INSTRUMENT_CACHE['options_map']
+                    self._last_loaded_mtime = current_mtime
+                    return
+
+                # Cold parse (first instance in process, or file changed on disk)
+                with open(self.instrument_file, 'r') as f:
+                    data = json.load(f)
+
+                instruments = {}
+                options_map = {}
+                for item in data:
+                    instruments[item['symbol']] = item
+                    if item.get('exch_seg') == 'NFO':
+                        options_map[item['symbol']] = item
+
+                # Publish to the process-wide cache; all instances share these (read-only)
+                _INSTRUMENT_CACHE['mtime'] = current_mtime
+                _INSTRUMENT_CACHE['all_instruments'] = data
+                _INSTRUMENT_CACHE['instruments'] = instruments
+                _INSTRUMENT_CACHE['options_map'] = options_map
+
+                self.all_instruments = data
+                self.instruments = instruments
+                self.options_map = options_map
+                self._last_loaded_mtime = current_mtime
+
+                print(f"✅ Loaded {len(data)} instruments from {self.instrument_file} (cached process-wide)")
+                print(f"   {len(instruments)} unique symbols, {len(options_map)} NFO options")
+
         except Exception as e:
             print(f"❌ Error loading instruments: {str(e)}")
             print("   ℹ️ Falling back to pure algorithmic symbol generation")
