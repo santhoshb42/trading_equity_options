@@ -341,6 +341,34 @@ class LiveDataTracker:
         now = datetime.now()
         completed_symbols = []
 
+        # Pre-fetch LTPs for all watchers DUE this poll in ONE bulk call, instead of a
+        # per-symbol get_market_data inside the loop. Matters when many positions close
+        # together (EOD / stale-exit waves) — keeps post-exit telemetry from multiplying
+        # quote-endpoint calls against the shared rate budget. Non-due watchers are skipped
+        # by the same throttle check below, so they're excluded here too.
+        _due = []
+        for _s, _w in self._post_exit_watchers.items():
+            _lp = _w.get('last_polled_at')
+            if _lp:
+                try:
+                    if (now - datetime.fromisoformat(_lp)).total_seconds() < self.post_exit_poll_interval_seconds:
+                        continue
+                except Exception:
+                    pass
+            _due.append(_s)
+        # Bulk LTP is capped at 50 symbols/call — chunk in 50s. Results are keyed by symbol,
+        # and each bot only ever watches its OWN distinct option symbols (unique strikes),
+        # so the symbol→LTP map never mixes data across bots.
+        _post_exit_ltps = {}
+        for _i in range(0, len(_due), 50):
+            _batch = _due[_i:_i + 50]
+            try:
+                _b = broker.get_ltp_bulk(_batch, exchange='NFO') or {}
+                if _b:
+                    _post_exit_ltps.update(_b)
+            except Exception as e:
+                logger.debug(f"LIVE_DATA_TRACKER: POST_EXIT_BULK_FETCH_FAILED | batch{_i//50} | {str(e)}")
+
         for symbol, watcher in list(self._post_exit_watchers.items()):
             last_polled_at = watcher.get('last_polled_at')
             if last_polled_at:
@@ -357,10 +385,10 @@ class LiveDataTracker:
                 completed_symbols.append(symbol)
                 continue
 
-            market_data = broker.get_market_data(symbol, exchange='NFO') or {}
-            ltp = market_data.get('ltp')
-            if ltp is None:
+            ltp = _post_exit_ltps.get(symbol)
+            if ltp is None or ltp <= 0:
                 continue
+            ltp = float(ltp)
 
             elapsed = int((now - exit_dt).total_seconds())
             watcher['last_polled_at'] = now.isoformat()
