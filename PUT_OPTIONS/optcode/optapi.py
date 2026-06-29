@@ -2742,6 +2742,21 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             actual_entry_premium = _real_ask
             entry_slippage_meta['applied'] = True
         else:
+            # STALE-LTP GUARD (PAPER): AngelOne's LTP is the last-traded price and goes stale on
+            # less-liquid strikes (it returns a frozen high value until the next trade prints). A
+            # fresh quote can NEVER have ltp > ask. When it does, the LTP is stale — book entry at
+            # the ask (the real fillable price for a BUY) instead of the stale LTP, so we don't set
+            # the cost basis (and the -10% hard SL) above the true market and manufacture an instant
+            # HARD_SL the moment the feed un-freezes. LIVE is unaffected (it books the broker fill).
+            if (OptionsTradingConfig.TRADING_MODE != "LIVE"
+                    and _real_ask > 0 and not spread_is_synthetic
+                    and actual_entry_premium > _real_ask):
+                logger.warning(
+                    f"ENTRY_STALE_LTP_GUARD: {selected_contract.symbol} | ltp=₹{actual_entry_premium:.2f} "
+                    f"> ask=₹{_real_ask:.2f} ({(actual_entry_premium / _real_ask - 1) * 100:.1f}% stale) | booking at ask"
+                )
+                actual_entry_premium = _real_ask
+                entry_slippage_meta['stale_ltp_corrected'] = True
             entry_slippage_meta['applied'] = False
         entry_slippage_meta['fill'] = round(float(actual_entry_premium), 2)
         entry_slippage_meta['slippage_pct'] = (
