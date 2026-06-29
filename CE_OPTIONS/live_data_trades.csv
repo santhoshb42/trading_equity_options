@@ -1,0 +1,28 @@
+CE_OPTIONS Aggregated | Last Updated: 2026-06-29T10:27:16
+OTM data: /root/santhosh/trading/CE_OPTIONS/OTM/data/live_data_trades.csv
+ITM data: /root/santhosh/trading/CE_OPTIONS/ITM/data/live_data_trades.csv
+
+=== CLOSED TRADES (Today) ===
+Mod | Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit/Curr | High     | Low      | Qty    | PnL      | PnL%  | Dur   | Reason
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+OTM | CLS | DMART      | DMART30JUN264350CE       |      4339 | 10:23 |    19.20 |    19.35 |    20.30 |    18.25 |   1500 |    225.0 |   0.8 |    2m | TRIAL_SL
+OTM | CLS | APOLLOHOSP | APOLLOHOSP30JUN268750CE  |      8708 | 09:43 |    31.00 |    35.20 |    37.15 |    28.55 |    875 |   3675.0 |  13.5 |    2m | TRIAL_SL
+OTM | CLS | POLICYBZR  | POLICYBZR30JUN261660CE   |      1646 | 09:44 |    12.70 |    12.25 |    13.50 |    12.50 |   2100 |   -945.0 |  -3.5 |   14s | BREAKEVEN_FLOOR_HIT (SL: ₹12.70)
+OTM | CLS | BHARTIARTL | BHARTIARTL30JUN261860CE  |      1847 | 09:35 |     3.35 |     3.25 |     4.20 |     3.35 |   6650 |   -665.0 |  -3.0 |   15s | TRIAL_SL
+OTM | CLS | HINDALCO   | HINDALCO30JUN26960CE     |       953 | 12:39 |     7.15 |     4.45 |     7.45 |     6.30 |   3500 |  -9450.0 | -37.8 | 44.6h | HARD_SL_HIT (SL: ₹7.20)
+ITM | CLS | DMART      | DMART30JUN264300CE       |      4339 | 10:23 |    45.25 |    46.70 |    47.95 |    44.10 |    600 |    870.0 |   3.2 |    2m | TRIAL_SL
+ITM | CLS | POLICYBZR  | POLICYBZR30JUN261640CE   |      1652 | 10:06 |    25.05 |    22.00 |    25.55 |    22.45 |   1050 |  -3202.5 | -12.2 |   19s | HARD_SL_HIT (SL: ₹22.50)
+ITM | CLS | NTPC       | NTPC30JUN26350CE         |       355 | 09:50 |     4.20 |     4.70 |     4.75 |     4.20 |   6000 |   3000.0 |  11.9 |    1m | TRIAL_SL
+ITM | CLS | MANKIND    | MANKIND30JUN262500CE     |      2505 | 09:45 |    22.60 |    24.60 |    25.75 |    22.60 |   1125 |   2250.0 |   8.8 |   51s | TRIAL_SL
+ITM | CLS | APOLLOHOSP | APOLLOHOSP30JUN268700CE  |      8708 | 09:43 |    48.85 |    56.02 |    57.00 |    47.70 |    500 |   3586.5 |  14.7 |    2m | TRIAL_SL
+ITM | CLS | POLICYBZR  | POLICYBZR30JUN261640CE   |      1646 | 09:44 |    23.25 |    20.90 |    23.25 |    20.20 |   1050 |  -2467.5 | -10.1 |   59s | HARD_SL_HIT (SL: ₹20.90)
+ITM | CLS | HINDZINC   | HINDZINC30JUN26520CE     |       524 | 09:42 |     7.00 |     7.85 |     7.95 |     7.00 |   3675 |   3105.4 |  12.1 |    1m | TRIAL_SL
+ITM | CLS | NUVAMA     | NUVAMA30JUN261760CE      |      1771 | 09:39 |    20.70 |    24.54 |    24.95 |    20.25 |   1500 |   5754.0 |  18.5 |    2m | TRIAL_SL
+ITM | CLS | BHARTIARTL | BHARTIARTL30JUN261840CE  |      1847 | 09:35 |    12.45 |    12.20 |    14.10 |    12.45 |   1900 |   -475.0 |  -2.0 |    7s | TRIAL_SL
+ITM | CLS | DRREDDY    | DRREDDY30JUN261350CE     |      1350 | 13:42 |    10.00 |    15.75 |    15.75 |    10.00 |   2500 |  14375.0 |  57.5 | 43.6h | TRIAL_SL
+ITM | CLS | RELIANCE   | RELIANCE30JUN261310CE    |      1318 | 13:17 |    12.30 |     8.65 |    12.80 |     8.70 |   2000 |  -7300.0 | -29.7 | 44.0h | HARD_SL_HIT (SL: ₹12.30)
+
+=== ONGOING TRADES (Live) ===
+Mod | Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit/Curr | High     | Low      | Qty    | PnL      | PnL%  | Dur   | Reason
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+ITM | OPN | COALINDIA  | COALINDIA30JUN26435CE    |       438 | 10:24 |     4.10 |     4.40 |     4.40 |     4.00 |   6750 |   2025.0 |   7.3 |    3m

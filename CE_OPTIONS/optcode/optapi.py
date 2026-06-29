@@ -2336,48 +2336,6 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"ALERT_PROCESS: SPREAD_TOO_WIDE | {selected_contract.symbol} | "
                     f"spread={live_spread_pct:.2f}% > {OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}%"
                 )
-                return {
-                    'symbol': symbol,
-                    'timestamp': timestamp,
-                    'status': 'rejected',
-                    'reason': f'Bid-ask spread too wide: {live_spread_pct:.2f}% > {OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}% (slippage risk)',
-                    'stage': 'spread_gate',
-                    **contract_context,
-                }
-
-        premium_response_ok, premium_response_reason, premium_response_metrics = _confirm_premium_response(
-            state=state,
-            contract_symbol=selected_contract.symbol,
-            baseline_ltp=selected_contract.ltp,
-            baseline_bid=live_bid,
-            baseline_ask=live_ask,
-            baseline_spread_pct=float(live_spread_pct) if live_spread_pct is not None else None,
-        )
-        logger.info(
-            f"ALERT_PROCESS: PREMIUM_RESPONSE_CHECK | contract={selected_contract.symbol} | passed={premium_response_ok} "
-            f"| reason={premium_response_reason}"
-        )
-        if not premium_response_ok:
-            logger.warning(
-                f"ALERT_PROCESS: PREMIUM_RESPONSE_REJECTED | symbol={symbol} | contract={selected_contract.symbol} "
-                f"| reason={premium_response_reason} | metrics={premium_response_metrics}"
-            )
-            return {
-                'symbol': symbol,
-                'timestamp': timestamp,
-                'status': 'rejected',
-                'reason': premium_response_reason,
-                'premium_response': premium_response_metrics,
-                'stage': 'premium_response_confirmation',
-                **contract_context,
-            }
-
-        selected_contract.ltp = float(premium_response_metrics.get('latest_ltp') or selected_contract.ltp)
-        selected_contract.bid = float(premium_response_metrics.get('latest_bid') or selected_contract.bid)
-        selected_contract.ask = float(premium_response_metrics.get('latest_ask') or selected_contract.ask)
-        live_bid = selected_contract.bid
-        live_ask = selected_contract.ask
-        live_spread_pct = premium_response_metrics.get('latest_spread_pct')
         contract_context['entry_premium'] = selected_contract.ltp
 
         entry_order_type, entry_order_price = _build_entry_order_pricing(

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -)",
+      "Bash(python3 -m py_compile main.py optcode/optconfig.py optcode/optlogging.py optcode/trade_logger.py)",
+      "Bash(python3 -m json.tool)",
+      "Bash(systemctl restart *)",
+      "Bash(systemctl is-active *)"
+    ]
+  }
+}

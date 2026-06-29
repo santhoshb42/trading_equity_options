@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-06-29T10:27:17.560538",
+  "generated_by": "aggregate_live_data",
+  "trading_mode": "PAPER",
+  "market_status": "OPEN",
+  "otm_updated_at": "2026-06-29T10:27:16.376019",
+  "itm_updated_at": "2026-06-29T10:27:15.200650",
+  "combined_summary": {
+    "budget_used": 0,
+    "trades_today": 0,
+    "trade_limit": 20,
+    "trade_slots_remaining": 20,
+    "ongoing_trades": 0,
+    "closed_trades": 0,
+    "winning_trades": 0,
+    "losing_trades": 0,
+    "total_pnl": 0,
+    "unrealized_pnl": 0,
+    "realized_pnl": 0,
+    "win_rate_percent": 0.0,
+    "total_pnl_percent": 0.0
+  },
+  "otm": {
+    "index_summary": {
+      "budget_used": 0,
+      "trades_today": 0,
+      "trade_limit": 10,
+      "trade_slots_remaining": 10,
+      "ongoing_trades": 0,
+      "closed_trades": 0,
+      "winning_trades": 0,
+      "losing_trades": 0,
+      "win_rate_percent": 0.0,
+      "total_pnl": 0,
+      "total_pnl_percent": 0.0,
+      "unrealized_pnl": 0,
+      "realized_pnl": 0
+    },
+    "non_index_summary": {
+      "budget_used": 279467.5,
+      "trades_today": 10,
+      "trade_limit": 200,
+      "trade_slots_remaining": 190,
+      "ongoing_trades": 0,
+      "closed_trades": 10,
+      "winning_trades": 4,
+      "losing_trades": 6,
+      "win_rate_percent": 40.0,
+      "total_pnl": -14816.25,
+      "total_pnl_percent": -5.3,
+      "unrealized_pnl": 0,
+      "realized_pnl": -14816.25
+    }
+  },
+  "itm": {
+    "index_summary": {
+      "budget_used": 0,
+      "trades_today": 0,
+      "trade_limit": 10,
+      "trade_slots_remaining": 10,
+      "ongoing_trades": 0,
+      "closed_trades": 0,
+      "winning_trades": 0,
+      "losing_trades": 0,
+      "win_rate_percent": 0.0,
+      "total_pnl": 0,
+      "total_pnl_percent": 0.0,
+      "unrealized_pnl": 0,
+      "realized_pnl": 0
+    },
+    "non_index_summary": {
+      "budget_used": 353097.5,
+      "trades_today": 13,
+      "trade_limit": 200,
+      "trade_slots_remaining": 187,
+      "ongoing_trades": 0,
+      "closed_trades": 13,
+      "winning_trades": 5,
+      "losing_trades": 8,
+      "win_rate_percent": 38.46,
+      "total_pnl": -7383.75,
+      "total_pnl_percent": -2.09,
+      "unrealized_pnl": 0,
+      "realized_pnl": -7383.75
+    }
+  }
+}

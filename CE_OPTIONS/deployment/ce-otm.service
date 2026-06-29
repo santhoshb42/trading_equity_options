@@ -1,0 +1,46 @@
+[Unit]
+Description=CE OTM Options Bot (Port 8081)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/root/santhosh/trading/CE_OPTIONS
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/CE_OPTIONS
+Environment=PATH=/root/santhosh/trading/CE_OPTIONS/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/root/santhosh/trading/CE_OPTIONS
+Environment=BOT_MODE=OTM
+EnvironmentFile=-/root/santhosh/trading/CE_OPTIONS/tools/.env
+EnvironmentFile=-/root/santhosh/trading/CE_OPTIONS/tools/.env.otm
+ExecStart=/usr/bin/python3 /root/santhosh/trading/CE_OPTIONS/main.py --mode OTM
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=10
+
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=80%
+
+NoNewPrivileges=true
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/root/santhosh/trading/CE_OPTIONS
+ReadWritePaths=/var/log
+ReadWritePaths=/tmp
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ce-otm-bot
+
+SuccessExitStatus=0 1 SIGTERM SIGKILL
+
+[Install]
+WantedBy=multi-user.target

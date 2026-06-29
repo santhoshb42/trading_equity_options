@@ -1,4 +1,117 @@
-# Trading Bots — Quick Reference (Updated 2026-06-14)
+# Trading Bots — Full Context & Status (Updated 2026-06-27)
+
+> **Purpose of this doc:** complete context for discussing the system with Claude (web/desktop).
+> **Part 1** below = current status, strategy, LIVE-readiness, ratings, and the engineering done so far.
+> **Part 2** (further down, "Operational Quick Reference") = architecture/ops details (ports, systemd, signal flow, env, cron).
+
+---
+
+# PART 1 — SYSTEM STATUS & DEEP CONTEXT
+
+## 0. TL;DR
+An automated **options-buying** system for Indian markets (NSE F&O) on the **AngelOne SmartAPI** broker. TradingView Pine scripts fire alerts → a webhook router fans them to **4 bot instances** that buy ATM±1 option contracts, manage them with layered stop-losses/trailing, and square off intraday. Currently **100% PAPER mode** (simulation with real market data). One shared AngelOne account (client `S635655`).
+
+The 4 bots are two strategies × two moneyness:
+- **CE_OPTIONS** (buy Calls) in **ITM** (:8080) and **OTM** (:8081) modes
+- **PUT_OPTIONS** (buy Puts) in **ITM** (:8083) and **OTM** (:8082) modes
+
+All share ONE codebase per side (`--mode ITM|OTM`), one AngelOne account, and run as systemd services on a small VPS.
+
+## 1. Hardware / deployment reality (important for any perf discussion)
+- **VPS: 2 vCPU, ~2–3.8 GB RAM** (hostname says `1vcpu-2gb`; `nproc`=2). This is the single biggest performance constraint.
+- 4 Python bot processes + a webhook router + a live-PnL aggregator all share these 2 cores. Python GIL + 2 cores means CPU-bound work (e.g. parsing the instrument master, building option chains) **serializes** under concurrency.
+- `instrument.json` (AngelOne token map) is **~36–39 MB / ~162k rows**, refreshed daily ~08:50.
+
+## 2. Strategy & signal source
+- **Signals come from TradingView Pine scripts** (`pinescripts/`), not from the bot. The bot is the *execution + risk-management* engine; the *edge* lives in the Pine signal.
+  - CE entry types: `MOMENTUM_CONTINUATION`, `MACD_REVERSAL`, etc. PE: `TREND_CONTINUATION`, `PUT_*`.
+  - Current Pine versions (per project memory): **CE ≈ v9.12, PUT ≈ v6.3**. **Pine changes require a manual TradingView redeploy** to go live — the running alerts may lag the repo's `.pine` files.
+- Entry gating in the bot (after a signal arrives): signal validation → market-hours window (0930–1500 for NEUTRAL) → daily-limit → option-chain fetch → **PCR** (`putCallRatio`, cached 60s) + **IV** + **technical confirmation on 1-HOUR candles (RSI/MACD/MA)** → **ATM±offset strike selection** → **liquidity/spread gate** (hard reject if bid/ask spread > 5%) → order.
+- Strike selection is by **strike vs spot** (not by greeks). Offsets: CE-ITM −1 (strike<spot), CE-OTM +1 (strike>spot), PE-ITM +1 (strike>spot=ITM for puts), PE-OTM −1 (strike<spot=OTM for puts). **Verified correct & isolated** across all 4 bots.
+- Position sizing: `cap_per_trade` ≈ ₹30,000; daily trade limits; liquidity caps by OI/volume participation.
+
+## 3. LIVE-READINESS STATUS (2026-06-27)
+
+**Verdict: mechanically LIVE-ready (orders/SL/exits execute correctly), but the profit EDGE is UNPROVEN on clean data. Do not risk size until validated.**
+
+### Ratings (retail-trader scale, /10)
+| Factor | Score | Notes |
+|---|---|---|
+| Order infrastructure (entry/SL/modify/exit/EOD) | 8.5 | broker-managed SL, retries, reconciliation, orphan sweep |
+| Latency engineering | 7.5 | 20s→2s fixed; bursts limited by 2 vCPU |
+| Slippage handling | 7.0 | modeled + guards; **unvalidated on real fills** |
+| Stability / resilience | 7.0 | strong guards + watchdog; thin hardware |
+| Entry quality | 6.5 | solid gating, but only as good as the Pine signal |
+| Exit logic | 6.5 | comprehensive — possibly *too many* overlapping early-exits |
+| Risk/capital mgmt | 7.0 | per-trade cap, daily limits, liquidity sizing |
+| Observability | 8.5 | per-stage timing, slippage logs, analyze_* tools |
+| **Strategy / profit edge** | **4.0** | **UNPROVEN — trade history contaminated (see §8)** |
+| **Overall** | **6.5–7** | above-average retail *engineering*; edge unverified |
+
+### Before flipping to LIVE (in order)
+1. **Redeploy Pine scripts** to TradingView so live signals match current logic.
+2. **1–2 weeks clean PAPER** with slippage modeling ON → get real win-rate / profit-factor / avg-win:loss. Segregate the polluted `trades.csv` first.
+3. **1-lot LIVE pilot** (smallest qty) → validate the slippage model + order lifecycle against real fills.
+4. Then scale; consider **2→4–8 vCPU** if bursts matter.
+
+## 4. Latency architecture (the big engineering story)
+**Original problem:** alert→order latency was ~**20s flat all day** — likely the real cause of past LIVE slippage (price ran for 20s before the order landed). Root cause: the shared rate limiter pooled ALL broker endpoints into one 180/min (=3/s) budget, so cheap LTP/quote calls were throttled behind the candle endpoint.
+
+**Fixes applied (CE + PUT mirrored):**
+1. **Per-endpoint rate limiter** (`options_rate_limiter.py`): independent budgets per endpoint class — `ltp (10/s,490/min)`, `quote (10/s,490/min)`, `candle (3/s,178/min)`, `order (19/s,490/min)`, all below AngelOne's documented caps. State in `/tmp/angelone_options_shared_rate_limit_v2.json` (file-locked, shared across the 4 processes). Result: `rl_wait` → 0. **Solo alert→order: ~20s → ~2–4s.**
+2. **Instrument master parsed ONCE per process** (`ce_extractor.py`/`pe_extractor.py`): `InstrumentCEExtractor()` used to `json.load()` the 36 MB file **per alert** (~23×/burst) → OOM + GIL-bound CPU inflation. Now cached process-wide by file mtime, shared read-only, auto-reload on daily refresh. **chain+filter 7-17s → 0.5-1.6s; 20-burst 52s → 25s.**
+3. **Per-bot alert concurrency semaphore** (`optapi.py`, `OPTIONS_ALERT_CONCURRENCY=4`): webhook returns 202 instantly + spawns a thread per alert, but only 4 do broker-heavy work at once → prevents OOM on 2 GB. Threads **wait, never drop**.
+4. **Shared cross-process candle cache** (`/tmp/angelone_options_candle_cache.json`, 300s TTL, async writes): the 4 bots no longer each fetch the same underlying's 1-HOUR candles. Only feeds indicator confirmation; **strike & entry premium are always fetched FRESH**.
+5. **Removed redundant OI call**: liquidity check did `get_market_data` + `get_oi_data`, but `get_market_data` (getMarketData FULL) already returns OI+volume → dropped the duplicate.
+6. **Light option chain**: greeks computed for the *selected* contract only; LTP fetch narrowed to ±strikes around ATM; sector enrichment moved to a background thread (off the entry critical path).
+
+**Current latency (weekend = worst case; LIVE expected faster):**
+- Solo warm: ~4s. Realistic **5–6 burst: ~10–13s**. **20 cold alerts to one bot: ~25s** (5 waves of 4).
+- The remaining cost is **per-alert broker round-trips (~4s) × 2-vCPU/GIL contention**, NOT our limiter (`rl_wait=0`). "20 in 10s" needs more vCPUs.
+- Weekend numbers are pessimistic: on a holiday, volume=0 triggers a liquidity REFETCH (`sleep(0.25)`+call) that won't fire in LIVE.
+
+## 5. Slippage handling
+- **PAPER slippage modeling ON** (`OPTIONS_PAPER_SLIPPAGE_MODELING=true`): books entry at real **ask**, exit at real **bid** → PAPER PnL ≈ LIVE. Logs `SLIPPAGE_ENTRY` / `SLIPPAGE_EXIT` with ideal vs fill vs %.
+- **Hard spread reject** at 5% (`REJECTED_LIQUIDITY`) + OI/volume participation caps. Advisory spread gate separate (`OPTIONS_MAX_ENTRY_SPREAD_PCT`, enforce=false).
+- **Gap:** never validated against a *real* broker fill. The 1-lot pilot is to confirm the model.
+- LIVE-only logging now added: `BUY_CONFIRMATION ... exec_slippage% / ltp_slippage% / confirm_ms` and a `BUY_FILL_SLIPPAGE` event (real fill vs intended price vs decision LTP).
+
+## 6. Entry / Monitor / Modify / Exit lifecycle (audited LIVE-ready)
+- **Entry:** correct strike isolation, fresh prices, multi-gate filter, zero dropped alerts under stress (40/40, 20/20 complete).
+- **Monitor loop:** every **2s**; bulk LTP via `get_ltp_bulk` (50/call); **no-stale-price guard** (skips exits if 0 valid LTPs); per-position assignment keyed by symbol (no cross-contamination). Cadence holds ~2s at low load but stretches to ~7s under a concurrent entry burst (2-core contention) — exits *delayed, not missed*. New `MONITOR_CYCLE: cycle_ms` log tracks this.
+- **Modify / TRIAL_SL:** verified live-trailing; **instant** (no rate-limit wait, no fetch — local token lookup); adaptive (skips <1% change), ~1s cooldown, safety-ceiling clamp; on LIVE updates `sl_order_id` to AngelOne's new id so cancel hits the right order; skips during close.
+- **Exit:** single guarded path. **Double-close guard** (`_closing_lock`) prevents concurrent close→naked short. Order: **cancel SL (3 retries; handles SL-fired-during-cancel) → MARKET SELL (5-retry backoff) → wait-for-fill** (unconfirmed → keeps position open, no false close). PAPER models exit slippage. 75 exits audited today: 0 double-closes, 0 orphan SLs, 0 errors.
+- **Fixes from the lifecycle audits:** EOD broker-orphan sweep, partial-fill qty guard, modify qty=0 guard, and **exit greeks capture moved off the critical path** (cheap fallback up-front; live `fetch_option_chain` greeks captured AFTER the SELL, just before PnL booking).
+
+## 7. TRIAL_SL post-exit telemetry
+- After a position exits, `live_data_tracker.py` registers a **post-exit watcher** that polls the contract's LTP (every 5s for 5 min) and records `max_after_exit` / `min_after_exit` + checkpoints (30/120/300s) **alongside the trail config used** (`trail_profile`, `trail_activation_threshold`, `trailing_gap`) and regime. Output: `data/trial_sl_post_exit_results.jsonl` (hundreds–thousands of rows already). This is the data for tuning TRIAL_SL ("did we exit before the real peak?"). Example: SUNPHARMA exit ₹3.65 but `max_after_exit` ₹4.15 → trail too tight there.
+- Efficiency: the post-exit LTP poll is now **batched via `get_ltp_bulk` chunked at 50** (was 1 `get_market_data` per symbol) — matters during EOD/stale-exit waves. Persisted to `trial_sl_post_exit_watchers.json` (survives restarts), runs off the trading path.
+
+## 8. ⚠️ PERFORMANCE DATA CAVEAT (read before judging profitability)
+The per-bot `data/trades.csv` files are **contaminated** and CANNOT be used to judge the strategy:
+- CE bots show ~4000+ rows over 114+ days with **impossible values** (one row −₹66,930,000; 100+ trades/day) — a mix of **generated ML training data + backtests + today's synthetic burst-tests**.
+- The only clean-looking real sample is **PE-OTM (~109 trades, Apr–Jun 2026, profit factor 1.49, 52% win)** — mildly positive but a small sample.
+- **Net: there is no trustworthy PAPER performance number yet.** Getting one (clean 1–2 week PAPER run) is the key gate before LIVE.
+
+## 9. Observability for the LIVE day (what to grep / run)
+- **Latency:** `alerts.jsonl` (per-status timestamps) · `ALERT_TIMING: sem_wait_ms/proc_ms/total_ms` · `ENTRY_TIMING: chain+filter/sel+liq/pricing+order/rl_wait` · `BUY_CONFIRMATION ... confirm_ms` (LIVE order→fill) · `MONITOR_CYCLE: cycle_ms` · tool `tools/analyze_latency.py`.
+- **Slippage:** `SLIPPAGE_ENTRY` / `SLIPPAGE_EXIT` (modeled) · `BUY_FILL_SLIPPAGE` (real LIVE fill vs intended/decision price) · tool `tools/analyze_slippage.py`.
+- Other analysis tools in `*/tools/`: `analyze_stale_impact.py`, `analyze_trial_sl_5pct.py`, `check_ltp_rebound.py`, `stale_cost_analysis.py`, `analyze_worst_symbols.py`.
+
+## 10. How to switch PAPER → LIVE
+- Flip `TRADING_MODE=PAPER` → `LIVE` in `CE_OPTIONS/tools/.env` and `PUT_OPTIONS/tools/.env`, restart the 4 services. `PAPER_TRADING_ENABLED` derives from this. In LIVE the real `placeOrder`/`modifyOrder`/SL/`wait_for_*_confirmation` paths activate (these are bypassed in PAPER).
+- Order APIs (place/modify/cancel) use separate AngelOne endpoints and **bypass the market-data rate limiter** → never blocked by quote saturation.
+
+## 11. Open items / candidate next work
+- (Edge) Clean PAPER measurement + Pine redeploy + 1-lot LIVE pilot (the gate).
+- (Perf) 2→4–8 vCPU is the single biggest lever for burst latency; optionally drop the spot-LTP call / reuse the chain quote to shave `sel+liq`.
+- (Possibly) Exit logic has many overlapping early-exits (stale-consolidation, dead-trade-5min, momentum-reversal, MACD-fade) that cut trades at small losses — worth reviewing whether they help or hurt once clean PAPER data exists.
+
+> **Project memory** lives in `/root/.claude/projects/-root-santhosh-trading/memory/` (MEMORY.md index + per-topic files: latency-fix, burst-throughput, monitor-exit-audit, order-lifecycle-audit, slippage-modeling, otm-itm-capital-sizing, ce-pine-status). Git branch: `trading_refactored` (remote `github.com/santhoshb42/trading_equity_options`).
+
+---
+
+# PART 2 — OPERATIONAL QUICK REFERENCE
 
 ## Repository Layout
 
@@ -413,7 +526,7 @@ Bot receives POST /webhook/options or /webhook/put_options
                  ├─ entry_filter_engine: time gate, capital gate, IV gate, market trend
                  └─ angelone_options: strike selection via ce/pe_extractor
                       └─ place BUY order on AngelOne SmartAPI
-                           └─ optmonitor: 3s loop
+                           └─ optmonitor: 2s loop (pinned; see Part 1 §6)
                                 ├─ refresh LTP
                                 ├─ hard SL check
                                 ├─ trailing stop (trial SL, then active trailing)

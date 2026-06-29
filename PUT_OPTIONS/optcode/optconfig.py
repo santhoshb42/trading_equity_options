@@ -689,7 +689,8 @@ class OptionsTradingConfig:
     # PAPER books ideal fills (entry=LTP, exit=SL trigger) → PnL is optimistic by ~1 round-trip
     # spread. When ON, PAPER books entry at the REAL ask and exit at the REAL bid (fetched live),
     # so PAPER PnL ≈ LIVE PnL. Always logs entry/exit slippage metadata for analysis regardless.
-    PAPER_SLIPPAGE_MODELING = os.getenv("OPTIONS_PAPER_SLIPPAGE_MODELING", "true").lower() == "true"
+    # REVERTED: market-based fills (no ask/bid simulation) — proved more successful
+    PAPER_SLIPPAGE_MODELING = os.getenv("OPTIONS_PAPER_SLIPPAGE_MODELING", "false").lower() == "true"
     # Real-spread entry gate (uses real bid/ask, not synthetic). Advisory by default: logs
     # "would-reject" without blocking, so we gather the spread distribution before enforcing.
     MAX_ENTRY_SPREAD_PCT = float(os.getenv("OPTIONS_MAX_ENTRY_SPREAD_PCT", "5.0"))

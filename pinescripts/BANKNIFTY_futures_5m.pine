@@ -1,0 +1,116 @@
+//@version=5
+// ─────────────────────────────────────────────────────────────────────────────
+// BANKNIFTY Futures 5m — MACD Histogram Momentum + EMA + RSI + ADX
+//
+// BUY  : MACD histogram crosses zero (negative → positive)
+//        + price above trend EMA  + RSI > 50  + ADX > 20
+//
+// SELL : MACD histogram is positive BUT current bar < previous bar
+//        (momentum peaked, first shrinkage — exits before full crossunder)
+//
+// SHORT: MACD histogram crosses zero (positive → negative)
+//        + price below trend EMA  + RSI < 50  + ADX > 20
+//
+// COVER: MACD histogram is negative BUT current bar > previous bar
+//        (negative momentum slowing — mirrors the SELL exit logic)
+//
+// ATR stop-loss is a safety net only (catches runaway moves if MACD exit is slow)
+// ─────────────────────────────────────────────────────────────────────────────
+strategy("BNF 5m — MACD Histogram + EMA + RSI + ADX",
+         overlay            = true,
+         default_qty_type   = strategy.fixed,
+         default_qty_value  = 1,
+         pyramiding         = 0,
+         commission_type    = strategy.commission.cash_per_contract,
+         commission_value   = 60,
+         slippage           = 20,
+         calc_on_every_tick = false)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+grp_m = "MACD"
+macd_fast = input.int(12, "Fast",   minval=1, group=grp_m)
+macd_slow = input.int(26, "Slow",   minval=1, group=grp_m)
+macd_sig  = input.int(9,  "Signal", minval=1, group=grp_m)
+
+grp_f = "Filters"
+ema_len  = input.int(50,  "Trend EMA (price above = bullish)",  group=grp_f)
+rsi_len  = input.int(14,  "RSI Period",                         group=grp_f)
+rsi_bull = input.int(50,  "RSI min for Long  (>= this)",        group=grp_f)
+rsi_bear = input.int(50,  "RSI max for Short (<= this)",        group=grp_f)
+adx_len  = input.int(14,  "ADX Period",                         group=grp_f)
+adx_min  = input.int(20,  "ADX min (skip trade below this)",    group=grp_f)
+
+grp_r = "Risk"
+atr_len  = input.int(14,   "ATR Period",          group=grp_r)
+sl_atr   = input.float(2.0,"SL ATR Multiplier",   group=grp_r, step=0.5)
+
+grp_s = "Session"
+sess_str = input.session("0930-1445", "Entry Window (IST)", group=grp_s)
+
+// ─── Indicators ──────────────────────────────────────────────────────────────
+[macd_l, sig_l, hist] = ta.macd(close, macd_fast, macd_slow, macd_sig)
+trend_ema              = ta.ema(close, ema_len)
+rsi_val                = ta.rsi(close, rsi_len)
+[_, _, adx_val]        = ta.dmi(adx_len, adx_len)
+atr_val                = ta.atr(atr_len)
+
+// ─── Session Gate ─────────────────────────────────────────────────────────────
+in_sess = not na(time("5", sess_str, "Asia/Kolkata"))
+
+// ─── Core Signal Logic ───────────────────────────────────────────────────────
+// MACD histogram crosses zero from below (first green bar)
+hist_bull_cross = hist > 0 and hist[1] <= 0
+// MACD histogram crosses zero from above (first red bar)
+hist_bear_cross = hist < 0 and hist[1] >= 0
+
+// Histogram peaked: positive but this bar smaller than previous
+hist_peak_down  = hist > 0 and hist < hist[1]
+// Histogram troughed: negative but this bar larger (less negative) than previous
+hist_trough_up  = hist < 0 and hist > hist[1]
+
+// ─── Entry Signals (with all filters) ────────────────────────────────────────
+buy_sig   = hist_bull_cross and close > trend_ema and rsi_val >= rsi_bull and adx_val >= adx_min and in_sess
+short_sig = hist_bear_cross and close < trend_ema and rsi_val <= rsi_bear and adx_val >= adx_min and in_sess
+
+// ─── Exit Signals (momentum-based, no filters — exit fast) ───────────────────
+sell_sig  = hist_peak_down   // long  exit: histogram positive but shrinking
+cover_sig = hist_trough_up   // short exit: histogram negative but recovering
+
+// ─── Strategy ────────────────────────────────────────────────────────────────
+sl_pts = atr_val * sl_atr
+
+if buy_sig
+    strategy.entry("Long", strategy.long)
+    strategy.exit("L-SL", "Long", loss=sl_pts / syminfo.mintick, comment="SL")
+
+if short_sig
+    strategy.entry("Short", strategy.short)
+    strategy.exit("S-SL", "Short", loss=sl_pts / syminfo.mintick, comment="SL")
+
+// Momentum exits (close position when histogram momentum peaks/troughs)
+if sell_sig  and strategy.position_size > 0
+    strategy.close("Long",  comment="SELL")
+if cover_sig and strategy.position_size < 0
+    strategy.close("Short", comment="COVER")
+
+// EOD force exit
+if hour == 15 and minute == 10 and strategy.position_size != 0
+    strategy.close_all(comment="EOD")
+
+// ─── Visual Labels (for refinement) ──────────────────────────────────────────
+if buy_sig
+    label.new(bar_index, low,  "BUY",   yloc=yloc.belowbar, style=label.style_label_up,
+              color=color.lime,  textcolor=color.black, size=size.small)
+if sell_sig and strategy.position_size[1] > 0
+    label.new(bar_index, high, "SELL",  yloc=yloc.abovebar, style=label.style_label_down,
+              color=color.red,   textcolor=color.white, size=size.small)
+if short_sig
+    label.new(bar_index, high, "SHORT", yloc=yloc.abovebar, style=label.style_label_down,
+              color=color.maroon, textcolor=color.white, size=size.small)
+if cover_sig and strategy.position_size[1] < 0
+    label.new(bar_index, low,  "COVER", yloc=yloc.belowbar, style=label.style_label_up,
+              color=color.teal,  textcolor=color.white, size=size.small)
+
+// ─── Plots ───────────────────────────────────────────────────────────────────
+plot(trend_ema, "Trend EMA", color=color.new(color.orange, 0), linewidth=2)
+bgcolor(in_sess ? color.new(color.gray, 95) : na, title="Session")

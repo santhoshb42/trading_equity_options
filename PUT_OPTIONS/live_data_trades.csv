@@ -1,0 +1,34 @@
+PUT_OPTIONS Aggregated | Last Updated: 2026-06-29T10:27:17
+OTM data: /root/santhosh/trading/PUT_OPTIONS/OTM/data/live_data_trades.csv
+ITM data: /root/santhosh/trading/PUT_OPTIONS/ITM/data/live_data_trades.csv
+
+=== CLOSED TRADES (Today) ===
+Mod | Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit/Curr | High     | Low      | Qty    | PnL      | PnL%  | Dur   | Reason
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+OTM | CLS | BAJAJ      | BAJAJ-AUTO30JUN269700PE  |      9741 | 10:22 |    32.80 |    28.75 |    32.80 |    28.70 |    900 |  -3645.0 | -12.3 |   44s | HARD_SL_HIT (SL: ₹29.50)
+OTM | CLS | M          | M&M30JUN263120PE         |      3135 | 10:18 |     8.40 |     8.15 |     9.50 |     8.40 |   3200 |   -800.0 |  -3.0 |   25s | TRIAL_SL
+OTM | CLS | KAYNES     | KAYNES30JUN263200PE      |      3226 | 10:17 |    28.00 |    28.65 |    29.30 |    27.00 |   1000 |    650.0 |   2.3 |    1m | TRIAL_SL
+OTM | CLS | HAL        | HAL30JUN264300PE         |      4308 | 10:17 |    28.75 |    29.30 |    30.00 |    27.75 |    900 |    495.0 |   1.9 |    1m | TRIAL_SL
+OTM | CLS | TATAPOWER  | TATAPOWER30JUN26385PE    |       386 | 10:16 |     3.45 |     3.10 |     3.45 |     3.10 |   8700 |  -3045.0 | -10.1 |    1m | HARD_SL_HIT (SL: ₹3.10)
+OTM | CLS | BAJAJ      | BAJAJ-AUTO30JUN269700PE  |      9753 | 10:11 |    29.60 |    30.35 |    31.00 |    28.95 |    975 |    731.2 |   2.5 |    3m | TRIAL_SL
+OTM | CLS | ASTRAL     | ASTRAL30JUN261380PE      |      1381 | 10:11 |    16.00 |    16.05 |    17.00 |    16.00 |   1700 |     85.0 |   0.3 |   27s | TRIAL_SL
+OTM | CLS | KAYNES     | KAYNES30JUN263200PE      |      3235 | 10:05 |    26.30 |    25.65 |    27.00 |    23.80 |   1100 |   -715.0 |  -2.5 |    5m | STALE_CONSOLIDATION (Current -8.4%, Peak +2.7%, 5min check)
+OTM | CLS | HAL        | HAL30JUN264300PE         |      4312 | 10:00 |    25.75 |    21.30 |    26.00 |    21.75 |   1050 |  -4672.5 | -17.3 |    1m | HARD_SL_HIT (SL: ₹23.20)
+OTM | CLS | EICHERMOT  | EICHERMOT30JUN267500PE   |      7506 | 09:54 |    45.25 |    38.75 |    45.25 |    40.50 |    600 |  -3900.0 | -14.4 |    1m | HARD_SL_HIT (SL: ₹40.70)
+ITM | CLS | SRF        | SRF30JUN262700PE         |      2698 | 10:20 |    28.75 |    28.00 |    29.50 |    26.35 |   1000 |   -750.0 |  -2.6 |    5m | STALE_CONSOLIDATION (Current 2.6%, Peak +2.6%, 5min check)
+ITM | CLS | BAJAJ      | BAJAJ-AUTO30JUN269800PE  |      9741 | 10:22 |    78.75 |    69.95 |    78.75 |    70.00 |    375 |  -3300.0 | -11.2 |    2m | HARD_SL_HIT (SL: ₹70.90)
+ITM | CLS | MAZDOCK    | MAZDOCK30JUN262480PE     |      2465 | 10:21 |    26.05 |    22.70 |    26.45 |    22.95 |   1200 |  -4020.0 | -12.9 |    2m | HARD_SL_HIT (SL: ₹23.40)
+ITM | CLS | HAL        | HAL30JUN264300PE         |      4298 | 10:19 |    32.50 |    34.60 |    35.60 |    30.80 |    900 |   1890.0 |   6.5 |    3m | TRIAL_SL
+ITM | CLS | PFC        | PFC30JUN26425PE          |       424 | 10:15 |     4.00 |     4.70 |     4.70 |     4.00 |   6500 |   4550.0 |  17.5 |    4m | TRIAL_SL
+ITM | CLS | HAL        | HAL30JUN264350PE         |      4308 | 10:17 |    61.25 |    65.05 |    68.00 |    60.10 |    450 |   1710.0 |   6.2 |    2m | TRIAL_SL
+ITM | CLS | TATAPOWER  | TATAPOWER30JUN26390PE    |       386 | 10:16 |     6.35 |     6.00 |     6.35 |     5.70 |   4350 |  -1522.5 |  -5.5 |    2m | HARD_SL_HIT (SL: ₹5.70)
+ITM | CLS | ASTRAL     | ASTRAL30JUN261400PE      |      1381 | 10:11 |    29.30 |    27.00 |    30.45 |    26.45 |    850 |  -1955.0 |  -7.8 |   43s | BREAKEVEN_FLOOR_HIT (SL: ₹29.30)
+ITM | CLS | KAYNES     | KAYNES30JUN263250PE      |      3237 | 10:03 |    46.80 |    44.00 |    47.50 |    44.00 |    600 |  -1680.0 |  -6.0 |    5m | STALE_CONSOLIDATION (Current -6.0%, Peak +1.5%, 5min check)
+ITM | CLS | HINDPETRO  | HINDPETRO30JUN26405PE    |       400 | 10:00 |     5.45 |     5.30 |     5.50 |     5.45 |   4050 |   -607.5 |  -2.8 |    5m | STALE_CONSOLIDATION (Current 0.9%, Peak +0.9%, 5min check)
+ITM | CLS | VBL        | VBL30JUN26505PE          |       505 | 10:01 |     3.55 |     3.70 |     3.75 |     3.35 |   7875 |   1181.3 |   4.2 |    3m | BREAKEVEN_FLOOR_HIT (SL: ₹3.60)
+ITM | CLS | HAL        | HAL30JUN264350PE         |      4312 | 10:00 |    57.35 |    48.45 |    57.35 |    50.00 |    450 |  -4005.0 | -15.5 |    1m | HARD_SL_HIT (SL: ₹51.60)
+ITM | CLS | SBILIFE    | SBILIFE30JUN261760PE     |      1752 | 09:55 |    16.20 |    16.95 |    17.85 |    16.20 |   1500 |   1125.0 |   4.6 |    3m | TRIAL_SL
+
+=== ONGOING TRADES (Live) ===
+Mod | Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit/Curr | High     | Low      | Qty    | PnL      | PnL%  | Dur   | Reason
+---------------------------------------------------------------------------------------------------------------------------------------------------------------

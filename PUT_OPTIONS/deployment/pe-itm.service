@@ -1,0 +1,46 @@
+[Unit]
+Description=PE ITM Options Bot (Port 8083)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/root/santhosh/trading/PUT_OPTIONS
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/PUT_OPTIONS
+Environment=PATH=/root/santhosh/trading/PUT_OPTIONS/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/root/santhosh/trading/PUT_OPTIONS
+Environment=BOT_MODE=ITM
+EnvironmentFile=-/root/santhosh/trading/PUT_OPTIONS/tools/.env
+EnvironmentFile=-/root/santhosh/trading/PUT_OPTIONS/tools/.env.itm
+ExecStart=/usr/bin/python3 /root/santhosh/trading/PUT_OPTIONS/main.py --mode ITM
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=10
+
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=80%
+
+NoNewPrivileges=true
+ProtectSystem=false
+ProtectHome=false
+ReadWritePaths=/root/santhosh/trading/PUT_OPTIONS
+ReadWritePaths=/var/log
+ReadWritePaths=/tmp
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pe-itm-bot
+
+SuccessExitStatus=0 1 SIGTERM SIGKILL
+
+[Install]
+WantedBy=multi-user.target

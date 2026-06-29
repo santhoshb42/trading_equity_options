@@ -1,0 +1,11 @@
+{
+  "test_timestamp": "2025-12-14T10:07:36.029700",
+  "tests_passed": 2,
+  "tests_failed": 2,
+  "results": {
+    "ml_validation": "FAILED",
+    "outcome_recording": "PASSED",
+    "data_export": "PASSED",
+    "statistics": "FAILED"
+  }
+}
