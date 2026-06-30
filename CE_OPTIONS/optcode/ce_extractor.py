@@ -403,6 +403,12 @@ class InstrumentCEExtractor:
                 continue
             if str(instrument.get('expiry', '')).strip().upper() != expiry_pattern:
                 continue
+            # Only trade NSE F&O (NFO). Some underlyings (e.g. BSE) ALSO list options on the
+            # BSE derivatives segment (BFO) for the same name/expiry/strike — those are thin and
+            # print stale/frozen premiums. Without this filter the BFO symbol (e.g. BSE26JUN3900CE)
+            # sorts before the NFO one (BSE30JUN263900CE) and gets picked. Restrict to NFO.
+            if str(instrument.get('exch_seg', 'NFO')).upper() != 'NFO':
+                continue
             instrument_type = str(instrument.get('instrumenttype', ''))
             if not instrument_type.startswith('OPT'):
                 continue
