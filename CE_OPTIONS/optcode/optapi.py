@@ -2313,6 +2313,26 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             _ltp_ref > 0 and live_bid > 0 and live_ask > 0
             and abs(live_bid - _ltp_ref * 0.98) < 0.01 and abs(live_ask - _ltp_ref * 1.02) < 0.01
         )
+        # SYNTHETIC-PRICE ENTRY GUARD: when the broker LTP is missing, the chain fetch fabricates a
+        # fallback premium (strike*0.01, "N pts from ATM") and sets bid/ask = ltp*0.98/1.02. That
+        # estimate has NO relation to the real market (e.g. MCX 2950CE fabricated ₹29.50 while the
+        # real premium was ~₹150), so booking it as the cost basis produces a phantom +300% "surge"
+        # the moment the real LTP prints — and in LIVE a real BUY would fill at the true price while
+        # our SL is set off the fake one. Never trade a contract we cannot price with real data.
+        if spread_is_synthetic and os.getenv("OPTIONS_REJECT_SYNTHETIC_ENTRY", "true").lower() == "true":
+            logger.warning(
+                f"ALERT_PROCESS: SYNTHETIC_PRICE_REJECTED | {selected_contract.symbol} | "
+                f"ltp=₹{_ltp_ref:.2f} bid=₹{live_bid:.2f} ask=₹{live_ask:.2f} — broker LTP unavailable "
+                f"(fabricated fallback premium); skipping entry to avoid phantom mispricing"
+            )
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': 'Synthetic/fallback premium (real broker LTP unavailable) — cannot price contract',
+                'stage': 'synthetic_price_guard',
+                **contract_context,
+            }
         if live_spread_pct is None and live_bid > 0 and live_ask > 0 and _ltp_ref > 0:
             live_spread_pct = (live_ask - live_bid) / _ltp_ref * 100.0
         selected_contract.volume = live_volume
