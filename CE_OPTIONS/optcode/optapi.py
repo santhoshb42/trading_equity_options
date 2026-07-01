@@ -2305,34 +2305,39 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         live_bid = float(liquidity_market_data.get('bid') or selected_contract.bid or 0.0)
         live_ask = float(liquidity_market_data.get('ask') or selected_contract.ask or 0.0)
         live_spread_pct = liquidity_market_data.get('bid_ask_spread_pct')
-        # Detect synthetic bid/ask (chain fallback sets bid=ltp*0.98, ask=ltp*1.02 → ~4.08% flat).
-        # Real depth comes from get_market_data; mark when the spread looks synthetic so analysis
-        # can exclude it rather than treat it as a real market spread.
+        # PREFER THE FRESH ENTRY LTP over the (possibly stale/fabricated) chain LTP.
+        # The chain fetch can fabricate ltp=max(1.0, strike*0.01) when ITS own LTP fetch missed, and
+        # that stale value persists on selected_contract.ltp. The entry get_market_data call above
+        # frequently HAS the real LTP (it returned real bid/ask/oi). Booking the stale fabricated LTP
+        # as the cost basis is what produced the phantom +300% surges (PREMIERENE fabricated ₹10.50
+        # while the live LTP was ₹38). Always use the fresh broker LTP when present.
+        _chain_ltp = float(selected_contract.ltp or 0.0)
+        _fresh_ltp = float(liquidity_market_data.get('ltp') or 0.0)
+        if _fresh_ltp > 0 and abs(_fresh_ltp - _chain_ltp) > 0.01:
+            logger.info(
+                f"ALERT_PROCESS: LTP_REFRESHED_AT_ENTRY | {selected_contract.symbol} | "
+                f"chain_ltp=₹{_chain_ltp:.2f} → live_ltp=₹{_fresh_ltp:.2f}"
+            )
+            selected_contract.ltp = _fresh_ltp
         _ltp_ref = float(selected_contract.ltp or 0.0)
         spread_is_synthetic = bool(
             _ltp_ref > 0 and live_bid > 0 and live_ask > 0
             and abs(live_bid - _ltp_ref * 0.98) < 0.01 and abs(live_ask - _ltp_ref * 1.02) < 0.01
         )
-        # FABRICATED-LTP ENTRY GUARD: when the broker LTP is missing, the chain fetch fabricates a
-        # fallback premium = max(1.0, strike*0.01) ("N pts from ATM") AND sets bid/ask = ltp*0.98/1.02.
-        # Booking that fabricated LTP as the cost basis produces a phantom +300% "surge" the moment
-        # the real LTP prints (e.g. MCX 2950CE fabricated ₹29.50 vs real ~₹150) — and in LIVE a real
-        # BUY fills at the true price while our SL is set off the fake one.
-        #
-        # CRITICAL DISTINCTION: reject ONLY when the LTP *itself* is the fabricated fallback — NOT
-        # merely when the bid/ask depth is synthetic. A contract can have a REAL LTP but no fetched
-        # depth (GODREJPROP 1900CE: real LTP ₹71.25, but bid/ask synthesized to 69.83/72.67). That is
-        # a perfectly tradeable contract — we must NOT reject it. The fabricated case is identified by
-        # ltp ≈ max(1.0, strike*0.01); a real LTP (₹71.25 vs strike*0.01=₹19) is far from it.
+        # FABRICATED-LTP ENTRY GUARD: after preferring the fresh LTP, if the price we're about to book
+        # is STILL the fabricated fallback (≈ max(1.0, strike*0.01)), then NEITHER the chain NOR the
+        # entry fetch had a real LTP — the contract is genuinely dark and cannot be priced. Reject it,
+        # else we'd book a phantom cost basis (and in LIVE set the SL off a fake price). A real LTP
+        # (e.g. GODREJPROP ₹71.25 vs strike*0.01=₹19, or PREMIERENE refreshed to ₹38) is far from the
+        # fabricated value, so this only blocks truly-unpriceable contracts.
         _strike_pts = float(getattr(selected_contract, 'strike', 0) or 0)
         _fab_ltp = max(1.0, round(_strike_pts * 0.01, 2)) if _strike_pts > 0 else -1.0
         _ltp_is_fabricated = _fab_ltp > 0 and abs(_ltp_ref - _fab_ltp) < max(0.05, _fab_ltp * 0.02)
-        if (spread_is_synthetic and _ltp_is_fabricated
-                and os.getenv("OPTIONS_REJECT_SYNTHETIC_ENTRY", "true").lower() == "true"):
+        if _ltp_is_fabricated and os.getenv("OPTIONS_REJECT_SYNTHETIC_ENTRY", "true").lower() == "true":
             logger.warning(
                 f"ALERT_PROCESS: FABRICATED_LTP_REJECTED | {selected_contract.symbol} | "
-                f"ltp=₹{_ltp_ref:.2f} ≈ fabricated ₹{_fab_ltp:.2f} (strike*0.01) | bid=₹{live_bid:.2f} "
-                f"ask=₹{live_ask:.2f} — real broker LTP unavailable; skipping to avoid phantom mispricing"
+                f"ltp=₹{_ltp_ref:.2f} ≈ fabricated ₹{_fab_ltp:.2f} (strike*0.01) | live_ltp=₹{_fresh_ltp:.2f} "
+                f"bid=₹{live_bid:.2f} ask=₹{live_ask:.2f} — no real LTP anywhere; skipping phantom mispricing"
             )
             return {
                 'symbol': symbol,
@@ -2342,13 +2347,6 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'stage': 'synthetic_price_guard',
                 **contract_context,
             }
-        elif spread_is_synthetic:
-            # Real LTP but no live depth — tradeable; note it so downstream slippage analysis knows
-            # the bid/ask were synthesized (not a real spread).
-            logger.info(
-                f"ALERT_PROCESS: REAL_LTP_SYNTHETIC_DEPTH | {selected_contract.symbol} | "
-                f"ltp=₹{_ltp_ref:.2f} (real, not fabricated ₹{_fab_ltp:.2f}) | depth synthesized — allowing entry"
-            )
         if live_spread_pct is None and live_bid > 0 and live_ask > 0 and _ltp_ref > 0:
             live_spread_pct = (live_ask - live_bid) / _ltp_ref * 100.0
         selected_contract.volume = live_volume
