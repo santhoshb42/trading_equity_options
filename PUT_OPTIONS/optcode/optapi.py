@@ -2316,26 +2316,42 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             _ltp_ref > 0 and live_bid > 0 and live_ask > 0
             and abs(live_bid - _ltp_ref * 0.98) < 0.01 and abs(live_ask - _ltp_ref * 1.02) < 0.01
         )
-        # SYNTHETIC-PRICE ENTRY GUARD: when the broker LTP is missing, the chain fetch fabricates a
-        # fallback premium (strike*0.01, "N pts from ATM") and sets bid/ask = ltp*0.98/1.02. That
-        # estimate has NO relation to the real market (e.g. TECHM 1380PE fabricated ₹13.80 while the
-        # real premium was ~₹60), so booking it as the cost basis produces a phantom +300% "surge"
-        # the moment the real LTP prints — and in LIVE a real BUY would fill at the true price while
-        # our SL is set off the fake one. Never trade a contract we cannot price with real data.
-        if spread_is_synthetic and os.getenv("OPTIONS_REJECT_SYNTHETIC_ENTRY", "true").lower() == "true":
+        # FABRICATED-LTP ENTRY GUARD: when the broker LTP is missing, the chain fetch fabricates a
+        # fallback premium = max(1.0, strike*0.01) ("N pts from ATM") AND sets bid/ask = ltp*0.98/1.02.
+        # Booking that fabricated LTP as the cost basis produces a phantom +300% "surge" the moment
+        # the real LTP prints (e.g. TECHM 1380PE fabricated ₹13.80 vs real ~₹60) — and in LIVE a real
+        # BUY fills at the true price while our SL is set off the fake one.
+        #
+        # CRITICAL DISTINCTION: reject ONLY when the LTP *itself* is the fabricated fallback — NOT
+        # merely when the bid/ask depth is synthetic. A contract can have a REAL LTP but no fetched
+        # depth (GODREJPROP 1900CE: real LTP ₹71.25, but bid/ask synthesized to 69.83/72.67). That is
+        # a perfectly tradeable contract — we must NOT reject it. The fabricated case is identified by
+        # ltp ≈ max(1.0, strike*0.01); a real LTP (₹71.25 vs strike*0.01=₹19) is far from it.
+        _strike_pts = float(getattr(selected_contract, 'strike', 0) or 0)
+        _fab_ltp = max(1.0, round(_strike_pts * 0.01, 2)) if _strike_pts > 0 else -1.0
+        _ltp_is_fabricated = _fab_ltp > 0 and abs(_ltp_ref - _fab_ltp) < max(0.05, _fab_ltp * 0.02)
+        if (spread_is_synthetic and _ltp_is_fabricated
+                and os.getenv("OPTIONS_REJECT_SYNTHETIC_ENTRY", "true").lower() == "true"):
             logger.warning(
-                f"ALERT_PROCESS: SYNTHETIC_PRICE_REJECTED | {selected_contract.symbol} | "
-                f"ltp=₹{_ltp_ref:.2f} bid=₹{live_bid:.2f} ask=₹{live_ask:.2f} — broker LTP unavailable "
-                f"(fabricated fallback premium); skipping entry to avoid phantom mispricing"
+                f"ALERT_PROCESS: FABRICATED_LTP_REJECTED | {selected_contract.symbol} | "
+                f"ltp=₹{_ltp_ref:.2f} ≈ fabricated ₹{_fab_ltp:.2f} (strike*0.01) | bid=₹{live_bid:.2f} "
+                f"ask=₹{live_ask:.2f} — real broker LTP unavailable; skipping to avoid phantom mispricing"
             )
             return {
                 'symbol': symbol,
                 'timestamp': timestamp,
                 'status': 'rejected',
-                'reason': 'Synthetic/fallback premium (real broker LTP unavailable) — cannot price contract',
+                'reason': 'Fabricated fallback premium (real broker LTP unavailable) — cannot price contract',
                 'stage': 'synthetic_price_guard',
                 **contract_context,
             }
+        elif spread_is_synthetic:
+            # Real LTP but no live depth — tradeable; note it so downstream slippage analysis knows
+            # the bid/ask were synthesized (not a real spread).
+            logger.info(
+                f"ALERT_PROCESS: REAL_LTP_SYNTHETIC_DEPTH | {selected_contract.symbol} | "
+                f"ltp=₹{_ltp_ref:.2f} (real, not fabricated ₹{_fab_ltp:.2f}) | depth synthesized — allowing entry"
+            )
         if live_spread_pct is None and live_bid > 0 and live_ask > 0 and _ltp_ref > 0:
             live_spread_pct = (live_ask - live_bid) / _ltp_ref * 100.0
         selected_contract.volume = live_volume
