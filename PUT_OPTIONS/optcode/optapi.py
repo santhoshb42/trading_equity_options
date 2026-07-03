@@ -2782,8 +2782,16 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             # the ask (the real fillable price for a BUY) instead of the stale LTP, so we don't set
             # the cost basis (and the -10% hard SL) above the true market and manufacture an instant
             # HARD_SL the moment the feed un-freezes. LIVE is unaffected (it books the broker fill).
+            # The ask can ITSELF be the fabricated fallback (chain sets ask = fab*1.02 where
+            # fab=max(1,strike*0.01)) or otherwise stale — e.g. DIXON 12200CE: real ltp ₹533.50 but
+            # a fabricated ask ₹124.44 (=122*1.02). Clamping to that ask would book a phantom cost
+            # basis. Only clamp when the ask is REAL: not ≈ the fabricated value, and within a
+            # plausible stale-gap of the ltp (a genuine stale ltp sits just above a real ask, not 4x).
+            _ask_is_fabricated = _fab_ltp > 0 and abs(_real_ask - _fab_ltp * 1.02) < max(0.05, _fab_ltp * 1.02 * 0.02)
+            _ask_plausible = _real_ask >= actual_entry_premium * 0.85  # ask not wildly below ltp
             if (OptionsTradingConfig.TRADING_MODE != "LIVE"
                     and _real_ask > 0 and not spread_is_synthetic
+                    and not _ask_is_fabricated and _ask_plausible
                     and actual_entry_premium > _real_ask):
                 logger.warning(
                     f"ENTRY_STALE_LTP_GUARD: {selected_contract.symbol} | ltp=₹{actual_entry_premium:.2f} "
@@ -2791,6 +2799,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 )
                 actual_entry_premium = _real_ask
                 entry_slippage_meta['stale_ltp_corrected'] = True
+            elif _real_ask > 0 and actual_entry_premium > _real_ask and (_ask_is_fabricated or not _ask_plausible):
+                logger.info(
+                    f"ENTRY_STALE_GUARD_SKIP | {selected_contract.symbol} | ltp=₹{actual_entry_premium:.2f} "
+                    f"ask=₹{_real_ask:.2f} looks fabricated/stale — keeping real ltp as cost basis"
+                )
             entry_slippage_meta['applied'] = False
         entry_slippage_meta['fill'] = round(float(actual_entry_premium), 2)
         entry_slippage_meta['slippage_pct'] = (
