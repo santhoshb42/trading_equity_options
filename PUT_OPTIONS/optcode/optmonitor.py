@@ -2082,19 +2082,36 @@ class OptionPositionMonitor:
         symbol_phase = (sum(ord(ch) for ch in symbol) % 5) * 0.15
         min_modify_gap_seconds = 1.0 + symbol_phase
 
+        # UPWARD-RAISE BYPASS: a modify that RAISES the stop to a strictly-better (higher) level over
+        # the SL currently placed at the broker must NEVER be blocked by the cooldown or the adaptive
+        # small-change skip. On a long option a higher SL locks more profit and is always safe; those
+        # gates exist only to throttle clustered micro-updates. Without this, a breakeven-floor modify
+        # and the trail-SL modify firing on the SAME tick collide — the lower breakeven wins, the
+        # higher trail is cooldown-skipped, and the locked profit is given back (DRREDDY 2026-07-03:
+        # trail ₹30.65 skipped after peaking +4.4% → exited at breakeven ₹29.50, −0.5%).
+        _placed_sl = float(position.sl_order_price or position.last_modified_sl_price or position.hard_sl_price or 0.0)
+        _is_upward_raise = _placed_sl > 0 and new_sl_price > _placed_sl * 1.005
+
         if position.next_modify_earliest_time and now < position.next_modify_earliest_time:
-            wait_seconds = (position.next_modify_earliest_time - now).total_seconds()
-            position.modify_pending = True
-            position.last_attempted_sl_price = new_sl_price
-            return {
-                'should_modify': False,
-                'reason': f'modify_cooldown_{wait_seconds:.1f}s',
-                'strategy': 'cooldown'
-            }
-        
+            if _is_upward_raise:
+                logger.info(
+                    f"MODIFY_SL: COOLDOWN_BYPASS (upward raise) | {symbol} | "
+                    f"new_sl=₹{new_sl_price:.2f} > placed=₹{_placed_sl:.2f} — locking profit, not delaying"
+                )
+            else:
+                wait_seconds = (position.next_modify_earliest_time - now).total_seconds()
+                position.modify_pending = True
+                position.last_attempted_sl_price = new_sl_price
+                return {
+                    'should_modify': False,
+                    'reason': f'modify_cooldown_{wait_seconds:.1f}s',
+                    'strategy': 'cooldown'
+                }
+
         # STRATEGY 1: ADAPTIVE MODIFY - Only if SL change > 1% (reduced from 2%)
-        # Milestones happen fast, so need lower threshold to catch them
-        if position.last_attempted_sl_price is not None:
+        # Milestones happen fast, so need lower threshold to catch them.
+        # A genuine upward raise over the placed broker SL bypasses this too (profit-lock must land).
+        if position.last_attempted_sl_price is not None and not _is_upward_raise:
             change_percent = abs(new_sl_price - position.last_attempted_sl_price) / position.last_attempted_sl_price * 100
             if change_percent < 1.0:  # Less than 1% change - skip
                 return {
