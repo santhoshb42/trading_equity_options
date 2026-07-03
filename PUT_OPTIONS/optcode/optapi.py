@@ -2373,6 +2373,17 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"ALERT_PROCESS: SPREAD_TOO_WIDE | {selected_contract.symbol} | "
                     f"spread={live_spread_pct:.2f}% > {OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}%"
                 )
+                # Reject: a wide bid-ask means the MARKET-SELL exit fills far below the LTP that
+                # triggers it (ALKEM 2026-07-03 CE: ₹137 trigger → ₹129.30 fill = −5.6% exit slip).
+                # Don't enter what we can't exit cleanly. Guarded above to skip synthetic spreads.
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Bid-ask spread too wide: {live_spread_pct:.2f}% > {OptionsTradingConfig.MAX_ENTRY_SPREAD_PCT:.1f}% (exit-slippage risk)',
+                    'stage': 'spread_gate',
+                    **contract_context,
+                }
         contract_context['entry_premium'] = selected_contract.ltp
 
         entry_order_type, entry_order_price = _build_entry_order_pricing(
