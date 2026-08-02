@@ -1,0 +1,88 @@
+//@version=6
+indicator("Sniper INDEX THETA v1 (1-Min) — NIFTY/BANKNIFTY strangle-sell trigger", overlay=true, max_labels_count=500)
+// ============================================================================
+// INDEX THETA-SELL trigger (2026-07-31). Feeds the SELL_THETA bots. NOT a breakout script.
+// On a calm, range-bound day it fires BOTH a CE alert and a PUT alert once, early in the session:
+//   * CE alert  -> the CE bot (SELL_THETA) SELLS an OTM PUT
+//   * PUT alert -> the PUT bot (SELL_THETA) SELLS an OTM CALL
+// Together = a naked short strangle on the index; you keep the credit if the index stays in range
+// and time decays (theta). The bots hold to the EOD square-off (no intermediate exits in SELL_THETA).
+//
+// WHY NOT the sniper pines: those are stock breakout scripts (ADX>=35, thrust>=0.4%) — the index is
+// too smooth to trip them (H29: NIFTY max 5-min move ~0.26%), so they fire ~0 alerts. Theta-selling
+// wants the OPPOSITE: a quiet, non-trending day, entered early so decay has the whole session.
+//
+// USE ON: NIFTY or BANKNIFTY, 1-MINUTE chart. Best on a weekly/expiry day (0DTE = strongest theta).
+// The bot picks the expiry + strike; STRIKE DISTANCE is a bot-side knob (want ~0.75-1% OTM for a
+// safe index strangle — the current ITM=immediate/OTM=next is tight; widen bot-side before trusting).
+// ============================================================================
+
+// ── inputs ──
+adxLen        = input.int(14,   "ADX length", group="Range filter")
+adxMax        = input.float(20, "Enter only if ADX <= (calm/rangebound, not trending)", group="Range filter")
+maxOpenMovePct= input.float(0.35, "Enter only if |move from day-open| <= % (index still near flat)", group="Range filter")
+maxVwapDistPct= input.float(0.30, "Enter only if price within % of VWAP (balanced)", group="Range filter")
+useRangeFilter= input.bool(true, "Require the calm-day range filter (off = fire on time alone)", group="Range filter")
+
+sessStart     = input.int(920,  "Earliest entry (HHMM IST)", group="Session")
+sessEnd       = input.int(1015, "Latest entry (HHMM IST)", group="Session")
+oncePerDay    = input.bool(true, "Only one strangle entry per day", group="Session")
+
+showLabels    = input.bool(true, "Show label", group="Display")
+
+isOneMin = timeframe.isminutes and timeframe.multiplier == 1
+
+// ── indicators ──
+[diP, diM, adxVal] = ta.dmi(adxLen, adxLen)
+// session-anchored VWAP proxy (index spot has no volume) = equal-weight mean of hlc3
+var float sumSrc = na
+var int   nBars  = 0
+var float dayOpen = na
+var bool  firedToday = false
+isNewDay = ta.change(time("D")) != 0
+if isNewDay
+    sumSrc := 0.0
+    nBars  := 0
+    dayOpen := open
+    firedToday := false
+sumSrc := sumSrc + hlc3
+nBars  := nBars + 1
+vwapProxy = sumSrc / nBars
+
+moveFromOpen = dayOpen != 0 ? (close / dayOpen - 1) * 100 : 0.0
+vwapDist     = vwapProxy != 0 ? math.abs(close / vwapProxy - 1) * 100 : 0.0
+
+// ── session window ──
+hIST = hour(time, "Asia/Kolkata")
+mIST = minute(time, "Asia/Kolkata")
+hhmm = hIST * 100 + mIST
+inWindow = hhmm >= sessStart and hhmm <= sessEnd
+
+// ── calm-day condition ──
+calmOK = not useRangeFilter or (adxVal <= adxMax and math.abs(moveFromOpen) <= maxOpenMovePct and vwapDist <= maxVwapDistPct)
+
+entry = isOneMin and inWindow and calmOK and (not oncePerDay or not firedToday)
+if entry
+    firedToday := true
+
+// ── ALERTS: fire BOTH legs (CE -> bot sells OTM put ; PUT -> bot sells OTM call) ──
+fv(x) => str.tostring(x, format.mintick)
+fi(x) => str.tostring(x, "#.##")
+// CE leg — routed to the CE (SELL_THETA) bot which SELLS a put
+jsonCE  = '{"symbol":"' + syminfo.ticker + '","action":"BUY","confidence":"90","score":"90","entry_type":"INDEX_THETA_STRANGLE","price":"' + fv(close) + '","vwap_value":"' + fv(vwapProxy) + '","adx_value":"' + fi(adxVal) + '","tv_setup_label":"INDEX_THETA_CE"}'
+// PUT leg — routed to the PUT (SELL_THETA) bot which SELLS a call
+jsonPUT = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","confidence":"90","score":"90","entry_type":"INDEX_THETA_STRANGLE","price":"' + fv(close) + '","vwap_value":"' + fv(vwapProxy) + '","adx_value":"' + fi(adxVal) + '","tv_setup_label":"INDEX_THETA_PUT"}'
+
+if entry
+    alert(jsonCE,  alert.freq_once_per_bar_close)
+    alert(jsonPUT, alert.freq_once_per_bar_close)
+
+alertcondition(entry, title="INDEX THETA strangle entry", message="INDEX_THETA_ENTRY")
+
+// ── plots ──
+plot(vwapProxy, "Session VWAP (proxy)", color=color.new(color.blue, 0), linewidth=2)
+plot(adxVal, "ADX", color=color.orange, display=display.data_window)
+bgcolor(not isOneMin ? color.new(color.red, 88) : na, title="Use 1-Minute Chart")
+if showLabels and entry
+    label.new(bar_index, high, "STRANGLE\nADX " + fi(adxVal) + "\nmove " + fi(moveFromOpen) + "%",
+              style=label.style_label_down, color=color.new(color.teal, 20), textcolor=color.white, size=size.small)

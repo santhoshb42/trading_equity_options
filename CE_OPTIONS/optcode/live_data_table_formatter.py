@@ -17,7 +17,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from .optconfig import DATA_DIR
+from .optconfig import DATA_DIR, OptionsCapitalConfig
 
 # =============================================================================
 # Table Formatters
@@ -355,8 +355,8 @@ No closed trades.
         
         # === SECTION 1: CLOSED TRADES ===
         csv_lines.append("=== CLOSED TRADES (Today) ===")
-        csv_lines.append("Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit     | High     | Low      | Qty    | PnL      | PnL%  | Dur   | Reason")
-        csv_lines.append("----+------------+--------------------------+-----------+-------+----------+----------+----------+----------+--------+----------+-------+-------+----------")
+        csv_lines.append("Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit     | High     | Peak%  | Low      | Qty    | PnL      | Charges  | PnL%  | Dur   | Reason")
+        csv_lines.append("----+------------+--------------------------+-----------+-------+----------+----------+----------+--------+----------+--------+----------+----------+-------+-------+----------")
         
         # Sort closed trades by close time (most recent first)
         today_closed_sorted = sorted(today_closed, key=lambda x: x.get('closed_at', x.get('exit_time', '')), reverse=True)
@@ -375,8 +375,12 @@ No closed trades.
             lowest_prem = trade.get('lowest_premium')
             if lowest_prem is None:
                 lowest_prem = min(entry_prem, exit_prem)
+            # Peak reached as % of entry — how far this trade ran before exiting (for tuning the
+            # progressive TRIAL_SL gap). Computed from tracked high so it works for every trade.
+            peak_pct = ((highest_prem - entry_prem) / entry_prem * 100) if entry_prem else 0.0
             qty = trade.get('quantity', 0)
-            pnl = trade.get('pnl', 0)
+            pnl = trade.get('pnl', 0)  # NET (charges already deducted)
+            charges = trade.get('charges', 0)
             pnl_pct = trade.get('pnl_percent', 0)
             
             # Duration
@@ -421,14 +425,14 @@ No closed trades.
             option_symbol = trade.get('symbol', 'N/A')
             
             # Format with fixed widths matching header
-            line = f"CLS | {underlying:<10} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {exit_prem:>8.2f} | {highest_prem:>8.2f} | {lowest_prem:>8.2f} | {qty:>6d} | {pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8}"
+            line = f"CLS | {underlying:<10} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {exit_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {pnl:>8.1f} | {charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8}"
             csv_lines.append(line)
         
         # === SECTION 2: ONGOING TRADES ===
         csv_lines.append("")
         csv_lines.append("=== ONGOING TRADES (Live) ===")
-        csv_lines.append("Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Curr     | High     | Low      | Qty    | UnPnL    | PnL%  | Dur")
-        csv_lines.append("----+------------+--------------------------+-----------+-------+----------+----------+----------+----------+--------+----------+-------+-------")
+        csv_lines.append("Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Curr     | High     | Low      | Qty    | UnPnL    | EstChrg  | PnL%  | Dur")
+        csv_lines.append("----+------------+--------------------------+-----------+-------+----------+----------+----------+----------+--------+----------+----------+-------+-------")
         
         # Sort ongoing by entry time (oldest first)
         ongoing_sorted = sorted(ongoing_trades, key=lambda x: x.get('entry_time', ''))
@@ -450,6 +454,9 @@ No closed trades.
             qty = trade.get('quantity', 0)
             unrealized_pnl = trade.get('unrealized_pnl', 0)
             pnl_pct = (unrealized_pnl / (entry_prem * qty) * 100) if (entry_prem * qty) > 0 else 0
+            # EstChrg: what round-trip charges WOULD be if closed right now at current_prem.
+            # Not yet real (position is still open) — a live projection, not a booked cost.
+            est_charges = OptionsCapitalConfig.calculate_round_trip_charges(entry_prem, current_prem, qty)['total_charges'] if entry_prem and qty else 0.0
             
             # Duration from entry to now
             try:
@@ -478,7 +485,7 @@ No closed trades.
             option_symbol = trade.get('symbol', 'N/A')
             
             # Format with fixed widths matching header
-            line = f"OPN | {underlying:<10} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {pnl_pct:>5.1f} | {duration:>5}"
+            line = f"OPN | {underlying:<10} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5}"
             csv_lines.append(line)
         
         return "\n".join(csv_lines)

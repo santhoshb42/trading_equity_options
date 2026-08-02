@@ -17,6 +17,7 @@ import traceback
 from threading import RLock
 import atexit
 import os
+from pathlib import Path
 
 # Per-bot concurrency cap: limits simultaneous broker-heavy alert threads to prevent OOM.
 # Threads start immediately (webhook returns 202 at once); only the broker work is gated.
@@ -38,6 +39,108 @@ from .optsignalvalidator import (
     OptionsSignalValidator, get_options_signal_filter
 )
 from .optlogging import logger, log_alert, log_signal_validation, log_event
+
+# ============================================================================
+# MARKET REGIME READER — reads the shared NIFTY trend snapshot published by
+# tools/market_regime_daemon.py (one writer, all 4 bots read). Study-only for
+# now: GOOD/NEUTRAL/BAD capital caps are equal in OptionsCapitalConfig, so
+# this only feeds real regime data into existing alert/trade logs — it does
+# not change trade sizing or acceptance yet.
+# ============================================================================
+_MARKET_REGIME_FILE = DATA_DIR.parent.parent.parent / "tools" / "market_regime.json"
+_MARKET_REGIME_STALE_SECONDS = 90
+_MARKET_REGIME_READ_TTL = 3  # seconds — avoid a file read on every single alert
+_market_regime_cache = {"value": "NEUTRAL", "read_at": 0.0}
+_market_regime_snapshot_cache = {"snapshot": None, "read_at": 0.0}
+
+# ============================================================================
+# PUT BEARISH-SESSION ARM (H15 mandatory companion to Sniper_VWAP_PUT v13)
+# ----------------------------------------------------------------------------
+# PUT edge is EVENT-DRIVEN: ~all of it sits on selloff days; between events the
+# harvester bleeds. The Pine window is continuous 09:30-14:30 with NO normal-day
+# filter — this gate IS that filter. Only allow PUT entries when the NIFTY daemon
+# confirms an intraday selloff: session_eff_pct >= EFF_MIN AND session_net_pct <=
+# NET_MAX (H13.1 session fields, measured from 09:30). In the 20-day sim this kept
+# ~Rs716K of crash-day profit while cutting between-event bleed to ~-Rs29K.
+# FAIL-CLOSED (unlike CE's fail-open): a missing/stale daemon snapshot => NOT armed
+# => reject. For a harvester, missing a day is free; trading a non-selloff day bleeds.
+# ============================================================================
+PUT_BEARISH_ARM_ENABLED = os.getenv("OPTIONS_PUT_BEARISH_ARM_ENABLED", "true").strip().lower() == "true"
+PUT_BEARISH_ARM_EFF_MIN = float(os.getenv("OPTIONS_PUT_BEARISH_ARM_EFF_MIN", "10.0"))
+PUT_BEARISH_ARM_NET_MAX = float(os.getenv("OPTIONS_PUT_BEARISH_ARM_NET_MAX", "-0.4"))
+
+
+def _read_market_regime_snapshot() -> Optional[dict]:
+    """Full latest daemon snapshot (market_trend + session_eff_pct/session_net_pct).
+    Returns None on any miss (missing file, stale >90s, malformed JSON)."""
+    now = time.time()
+    if now - _market_regime_snapshot_cache["read_at"] < _MARKET_REGIME_READ_TTL:
+        return _market_regime_snapshot_cache["snapshot"]
+    snapshot = None
+    try:
+        with open(_MARKET_REGIME_FILE, 'r') as fh:
+            raw = json.load(fh)
+        computed_at = datetime.fromisoformat(raw["computed_at"])
+        age = (datetime.now().astimezone() - computed_at).total_seconds()
+        if age <= _MARKET_REGIME_STALE_SECONDS:
+            snapshot = raw
+    except Exception:
+        snapshot = None
+    _market_regime_snapshot_cache["snapshot"] = snapshot
+    _market_regime_snapshot_cache["read_at"] = now
+    return snapshot
+
+
+def _put_bearish_arm_status() -> tuple:
+    """(armed: bool, reason: str). FAIL-CLOSED: not armed unless the daemon
+    confirms a bearish intraday session. Callers reject PUT entries when not armed."""
+    snap = _read_market_regime_snapshot()
+    if not snap:
+        return False, "regime snapshot missing/stale (fail-closed)"
+    net = snap.get("session_net_pct")
+    day_net = snap.get("day_net_pct")
+    eff = snap.get("session_eff_pct")
+    vals = [v for v in (day_net, net) if v is not None]
+    if not vals:
+        return False, "session fields absent (fail-closed)"
+    # Arm on how BEARISH the market is = the more bearish of the gap-inclusive day
+    # change (day_net, from prev close — a gap-down day is bearish even if it then
+    # chops flat from the 09:30 open) and the intraday flush (session_net, from open).
+    # NO efficiency floor: on a gap-down day the directional move happened AT the open,
+    # so requiring intraday efficiency (session_eff, from open) wrongly blocks the very
+    # bearish days PUT wants (2026-07-22: gap -0.59%, eff 0.12, but genuinely a down day).
+    # Per-stock entry timing is still the Pine FLUSH gate; this is only the day filter.
+    bearish = min(vals)
+    if bearish <= PUT_BEARISH_ARM_NET_MAX:
+        return True, (f"bearish-armed bearish={bearish:.3f}<={PUT_BEARISH_ARM_NET_MAX} "
+                      f"(day_net={day_net} session_net={net} eff={eff})")
+    return False, (f"not bearish enough (day_net={day_net} session_net={net} eff={eff}; "
+                   f"bearish={bearish:.3f} > {PUT_BEARISH_ARM_NET_MAX})")
+
+
+def _read_market_regime(fallback: str = "NEUTRAL") -> str:
+    """Read the daemon's latest NIFTY regime. Fail-open to `fallback` (caller
+    passes the alert's own market_trend field, itself defaulting to NEUTRAL)
+    on any miss: missing file, stale snapshot, or malformed JSON — a stalled
+    daemon must never silently gate/resize every trade."""
+    now = time.time()
+    if now - _market_regime_cache["read_at"] < _MARKET_REGIME_READ_TTL:
+        return _market_regime_cache["value"]
+    try:
+        with open(_MARKET_REGIME_FILE, 'r') as fh:
+            snapshot = json.load(fh)
+        computed_at = datetime.fromisoformat(snapshot["computed_at"])
+        age = (datetime.now().astimezone() - computed_at).total_seconds()
+        if age > _MARKET_REGIME_STALE_SECONDS:
+            value = fallback
+        else:
+            value = str(snapshot.get("market_trend", fallback)).strip().upper()
+    except Exception:
+        value = fallback
+    _market_regime_cache["value"] = value
+    _market_regime_cache["read_at"] = now
+    return value
+
 
 # Entry filter engine integration
 try:
@@ -236,6 +339,28 @@ def create_options_api_app():
             elapsed = time.time() - start_time
             result_status = result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'
             logger.info(f"ALERT_TIMING [{tname}]: symbol={symbol} | status={result_status} | sem_wait_ms={sem_wait_ms:.0f} | proc_ms={proc_ms:.0f} | total_ms={elapsed*1000:.0f}")
+            # Single per-alert outcome line (grep ALERT_RESULT): symbol | SELECT/REJECT [| reason]
+            if result_status == 'success':
+                logger.info(f"ALERT_RESULT: {symbol} | SELECT")
+                _tail = f"SELECT | {(result.get('contract') or result.get('strike') or '') if isinstance(result, dict) else ''}"
+            else:
+                _rr = (result.get('reason') or result.get('message') or result_status) if isinstance(result, dict) else result_status
+                logger.info(f"ALERT_RESULT: {symbol} | REJECT | {_rr}")
+                _tail = f"REJECT | {_rr}"
+            # Dedicated per-alert audit file: logs/<date>/trades.log
+            # timestamp | symbol | alert_price | SELECT/REJECT | strike(contract) or reason
+            try:
+                from .optlogging import LOGS_DIR
+                _day = LOGS_DIR / datetime.now().strftime("%Y-%m-%d")
+                _day.mkdir(parents=True, exist_ok=True)
+                _tf = _day / "trades.log"
+                _new = not _tf.exists()
+                with open(_tf, "a") as _fh:
+                    if _new:
+                        _fh.write("timestamp | symbol | alert_price | result | strike/reason\n")
+                    _fh.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {symbol} | {alert.get('price', '')} | {_tail}\n")
+            except Exception as _e:
+                logger.debug(f"TRADE_LOG_WRITE_FAILED: {symbol} | {_e}")
             _details = _build_alert_completion_details(alert, result, elapsed * 1000)
             if isinstance(_details, dict):
                 _details['sem_wait_ms'] = round(sem_wait_ms, 0)
@@ -781,6 +906,8 @@ def create_options_api_app():
                     gain_percent = 0
                     if entry_premium > 0:
                         gain_percent = ((current_ltp - entry_premium) / entry_premium) * 100
+                        if pos.get('action') == 'SELL':   # L4: a short gains when premium FALLS
+                            gain_percent = -gain_percent
                     
                     # Detect stagnant positions (0% gain for 24+ hours)
                     is_stagnant = False
@@ -1504,6 +1631,28 @@ def _build_alert_indicator_snapshot(*, alert: Dict[str, Any], market_trend: str,
 # Disabled neural ML to reduce memory footprint and simplify alert processing
 # Kept as separate file for future use with proper integration
 
+def _theta_sell_contract(chain, spot, alert_ctype, bot_mode):
+    """SELL_THETA strike/side selection (2026-07-30). CE alert (bullish) -> SELL a PUT below spot;
+    PE alert (bearish) -> SELL a CALL above spot. bot_mode ITM = immediate strike, OTM = next (2nd).
+    Returns (contract, sold_type) or None if that strike isn't listed."""
+    try:
+        sold_type = 'PE' if alert_ctype == 'CE' else 'CE'
+        steps = 1 if str(bot_mode).upper() == 'ITM' else 2
+        cons = [c for c in chain.contracts.values()
+                if c.contract_type == sold_type and getattr(c, 'strike', 0) > 0]
+        if not cons:
+            return None
+        if sold_type == 'PE':
+            cand = sorted([c for c in cons if c.strike < spot], key=lambda c: -c.strike)
+        else:
+            cand = sorted([c for c in cons if c.strike > spot], key=lambda c: c.strike)
+        if len(cand) < steps:
+            return None
+        return (cand[steps - 1], sold_type)
+    except Exception:
+        return None
+
+
 def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     """Process single options alert with detailed logging"""
     _entry_ip: set = state.get('entry_in_progress', set())
@@ -1649,12 +1798,15 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 pass
         
         # ====================================================================
-        # MARKET TREND GATE  (Pine Script 7.18-E → market_trend alert field)
+        # MARKET TREND GATE  (bot-computed NIFTY regime, tools/market_regime_daemon.py
+        # → falls back to Pine's market_trend alert field, then NEUTRAL, if the
+        # daemon snapshot is missing/stale)
         # GOOD    → trade at CAP_PER_TRADE_GOOD    (2x when capital allows)
         # NEUTRAL → trade at CAP_PER_TRADE_NEUTRAL  (1x, default for missing)
         # BAD     → use the configured BAD-trend budget for the underlying
         # ====================================================================
-        market_trend   = str(alert.get('market_trend', 'NEUTRAL')).strip().upper()
+        alert_market_trend = str(alert.get('market_trend', 'NEUTRAL')).strip().upper()
+        market_trend   = _read_market_regime(fallback=alert_market_trend)
         cap_this_trade = OptionsCapitalConfig.get_cap_for_symbol_and_trend(underlying, market_trend)
         if cap_this_trade == 0.0:
             logger.warning(
@@ -1678,6 +1830,44 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             f"| market_trend={market_trend} | cap_this_trade=₹{cap_this_trade:.0f}"
         )
 
+        # ====================================================================
+        # PUT BEARISH-SESSION ARM (H15, mandatory) — only trade PUT on a NIFTY-
+        # confirmed intraday selloff. Fail-closed. This is the normal-day filter
+        # the continuous Pine window (v13) deliberately omits.
+        # ====================================================================
+        armed, arm_reason = _put_bearish_arm_status()
+        if not armed and not PUT_BEARISH_ARM_ENABLED:
+            # SHADOW MODE (2026-07-23, for Pine refinement): the arm blocked ~97% of alerts, so the
+            # Pine's raw entry quality was unmeasurable. Trade anyway but TAG, so analysis can still
+            # split armed-day vs unarmed-day trades. RE-ENABLE before LIVE — unarmed days bled
+            # -Rs15K/86 trades on 07-22.
+            logger.warning(
+                f"ALERT_PROCESS: PUT_BEARISH_ARM_SHADOW | symbol={symbol} | {arm_reason} | trading anyway (arm disabled)"
+            )
+            log_alert(alert=alert, status='put_bearish_arm_shadow', details={
+                'market_trend': market_trend,
+                'arm_reason': arm_reason,
+            })
+        if PUT_BEARISH_ARM_ENABLED:
+            if not armed:
+                logger.warning(
+                    f"ALERT_PROCESS: PUT_BEARISH_ARM_NOT_ARMED | symbol={symbol} | {arm_reason}"
+                )
+                log_alert(alert=alert, status='put_bearish_arm_not_armed', details={
+                    'market_trend': market_trend,
+                    'arm_reason': arm_reason,
+                })
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'PUT bearish arm not armed — {arm_reason}',
+                    'stage': 'put_bearish_arm',
+                    'market_trend': market_trend,
+                    **base_context,
+                }
+            logger.info(f"ALERT_PROCESS: PUT_BEARISH_ARMED | symbol={symbol} | {arm_reason}")
+
         limit_rejection = _evaluate_entry_limits(
             alert=alert,
             state=state,
@@ -1700,7 +1890,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # ========================================================================
         pct_limit  = OptionsCapitalConfig.DAILY_LOSS_LIMIT_PCT
         min_trades = OptionsCapitalConfig.DAILY_CB_MIN_TRADES
-        if pct_limit > 0 and OptionsTradingConfig.TRADING_MODE != "PAPER":
+        # 2026-07-24 LIVE-READINESS: was gated `!= "PAPER"` => never ran/tested. Now evaluates +
+        # logs in both modes, enforces the halt only in LIVE (or PAPER if OPTIONS_DAILY_CB_ENFORCE_
+        # IN_PAPER=true) so PAPER study data isn't cut. (Mirror of the CE fix.)
+        if pct_limit > 0:
             live = OptionsCapitalConfig.get_today_live_summary()
             trades_today      = live['trades_today']
             total_pnl         = live['total_pnl']
@@ -1713,33 +1906,37 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"< min_trades={min_trades} | warming up"
                 )
             elif total_pnl_percent <= -pct_limit:
+                _enforce = (OptionsTradingConfig.TRADING_MODE == "LIVE" or
+                            os.getenv("OPTIONS_DAILY_CB_ENFORCE_IN_PAPER", "false").strip().lower() == "true")
                 logger.warning(
-                    f"ALERT_PROCESS: DAILY_LOSS_CIRCUIT_BREAKER | symbol={symbol} "
-                    f"| total_pnl_percent={total_pnl_percent:.2f}% "
-                    f"≤ -{pct_limit}% limit "
-                    f"| today_pnl=₹{total_pnl:.0f} "
+                    f"ALERT_PROCESS: DAILY_LOSS_CIRCUIT_BREAKER {'ENFORCED' if _enforce else 'OBSERVED(paper)'} "
+                    f"| symbol={symbol} | total_pnl_percent={total_pnl_percent:.2f}% "
+                    f"≤ -{pct_limit}% limit | today_pnl=₹{total_pnl:.0f} "
                     f"| budget_used=₹{budget_used:.0f} | trades={trades_today}"
                 )
-                log_alert(alert=alert, status='circuit_breaker_rejected', details={
+                log_alert(alert=alert, status=('circuit_breaker_rejected' if _enforce else 'circuit_breaker_observed'), details={
                     'total_pnl':         round(total_pnl, 2),
                     'total_pnl_percent': round(total_pnl_percent, 2),
                     'limit_pct':         pct_limit,
                     'budget_used':       round(budget_used, 2),
                     'trades_today':      trades_today,
+                    'enforced':          _enforce,
                 })
-                return {
-                    'symbol': symbol,
-                    'timestamp': timestamp,
-                    'status': 'rejected',
-                    'reason': (
-                        f'Daily loss circuit breaker: '
-                        f'{total_pnl_percent:.2f}% ≤ -{pct_limit}% '
-                        f'(₹{total_pnl:.0f} on ₹{budget_used:.0f} deployed)'
-                    ),
-                    'stage': 'daily_loss_circuit_breaker',
-                    'budget': round(budget_used, 2),
-                    **base_context,
-                }
+                if _enforce:
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': (
+                            f'Daily loss circuit breaker: '
+                            f'{total_pnl_percent:.2f}% ≤ -{pct_limit}% '
+                            f'(₹{total_pnl:.0f} on ₹{budget_used:.0f} deployed)'
+                        ),
+                        'stage': 'daily_loss_circuit_breaker',
+                        'budget': round(budget_used, 2),
+                        **base_context,
+                    }
+                # PAPER observe mode: logged that it WOULD halt; fall through (study data preserved)
             else:
                 logger.debug(
                     f"ALERT_PROCESS: CIRCUIT_BREAKER_OK "
@@ -2129,7 +2326,23 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: ATM_CONTRACTS | ce={ce.symbol} | pe={pe.symbol}")
         
         # Select contract based on action
-        selected_contract = ce if contract_type == 'CE' else pe
+        entry_action = 'BUY'
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            _bmode = os.getenv("BOT_MODE", "OTM").upper()
+            _theta = _theta_sell_contract(chain, alert_price, contract_type, _bmode)
+            if not _theta:
+                return {
+                    'symbol': symbol, 'timestamp': timestamp, 'status': 'rejected',
+                    'reason': f'SELL_THETA: no {"PUT" if contract_type=="CE" else "CALL"} strike '
+                              f'({"immediate" if _bmode=="ITM" else "next"}) listed',
+                    'stage': 'theta_strike_selection', 'expiry': expiry, **base_context,
+                }
+            selected_contract, contract_type = _theta[0], _theta[1]
+            entry_action = 'SELL'
+            logger.info(f"SELL_THETA: {symbol} alert -> SELL {contract_type} {selected_contract.symbol} "
+                        f"(mode={_bmode}, strike={selected_contract.strike})")
+        else:
+            selected_contract = ce if contract_type == 'CE' else pe
 
         # LIGHT chain skipped per-contract greeks (the ~2s bottleneck). Compute REAL greeks for
         # the SELECTED contract ONLY — this is the only contract whose greeks are used (greeks
@@ -2582,12 +2795,19 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
 
         logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{pricing_premium:.2f} | order_type={entry_order_type} | lot_size={lot_size} | budget=₹{effective_budget} | requested_budget=₹{cap_this_trade} | market_trend={market_trend} | qty={quantity} | lots={quantity // lot_size} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}% | scaled_down_for_oi={scaled_down_for_oi}")
 
+        # L1: naked shorts block SPAN+exposure margin, not the premium credit. Gate the LIVE funds
+        # check on a conservative notional-based margin proxy for SELL entries (BUY = premium × qty).
+        if entry_action == 'SELL':
+            _sell_notional = float(getattr(selected_contract, 'strike', 0) or 0) * quantity
+            _required_cash = _sell_notional * OptionsTradingConfig.SELL_MARGIN_RATE
+        else:
+            _required_cash = actual_cost
         funds_rejection = _evaluate_broker_funds(
             alert=alert,
             state=state,
             symbol=symbol,
             timestamp=timestamp,
-            required_cash=actual_cost,
+            required_cash=_required_cash,
             base_context=order_context,
         )
         if funds_rejection:
@@ -2602,7 +2822,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     bot_type='options',
                     order_details={
                         'symbol': selected_contract.symbol,
-                        'action': 'BUY',
+                        'action': entry_action,
                         'quantity': quantity,
                         'price': pricing_premium,
                         'order_type': entry_order_type,
@@ -2617,10 +2837,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         for _attempt in range(3):
             _raw = state['broker'].place_options_order(
                 symbol=selected_contract.symbol,
-                action='BUY',
+                action=entry_action,
                 quantity=quantity,
                 price=pricing_premium,
                 order_type=entry_order_type,
+                track_pending=True,   # L2: track entry (incl. SELL_THETA) so LIVE fill-confirm resolves
                 allow_queue=False,
             )
             if _raw and not str(_raw).startswith("QUEUED_"):
@@ -2783,9 +3004,37 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         }
         if (OptionsTradingConfig.TRADING_MODE != "LIVE"
                 and OptionsTradingConfig.PAPER_SLIPPAGE_MODELING
+                and entry_action == 'SELL' and _real_bid > 0 and not spread_is_synthetic):
+            # SELL_THETA (2026-07-31): a short entry fills at the BID (you sell at bid). Phantom guard:
+            # a fresh bid can't sit wildly ABOVE the LTP; if it does, book at the LTP instead.
+            if _entry_ideal_ltp > 0 and _real_bid > _entry_ideal_ltp * float(os.getenv("OPTIONS_ENTRY_BID_MAX_FRACTION", "2.0")):
+                actual_entry_premium = _entry_ideal_ltp
+                entry_slippage_meta['phantom_bid_rejected'] = True
+                entry_slippage_meta['applied'] = False
+            else:
+                actual_entry_premium = _real_bid
+                entry_slippage_meta['applied'] = True
+        elif (OptionsTradingConfig.TRADING_MODE != "LIVE"
+                and OptionsTradingConfig.PAPER_SLIPPAGE_MODELING
                 and _real_ask > 0 and not spread_is_synthetic):
-            actual_entry_premium = _real_ask
-            entry_slippage_meta['applied'] = True
+            # PHANTOM-ASK GUARD (2026-07-30): a real BUY fills at the ask, but a fresh ask can never
+            # sit wildly BELOW the last-traded LTP (a bid-ask spread is a few %, not 70%). When the
+            # ask is a stale/phantom LOW quote (RADICO 4450CE: ltp ₹165.9 but ask ₹45.39, -73%),
+            # booking it manufactures a nonsensical entry basis (and a bogus SL). Trust the LTP (a
+            # real print, within the day range) over an egregiously-low ask. env-tunable, default 0.5.
+            _ask_min_frac = float(os.getenv("OPTIONS_ENTRY_ASK_MIN_FRACTION", "0.5"))
+            if _entry_ideal_ltp > 0 and _real_ask < _entry_ideal_ltp * _ask_min_frac:
+                logger.warning(
+                    f"ENTRY_PHANTOM_ASK_GUARD: {selected_contract.symbol} | ask ₹{_real_ask:.2f} is "
+                    f"{(1 - _real_ask / _entry_ideal_ltp) * 100:.0f}% below ltp ₹{_entry_ideal_ltp:.2f} "
+                    f"— stale/phantom quote, booking at ltp instead"
+                )
+                actual_entry_premium = _entry_ideal_ltp
+                entry_slippage_meta['phantom_ask_rejected'] = True
+                entry_slippage_meta['applied'] = False
+            else:
+                actual_entry_premium = _real_ask
+                entry_slippage_meta['applied'] = True
         else:
             # STALE-LTP GUARD (PAPER): AngelOne's LTP is the last-traded price and goes stale on
             # less-liquid strikes (it returns a frozen high value until the next trade prints). A
@@ -2882,7 +3131,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             strike=selected_contract.strike,
             expiry=expiry,
             contract_type=contract_type,
-            action='BUY',
+            action=entry_action,
             quantity=quantity,
             entry_premium=actual_entry_premium,
             order_id=order_id,

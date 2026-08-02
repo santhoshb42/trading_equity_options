@@ -61,6 +61,8 @@ def _merge_live_json() -> dict:
         "total_pnl":             _add(otm_s, itm_s, "total_pnl"),
         "unrealized_pnl":        _add(otm_s, itm_s, "unrealized_pnl"),
         "realized_pnl":          _add(otm_s, itm_s, "realized_pnl"),
+        "gross_realized_pnl":    _add(otm_s, itm_s, "gross_realized_pnl"),
+        "charges":               _add(otm_s, itm_s, "charges"),
     }
     closed = merged_summary["closed_trades"]
     wins   = merged_summary["winning_trades"]
@@ -128,7 +130,7 @@ def _merge_csv() -> str:
         f"ITM data: {ITM_DATA / 'live_data_trades.csv'}\n\n"
     )
 
-    col_header = "Mod | Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit/Curr | High     | Low      | Qty    | PnL      | PnL%  | Dur   | Reason"
+    col_header = "Mod | Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Exit/Curr | High     | Low      | Qty    | PnL      | Charges  | PnL%  | Dur   | Reason"
     divider    = "-" * len(col_header)
 
     closed_section = "=== CLOSED TRADES (Today) ===\n" + col_header + "\n" + divider + "\n"

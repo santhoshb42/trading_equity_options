@@ -771,7 +771,8 @@ class LiveDataTracker:
                    trail_activation_threshold: Optional[float] = None,
                    trailing_gap: Optional[float] = None,
                    market_trend: Optional[str] = None,
-                   trend_strength: Optional[float] = None) -> None:
+                   trend_strength: Optional[float] = None,
+                   peak_premium: float = 0.0) -> None:
         """
         Close a trade and record exit details
         
@@ -797,9 +798,15 @@ class LiveDataTracker:
                 trade['exit_greeks'] = exit_greeks or {}
                 trade['exit_iv'] = round(exit_iv, 2)
                 trade['status'] = 'CLOSED'
-                
+
+                # Peak reached during the trade (for tuning the progressive TRIAL_SL gap tiers).
+                # peak_pct is the max premium excursion vs entry — how far this trade actually ran.
+                if peak_premium and entry_premium:
+                    trade['peak_premium'] = round(peak_premium, 2)
+                    trade['peak_pct'] = round((peak_premium - entry_premium) / entry_premium * 100, 2)
+
                 # Preserve lowest_premium seen during trade lifetime
-                
+
                 # Calculate realized PNL
                 premium_diff = exit_premium - entry_premium
                 if trade['action'] == 'BUY':
@@ -904,6 +911,10 @@ class LiveDataTracker:
             winning_trades = len([t for t in today_closed if t.get('pnl', 0) > 0])
             losing_trades = len([t for t in today_closed if t.get('pnl', 0) < 0])
             total_realized_pnl = sum(t.get('pnl', 0) for t in today_closed)
+            # 'pnl' is already NET of charges (see OptionPosition.close_position); gross_pnl/charges
+            # are recorded separately per-trade so the summary can show all three.
+            total_charges = sum(t.get('charges', 0) for t in today_closed)
+            total_gross_pnl = sum(t.get('gross_pnl', t.get('pnl', 0)) for t in today_closed)
 
             today_index_open = [
                 p for p in open_positions
@@ -949,6 +960,10 @@ class LiveDataTracker:
             non_index_losing_trades = len([t for t in today_non_index_closed if t.get('pnl', 0) < 0])
             index_realized_pnl = sum(t.get('pnl', 0) for t in today_index_closed)
             non_index_realized_pnl = sum(t.get('pnl', 0) for t in today_non_index_closed)
+            index_charges = sum(t.get('charges', 0) for t in today_index_closed)
+            non_index_charges = sum(t.get('charges', 0) for t in today_non_index_closed)
+            index_gross_realized_pnl = sum(t.get('gross_pnl', t.get('pnl', 0)) for t in today_index_closed)
+            non_index_gross_realized_pnl = sum(t.get('gross_pnl', t.get('pnl', 0)) for t in today_non_index_closed)
             index_unrealized_pnl = sum(p.get('unrealized_pnl', 0) for p in today_index_open)
             non_index_unrealized_pnl = sum(p.get('unrealized_pnl', 0) for p in non_index_open)
             index_total_pnl = index_unrealized_pnl + index_realized_pnl
@@ -996,6 +1011,8 @@ class LiveDataTracker:
                     'total_pnl_percent': round(index_total_pnl_percent, 2),
                     'unrealized_pnl': round(index_unrealized_pnl, 2),
                     'realized_pnl': round(index_realized_pnl, 2),
+                    'gross_realized_pnl': round(index_gross_realized_pnl, 2),
+                    'charges': round(index_charges, 2),
                 },
                 'non_index_summary': {
                     'budget_used': round(non_index_budget_used, 2),
@@ -1011,6 +1028,8 @@ class LiveDataTracker:
                     'total_pnl_percent': round(non_index_total_pnl_percent, 2),
                     'unrealized_pnl': round(non_index_unrealized_pnl, 2),
                     'realized_pnl': round(non_index_realized_pnl, 2),
+                    'gross_realized_pnl': round(non_index_gross_realized_pnl, 2),
+                    'charges': round(non_index_charges, 2),
                 },
             }
             

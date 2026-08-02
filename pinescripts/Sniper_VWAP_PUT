@@ -1,0 +1,320 @@
+//@version=6
+indicator("VWAP Breakdown PUT v17 (1-Min)", overlay=true, max_labels_count=500)
+// v17: VWAP-UPPER-BELOW-PDC gate (H30, user 2026-07-27) — only fire PUT when the whole VWAP band
+//   (upper edge) sits BELOW the previous day's close = a decisively-bearish stock, not one dipping
+//   intraday near/above its PDC. Kills the rebound trap (MFSL +0.06% on the day fired a PUT at a
+//   spike-low then bounced). Both patterns, default ON. NOTE: the RSI-not-rising gate (v16) checks
+//   RSI at the ENTRY bar, so a sharp down-SPIKE passes it (RSI falling) then reverts — H30 is the
+//   context filter that catches those. PENDING backtest on shadow data (validate after close).
+// v16: BLOCK RSI-RISING (H27, 2026-07-24) — a put firing while RSI RISES = shorting a bounce,
+//   against PUT fundamentals (user caught it live: KALYANKJIL/KAYNES/POLYCAB crashed at open then
+//   bounced, RSI 15-16 -> rising). v15's VWAP-slope gate MISSES these (VWAP lags the crash, still
+//   falling while RSI turned up). Validated on 140 shadow trades: RSI-rising = 34% WR/-Rs705 avg
+//   vs not-rising 46%/-Rs174; blocking ~halves the bleed. DIRECTION not level (RSI<30 = best
+//   bucket, real falling crashes) so it is a "not rising" gate (rsi <= rsi[3]), NOT an oversold
+//   floor. Both patterns, default ON. Bundled with v14/v15 — one re-paste.
+// v15: VWAP DOWN-SLOPE GATE (H25, 2026-07-24) — bearish mirror of CE's vwapSlopeOK, added to BOTH
+//   patterns, default ON. On 07-22/23 shadow data (140 trades) near-FLAT VWAP entries were the
+//   noise (32% WR / -Rs772 avg = rangebound flush = rebound bait); requiring VWAP down >=0.005%/
+//   3bars cut the 2-day bleed -Rs39.8K -> -Rs4.8K (95 kept @49% WR). GOLDILOCKS: too-steep a fall
+//   = buying the fade (tightening past -0.005% got worse), so it's a MODERATE-downtrend gate.
+//   Threshold fit to 2 days/one regime — TUNABLE input, validate over more days. Full detail at
+//   the gate definition (search minVwapDownSlopePct). Bundled with v14 (below re-paste once).
+// v14: BELOW-DAY-OPEN GATE (H24) + same-bar double-fire fix (2026-07-24).
+//   1. NEW GATE, default ON, BOTH patterns: price must be BELOW the day open. Measured on the
+//      07-22/23 shadow-mode data (140 joined trades): entries ABOVE day open were 21% of volume
+//      at 30% WR / -Rs621 avg — 3.2x worse than below-open (47% WR / -Rs192), consistent across
+//      BOTH patterns (user's "rebound risk" call, confirmed). This PROMOTES the old
+//      "LEGACY: below day open (untested separately)" toggle — it is now tested, ON, and applied
+//      to pattern 2 as well (v13 wired it to pattern 1 only, and OFF).
+//   2. SAME-BAR DOUBLE-FIRE FIX (same defect as CE v33): both patterns could fire on one bar ->
+//      two alerts / two bot workers per move (live: IRCTC 2026-07-23 14:06:02). Continuation now
+//      defers to breakdown on collision.
+//   Legacy RSI-falling / MACD-falling toggles remain OFF: the H15 20-day label study scored those
+//   states AT/BELOW the down-move base rate (entering after momentum already rolled = the fade).
+//   CRITICAL: re-paste + RE-CREATE alerts (TradingView snapshots inputs at creation).
+// v13: DE-OVERFIT + SAFETY GATE WIRED (2026-07-21, ahead of PUT PAPER start). Two fixes from the
+//   script review:
+//   1. GAP_DOWN is now OPTIONAL, DEFAULT OFF (was a mandatory AND on both patterns). The gate was
+//      fit to the single 07-08 event (n=1) where the crash winners happened to gap down. Requiring
+//      it (a) excluded intraday ROLL-OVERS from flat/up opens (the common selloff shape), and
+//      (b) collided with pattern 1: a gapped-down stock is usually below VWAP from the open and
+//      never makes a FRESH cross-down, so "fresh-cross AND gap-down" made pattern 1 a near-dead
+//      branch on the very crash days it targets. Core rule is now FLUSH(5m<=-0.4%) + ADX-rising +
+//      geometry — fires on BOTH gap-down crashes and gapless intraday rolls. Gap-down stays as a
+//      toggle for A/B testing on accumulated bearish days. The DAY-level "only on selloff days"
+//      job now belongs entirely to the bot-side bearish arm (below), not to a per-stock gap proxy.
+//   2. The MANDATORY bot-side NIFTY BEARISH-SESSION ARM is now IMPLEMENTED (PUT optapi:
+//      _put_bearish_arm_status — requires session_eff_pct>=10 AND session_net_pct<=-0.4, FAIL-
+//      CLOSED, flag OPTIONS_PUT_BEARISH_ARM_ENABLED default true). v12's header warned "DO NOT
+//      enable without this gate" — it exists now, so the continuous window is safe for PAPER.
+// v12: DATA-DERIVED CRASH-DAY HARVESTER (2026-07-15 night, from the 20-day/210-symbol universe
+//   study — H15 in project memory). PUT was re-derived from candles the same way CE's v30 was,
+//   and the data OVERTURNED v11's blind-mirror design:
+//   * The classic bearish-continuation states v11 chases (below PDC, falling RSI, falling MACD)
+//     scored AT OR BELOW the 29.2% down-move base rate across 20 days. They are now LEGACY
+//     TOGGLES, DEFAULT OFF (kept for experimentation, not for trading).
+//   * What actually preceded profitable PUT trades: hard 5-min FLUSH (<= -0.4%, beat base 19/20
+//     days), stock GAPPED DOWN at open (<= -0.3%), ADX rising. Rule "flush + gap-down +
+//     adx-rising" captured the 07-08 midday selloff for +Rs689-746K sim while every
+//     WR-optimized rule lost money. PUT profit is EVENT-DRIVEN: ~all of 20 days' edge sat in
+//     ONE selloff day; between events the same rule bleeds.
+//   * Therefore v12 is a HARVESTER, not an everyday strategy. It is designed to fire ~zero
+//     signals on normal days and cluster fires on selloff days.
+//   * WINDOW CHANGED to continuous 09:30-14:30: the 07-08 crash flushes fired 11:46-13:57 —
+//     the old two-window design (09:30-11:00 + 13:30-14:30) would have MISSED most of them.
+//   * MANDATORY COMPANION (bot-side, NOT in this script): NIFTY bearish-session arm — only
+//     trade PUT when the regime daemon's session fields (H13.1) show session_eff_pct >= 10 AND
+//     session_net_pct <= -0.4 (confirmed intraday selloff). In the 20-day sim this gate kept
+//     ~Rs716K of the crash-day profit while cutting between-event bleed to ~-Rs29K across 4
+//     armed days. DO NOT enable PUT alerts without this bot-side gate wired.
+//   * VALIDATION HONESTY: the harvester is validated on exactly ONE crash event (n=1 day).
+//     PUT stays PAUSED until the nightly universe snapshots accumulate >=5 bearish-healthy
+//     days and the rule holds on them (H15 gate).
+// v11: ADDS A SECOND, INDEPENDENT ENTRY PATTERN — "TREND CONTINUATION" (bearish mirror of
+//   Sniper_VWAP CE v23). PUT was NOT a full inverse of CE before this: CE has had two entry
+//   patterns since v23 (fresh-cross breakout + ADX-gated trend continuation), PUT only ever had
+//   the fresh-cross mirror. This adds the missing continuation pattern.
+//
+// CONTINUATION ENTRY fires when ALL of:
+//   1. close < vwapLower (mirrors CE's close > vwapUpper — extension beyond the band, the level
+//      pattern 1 does NOT require)
+//   2. ADX >= adxMinLevel AND ADX rising over adxRisingBars (genuinely trending, not exhausted —
+//      same trend-strength gate as CE; ADX measures strength, not direction, so reused as-is)
+//   3. RSI not recovering: rsi < rsi[rsiContinuationLookback] (mirror of CE's rsiNotRollingOver —
+//      still weak, not bouncing back up)
+//   4. MACD line below zero AND falling fast (reuses macdFallingOK from pattern 1). NOTE: this is
+//      a DELIBERATE extra gate CE's continuation does NOT have (CE continuation checks no MACD at
+//      all) — added here on request for a stricter bearish confirmation, since PUT is far less
+//      trade-tested than CE and macdFallingOK is already PUT's proven anti-chop gate (v6).
+//   5. price below previous day close (same context filter as pattern 1; no day-open check here,
+//      mirroring CE continuation which has no day-open equivalent either)
+//   6. in trade window, 1-min chart
+//   Shares the SAME entryOpen latch as the breakdown entry (one leg open at a time).
+//   enableContinuationEntry DEFAULTS TO FALSE — PUT has near-zero trade history (5 trades all
+//   week, per project memory) vs CE's validated dataset before CE's continuation went live by
+//   default. Land the code, keep it OFF until PUT has its own tested read.
+//
+// v10: SESSION START REVERTED 09:45 -> 09:30 (mirrors Sniper_VWAP CE v26). The 07-06 shift to
+//   09:45 was based on a single day's data; real momentum in 09:30-09:44 was being missed. Note:
+//   the PUT bot's own ENTRY_FILTER_MARKET_OPEN was NEVER overridden to 945 (only CE's .env was) —
+//   it's always been 930 in code — so this also fixes a Pine/bot mismatch that made PUT's Pine
+//   needlessly stricter than its own bot for several versions.
+// v9: TWO TRADING SESSIONS instead of one continuous 09:45-15:00 window: 09:30-11:00 and
+//   13:30-14:30 (window 1 start updated in v10). No entries fire outside these two windows.
+// v8: trade window starts 09:45 (was 09:30) — matches the bot's ENTRY_FILTER_MARKET_OPEN=945 gate and
+//   guarantees 30 bars of session VWAP before the first valid cross (no thin-band early fires).
+// PUT (bearish) mirror of Sniper_VWAP. ENTRY pattern 1 (breakdown) fires when ALL are true:
+//   1. close BELOW the VWAP line, and the cross-down is FRESH (within maxBarsAfterBreak bars) — v7 gate:
+//      close<vwapVal was a state true for the whole leg, so the entry could fire many bars after the
+//      real breakdown (when RSI/MACD-falling finally aligned) — deep in / bouncing off a stale cross
+//      (the BOSCH-type late/exhaustion fire). Now it only fires near the genuine cross-down.
+//   2. RSI falling 2 bars
+//   3. MACD LINE below zero AND falling FAST (2-bar drop >= macdFallMinPct of price) — momentum rolling
+//      DOWN steeply, not a bounce (v5) and not a flat drift in chop (v6)
+//   4. price below the PREVIOUS DAY CLOSE
+//   5. price below the DAY OPEN
+//   (v3's new-day-low gate was REVERTED — entering at fresh day lows caught too many exhaustion bounces.)
+//   Fires on the breakdown bar's close (freq_once_per_bar_close); re-arms once price recovers back
+//   above the VWAP line, so it fires once per below-VWAP leg (not every bar down).
+// Sends a PE (long put) entry to the PUT bot: action=SELL + original_action=BUY_PUT + option_side=PE.
+// EXIT: none from Pine — the PUT bot manages exits via TRIAL_SL / HARD_SL / its own EOD square-off.
+//   (The PUT bot has no is_exit close handler like CE, so we deliberately send no exit alert.)
+
+mult = input.float(1.0, "VWAP Band Multiplier")
+rsiLen = input.int(14, "RSI Length")
+macdFast = input.int(12, "MACD Fast")
+macdSlow = input.int(26, "MACD Slow")
+macdSignalLen = input.int(9, "MACD Signal")
+macdFallMinPct = input.float(0.02, "MACD 'falling fast' — min 2-bar line drop (% of price)", step=0.005)
+maxBarsAfterBreak = input.int(3, "Max bars after VWAP-line cross-down to still fire (freshness)", minval=1)
+showLabels = input.bool(true, "Show Labels")
+
+// ── v11 continuation entry inputs ──
+enableContinuationEntry = input.bool(true, "Enable Deep-Flush Entry (below VWAP Lower) — v12: data-derived, ON")
+adxLen = input.int(14, "ADX Length")
+adxMinLevel = input.float(20.0, "ADX Minimum Level (legacy, pattern-2 default no longer uses it)", minval=1)
+adxRisingBars = input.int(2, "ADX must be RISING for N bars", minval=1, maxval=5)
+rsiContinuationLookback = input.int(3, "RSI-not-recovering lookback bars (legacy)", minval=1)
+
+// ── v12 H15 crash-harvester gates (BOTH patterns, default ON — the tested rule) ──
+enableFlushGate = input.bool(true, "H15: Require 5-min FLUSH (hard down-thrust)")
+minFlushPct = input.float(0.4, "H15: Min 5-min DOWN move %", step=0.05)
+enableGapDownGate = input.bool(false, "H15: Require stock GAPPED DOWN at open (v13: OFF — overfit to n=1; bearish arm is the day filter)")
+minGapDownPct = input.float(0.3, "H15: Min opening gap-down % vs prev day close", step=0.05)
+enableAdxRisingGate = input.bool(true, "H15: Require ADX rising (uses 'ADX RISING for N bars' above)")
+
+// ── v12 LEGACY gates (v11 conditions that scored AT/BELOW base rate in the 20-day study) ──
+useLegacyRsiFalling = input.bool(false, "LEGACY: RSI falling 2 bars (scored below base — study H15)")
+useLegacyMacdFalling = input.bool(false, "LEGACY: MACD below zero + falling fast (scored below base)")
+useLegacyBelowPdc = input.bool(false, "LEGACY: price below prev day close (scored below base)")
+// v14 (H24): promoted from LEGACY to a tested default-ON gate, BOTH patterns — see header.
+enableBelowDayOpenGate = input.bool(true, "H24: Require price BELOW day open (above-open = 30% WR rebound bait)")
+// v17 (H30, user 2026-07-27): only fire PUT if the ENTIRE VWAP band (upper edge) is below the
+// previous day's close — i.e. the stock is DECISIVELY below yesterday's close, not just dipping
+// intraday. Blocks the rebound trap where a stock trading ~AT its PDC (band above PDC) spikes down
+// and immediately bounces (live: MFSL +0.06% on the day, band well above PDC, PUT fired at a spike-
+// low then reverted). Stricter cousin of H24 (price<open); default ON.
+enableVwapUpperBelowPdc = input.bool(true, "H30: PUT only if VWAP UPPER band < prev day close (decisively bearish stock)")
+
+isOneMin = timeframe.isminutes and timeframe.multiplier == 1
+
+//──────── SESSION VWAP + BANDS (manual, resets daily) ────────
+var float sumSrcVol = na
+var float sumVol = na
+var float sumSrcSrcVol = na
+var float dayOpen = na
+var bool entryOpen = false
+var int barsSinceBreak = 9999
+isNewDay = ta.change(time("D")) != 0
+if isNewDay
+    sumSrcVol := 0.0
+    sumVol := 0.0
+    sumSrcSrcVol := 0.0
+    dayOpen := open
+    entryOpen := false
+    barsSinceBreak := 9999
+sumSrcVol := sumSrcVol + hlc3 * volume
+sumVol := sumVol + volume
+sumSrcSrcVol := sumSrcSrcVol + hlc3 * hlc3 * volume
+
+vwapVal = sumSrcVol / sumVol
+variance = sumSrcSrcVol / sumVol - vwapVal * vwapVal
+stdevVal = math.sqrt(math.max(variance, 0))
+vwapLower = vwapVal - mult * stdevVal
+vwapUpper = vwapVal + mult * stdevVal   // v17 (H30): used by the VWAP-upper-below-PDC gate
+
+// v15 (H25): VWAP DOWN-SLOPE GATE — the bearish mirror of CE's vwapSlopeOK. On the 07-22/23
+// shadow data (140 trades), NEAR-FLAT VWAP entries were the noise: flat VWAP = 32% WR / -Rs772
+// avg (a rangebound stock's brief flush = rebound bait) vs meaningfully-falling VWAP = ~49% WR.
+// Requiring VWAP down >= 0.005%/3bars cut the 2-day bleed -Rs39.8K -> -Rs4.8K by dropping 45
+// noise trades. NOTE it is GOLDILOCKS, not "steeper=better": too steep a fall = the drop already
+// happened = buying the fade (tightening past -0.005% got worse). Threshold is fit to 2 days /
+// one regime — TUNABLE input, validate over more days. CE has no equivalent noise because its
+// momentum gates already force a rising VWAP; PUT had no such gate until now.
+minVwapDownSlopePct = input.float(0.005, "H25: Min VWAP DOWN-slope % over 3 bars (0 = any fall)", step=0.005)
+enableVwapDownGate = input.bool(true, "H25: Require VWAP falling (blocks flat/rebound noise)")
+vwapDownOK = not enableVwapDownGate or (vwapVal / vwapVal[3] - 1) * 100 <= -minVwapDownSlopePct
+
+//──────── FRESH-BREAK GATE: bars since close crossed BELOW the VWAP line ────────
+// close<vwapVal is a STATE (true for the whole below-VWAP leg), so without this the entry could fire
+// many bars after the real breakdown — when RSI/MACD-falling finally align, deep into / bouncing off
+// an old cross (the late/exhaustion fire). Track bars since the fresh crossunder; only fire within
+// maxBarsAfterBreak of it. If price recovers above the line, reset (next cross starts a new window).
+crossedDownVwap = ta.crossunder(close, vwapVal)
+if crossedDownVwap
+    barsSinceBreak := 0
+else if close < vwapVal
+    barsSinceBreak := barsSinceBreak + 1
+else
+    barsSinceBreak := 9999
+freshBreakdown = barsSinceBreak <= maxBarsAfterBreak
+
+//──────── PREV-DAY CLOSE + DAY OPEN CHECKS ────────
+prevDayClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+priceBelowPrevClose = close < prevDayClose
+priceBelowDayOpen = close < dayOpen
+
+//──────── RSI ────────
+rsi = ta.rsi(close, rsiLen)
+rsiFallingOK = ta.falling(rsi, 2)
+rsiNotRecovering = rsi < rsi[rsiContinuationLookback]
+// v16 (H27): BLOCK RSI-RISING entries — shorting a bounce is against PUT fundamentals. User saw
+// PUT fire on rebounds (KALYANKJIL RSI 16->25, KAYNES 15->20, POLYCAB 29->34: crashed at open,
+// oversold, then BOUNCING). RSI turns UP before VWAP (slow aggregate), so v15's vwapDownOK MISSES
+// these (VWAP still falling from the crash). Validated on 140 shadow trades: RSI-rising entries =
+// 34% WR / -Rs705 avg vs not-rising 46% / -Rs174; blocking removes -Rs20,442 (~half the bleed).
+// It is DIRECTION not level: RSI<30 is the BEST bucket (55% WR — real crashes still falling), so
+// this is NOT an oversold floor, only a "not rising" gate. Applies to BOTH patterns, default ON.
+enableRsiNotRisingGate = input.bool(true, "H27: Block RSI rising (rebound bait — 34% WR)")
+rsiNotRisingOK = not enableRsiNotRisingGate or rsi <= rsi[rsiContinuationLookback]
+
+//──────── MACD LINE BEARISH — below zero AND falling FAST ────────
+// v5 checked line<0 AND falling, but "falling" = any 2-bar decline, so a FLAT line drifting a hair
+// below zero in dead chop (AUROBINDO 11:00-12:30, ADX~16) still qualified. v6 adds the "fast" part:
+// the 2-bar line drop must exceed macdFallMinPct of price — a real steep roll-down, not a flat wobble.
+// (MACD is in price units, so scaling the threshold by price keeps it comparable across the universe.)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignalLen)
+macdLineDrop2 = macdLine[2] - macdLine   // >0 when the line is falling; magnitude = steepness over 2 bars
+macdFallingOK = macdLine < 0 and ta.falling(macdLine, 2) and macdLineDrop2 >= close * macdFallMinPct / 100
+
+//──────── ADX (v11 — trend strength for continuation entry) ────────
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+adxTrendingOK = adxVal >= adxMinLevel
+adxRisingOK = ta.rising(adxVal, adxRisingBars)
+
+//──────── v12 H15 CRASH-HARVESTER GATES (both patterns) ────────
+// FLUSH: hard 5-min down-thrust — beat the down-move base rate 19/20 days in the study.
+run5mPct = (close / close[5] - 1) * 100
+flushOK = not enableFlushGate or run5mPct <= -minFlushPct
+// GAP_DOWN: the stock opened weak — combined with an intraday flush this was the crash-day
+// signature (the winning rule's biggest component on 07-08).
+gapPct = (dayOpen / prevDayClose - 1) * 100
+gapDownOK = not enableGapDownGate or gapPct <= -minGapDownPct
+// ADX rising: force building behind the move (reuses adxRisingOK above).
+adxRisingGateOK = not enableAdxRisingGate or adxRisingOK
+h15GatesOK = flushOK and gapDownOK and adxRisingGateOK
+// Legacy v11 gates as toggles (default OFF — scored at/below base in the 20-day study):
+legacyOK_p1 = (not useLegacyRsiFalling or rsiFallingOK) and (not useLegacyMacdFalling or macdFallingOK) and (not useLegacyBelowPdc or priceBelowPrevClose)
+legacyOK_p2 = (not useLegacyRsiFalling or rsiNotRecovering) and (not useLegacyMacdFalling or macdFallingOK) and (not useLegacyBelowPdc or priceBelowPrevClose)
+// v14 H24: below-day-open, shared by BOTH patterns (was legacy/off/pattern-1-only in v13)
+belowOpenOK = not enableBelowDayOpenGate or priceBelowDayOpen
+// v17 H30: whole VWAP band below prev-day close = decisively bearish stock (not a mid-range dip)
+vwapUpperBelowPdcOK = not enableVwapUpperBelowPdc or vwapUpper < prevDayClose
+
+//──────── SESSION WINDOW (v12: CONTINUOUS 09:30-14:30) ────────
+// The 07-08 crash flushes fired 11:46-13:57 — the old two-window design would have missed most
+// of them. A crash harvester must stay armed through midday. (The bot-side NIFTY bearish-session
+// arm is what keeps normal-day midday chop out, not the clock.)
+hourIST = hour(time, "Asia/Kolkata")
+minuteIST = minute(time, "Asia/Kolkata")
+minutesSinceMidnight = hourIST * 60 + minuteIST
+inTradeWindow = minutesSinceMidnight >= 570 and minutesSinceMidnight <= 870   // 09:30-14:30
+
+//──────── ENTRY PATTERN 1: FRESH VWAP-LINE BREAKDOWN + H15 gates (v12) ────────
+conditionMet_Breakdown = close < vwapVal and freshBreakdown and h15GatesOK and belowOpenOK and vwapUpperBelowPdcOK and vwapDownOK and rsiNotRisingOK and legacyOK_p1 and inTradeWindow and isOneMin
+entrySignal_Breakdown = conditionMet_Breakdown and not entryOpen
+
+//──────── ENTRY PATTERN 2: DEEP FLUSH BELOW VWAP LOWER + H15 gates (v12 rewire; ON) ────────
+// v11's extra gates (ADX>=20, RSI-not-recovering, MACD-falling) are now legacy toggles — the
+// tested rule was geometry + H15 gates only.
+conditionMet_Continuation = enableContinuationEntry and close < vwapLower and h15GatesOK and belowOpenOK and vwapUpperBelowPdcOK and vwapDownOK and rsiNotRisingOK and legacyOK_p2 and inTradeWindow and isOneMin
+// v14: defer to breakdown on same-bar collision (one alert per bar; was double-firing, e.g. IRCTC)
+entrySignal_Continuation = conditionMet_Continuation and not entryOpen and not entrySignal_Breakdown
+
+//──────── COMBINED ENTRY (either pattern can fire, shared latch) ────────
+entrySignal = entrySignal_Breakdown or entrySignal_Continuation
+
+// Fire once per below-VWAP leg: latch on entry, re-arm when price recovers back above the VWAP line.
+if entrySignal
+    entryOpen := true
+if entryOpen and close > vwapVal
+    entryOpen := false
+
+//──────── ALERT JSON (PUT bot: action=SELL + original_action=BUY_PUT + option_side=PE) ────────
+format_value(x) => str.tostring(x, format.mintick)
+format_ind(x) => str.tostring(x, "#.####")
+// confidence + score = 90 REQUIRED: PUT bot hard-rejects at OPTIONS_MIN_CONFIDENCE / MIN_SIGNAL_QUALITY = 90.
+jsonMsg_Entry_Breakdown = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"confidence\":\"90\",\"score\":\"90\",\"entry_type\":\"VWAP_BREAKDOWN\",\"price\":\"" + format_value(close) + "\",\"vwap_value\":\"" + format_value(vwapVal) + "\",\"rsi_value\":\"" + format_value(rsi) + "\",\"macd_hist\":\"" + format_value(macdHist) + "\",\"prev_day_close\":\"" + format_value(prevDayClose) + "\",\"day_open\":\"" + format_value(dayOpen) + "\",\"adx_value\":\"" + format_ind(adxVal) + "\",\"run_5m\":\"" + format_ind(run5mPct) + "\",\"gap_pct\":\"" + format_ind(gapPct) + "\",\"tv_setup_label\":\"VWAP_BREAKDOWN\"}"
+jsonMsg_Entry_Continuation = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"original_action\":\"BUY_PUT\",\"option_side\":\"PE\",\"confidence\":\"90\",\"score\":\"90\",\"entry_type\":\"TREND_CONTINUATION\",\"price\":\"" + format_value(close) + "\",\"vwap_value\":\"" + format_value(vwapVal) + "\",\"vwap_lower\":\"" + format_value(vwapLower) + "\",\"rsi_value\":\"" + format_ind(rsi) + "\",\"adx_value\":\"" + format_ind(adxVal) + "\",\"macd_line\":\"" + format_ind(macdLine) + "\",\"macd_signal\":\"" + format_ind(macdSignal) + "\",\"macd_hist\":\"" + format_ind(macdHist) + "\",\"prev_day_close\":\"" + format_value(prevDayClose) + "\",\"run_5m\":\"" + format_ind(run5mPct) + "\",\"gap_pct\":\"" + format_ind(gapPct) + "\",\"tv_setup_label\":\"TREND_CONTINUATION\"}"
+
+alertcondition(entrySignal_Breakdown, title="VWAP Breakdown PUT Entry", message="VWAP_BREAKDOWN_ENTRY")
+alertcondition(entrySignal_Continuation, title="Trend Continuation PUT Entry", message="TREND_CONTINUATION_ENTRY")
+if entrySignal_Breakdown
+    alert(jsonMsg_Entry_Breakdown, alert.freq_once_per_bar_close)
+if entrySignal_Continuation
+    alert(jsonMsg_Entry_Continuation, alert.freq_once_per_bar_close)
+
+//──────── LABELS ────────
+if showLabels and entrySignal_Breakdown
+    label.new(bar_index, high, "ENTRY-B\nPUT", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
+if showLabels and entrySignal_Continuation
+    label.new(bar_index, high, "ENTRY-C\nPUT", style=label.style_label_down, color=color.orange, textcolor=color.black, size=size.small)
+plotshape(showLabels and entrySignal_Breakdown, title="ENTRY-Breakdown marker", location=location.abovebar, style=shape.labeldown, text="B", color=color.red, textcolor=color.white, size=size.small)
+plotshape(showLabels and entrySignal_Continuation, title="ENTRY-Continuation marker", location=location.abovebar, style=shape.labeldown, text="C", color=color.orange, textcolor=color.black, size=size.small)
+
+//──────── PLOTS ────────
+plot(vwapVal, color=color.blue, title="VWAP")
+plot(vwapLower, color=color.red, title="VWAP Lower")
+plot(adxVal, color=color.orange, title="ADX", display=display.data_window)
+bgcolor(not isOneMin ? color.new(color.red, 88) : na, title="Use 1-Minute Chart")

@@ -87,6 +87,7 @@ ADDITIVE = [
     "ongoing_trades", "closed_trades",
     "winning_trades", "losing_trades",
     "total_pnl", "unrealized_pnl", "realized_pnl",
+    "gross_realized_pnl", "charges",
 ]
 
 
@@ -126,6 +127,8 @@ def _build_summary(bot_data: dict) -> dict:
     total_realized = (combined_index.get("realized_pnl")    or 0) + (combined_non_index.get("realized_pnl")    or 0)
     total_unrealzd = (combined_index.get("unrealized_pnl")  or 0) + (combined_non_index.get("unrealized_pnl")  or 0)
     total_trades   = (combined_index.get("trades_today")    or 0) + (combined_non_index.get("trades_today")    or 0)
+    total_gross    = (combined_index.get("gross_realized_pnl") or 0) + (combined_non_index.get("gross_realized_pnl") or 0)
+    total_charges  = (combined_index.get("charges")         or 0) + (combined_non_index.get("charges")         or 0)
 
     return {
         "aggregated_at": datetime.now().isoformat(),
@@ -136,6 +139,8 @@ def _build_summary(bot_data: dict) -> dict:
             "total_trades_today": total_trades,
             "total_unrealized_pnl": round(total_unrealzd, 2),
             "total_realized_pnl": round(total_realized, 2),
+            "total_gross_realized_pnl": round(total_gross, 2),
+            "total_charges": round(total_charges, 2),
             "total_pnl": round(total_realized + total_unrealzd, 2),
         },
         "index_combined": combined_index,

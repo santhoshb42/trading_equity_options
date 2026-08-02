@@ -417,13 +417,23 @@ class OptionPosition:
                 'iv': self.current_iv
             }
         
-        # Calculate realized P&L
+        # Calculate realized P&L (GROSS — before brokerage/STT/exchange/GST charges)
         premium_difference = exit_premium - self.entry_premium
         if self.action == "BUY":
-            self.realized_pnl = premium_difference * self.quantity
+            gross_pnl = premium_difference * self.quantity
         else:  # SELL
-            self.realized_pnl = -premium_difference * self.quantity
-        
+            gross_pnl = -premium_difference * self.quantity
+
+        # NET P&L: subtract real round-trip charges (brokerage/exchange/STT/stamp/SEBI/GST) so
+        # 'pnl' everywhere downstream (live_data.json, CSV, aggregator) is charges-adjusted —
+        # this is the single point every trade's final PnL flows through.
+        charges_breakdown = OptionsCapitalConfig.calculate_round_trip_charges(
+            self.entry_premium, exit_premium, self.quantity
+        )
+        self.gross_pnl = gross_pnl
+        self.charges = charges_breakdown['total_charges']
+        self.realized_pnl = gross_pnl - self.charges
+
         return {
             'symbol': self.symbol,
             'underlying': self.underlying,
@@ -433,7 +443,10 @@ class OptionPosition:
             'exit_premium_total': exit_premium * self.quantity,
             'quantity': self.quantity,
             'pnl': self.realized_pnl,
-            'pnl_percent': (premium_difference / self.entry_premium * 100) if self.entry_premium else 0,
+            'gross_pnl': gross_pnl,
+            'charges': self.charges,
+            'charges_breakdown': charges_breakdown,
+            'pnl_percent': (((-premium_difference) if self.action == "SELL" else premium_difference) / self.entry_premium * 100) if self.entry_premium else 0,
             'duration': (self.exit_time - self.entry_time).total_seconds(),
             'exit_reason': exit_reason,
             'underlying_alert_price': self.underlying_alert_price,
@@ -1000,6 +1013,24 @@ class OptionPositionMonitor:
 
         return activation_threshold, trailing_gap, profile
 
+    def _progressive_trailing_gap(self, peak_gain_percent: float) -> float:
+        """Trailing gap that WIDENS with peak gain (regime-change fat-tail capture).
+
+        A constant tight gap clips the rare big runners that carry the P&L; widening the gap as the
+        trade proves itself locks a rising FRACTION of the peak (give-back shrinks in %, absolute
+        room grows), so runners are given room to breathe. Tiers env-tunable via OPTIONS_TRIAL_GAP_*.
+            peak +5..+12% -> 4%   |   +25..+60% -> 9%
+            peak +12..+25% -> 6%  |   +60%+     -> 12%
+        """
+        C = OptionsTradingConfig
+        if peak_gain_percent < C.TRIAL_GAP_T1_PEAK:
+            return C.TRIAL_GAP_T0
+        if peak_gain_percent < C.TRIAL_GAP_T2_PEAK:
+            return C.TRIAL_GAP_T1
+        if peak_gain_percent < C.TRIAL_GAP_T3_PEAK:
+            return C.TRIAL_GAP_T2
+        return C.TRIAL_GAP_T3
+
     def _apply_profit_floor(self, symbol: str, position: 'OptionPosition') -> bool:
         """Breakeven profit-floor: once a trade has been green >= TRIGGER%, raise the hard SL to
         the LOCK% floor and shield it from stale/dead exits that would book a sub-floor loss.
@@ -1149,16 +1180,24 @@ class OptionPositionMonitor:
             with self._positions_lock:
                 self.positions[symbol] = position
             
-            # 🔧 INITIALIZE HARD SL: use configured SL% from entry premium
+            # 🔧 INITIALIZE HARD SL: use configured SL% from entry premium.
+            # H16c: index underlyings get wider stops (leverage 2-5x stocks) — see optconfig.
+            _idx_profile = OptionsTradingConfig.index_exit_profile(position.underlying)
+            _sl_pct = _idx_profile['hard_sl_pct'] if _idx_profile else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
             position.hard_sl_price = self._round_to_10_paise(
-                position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
+                position.entry_premium * (1 - _sl_pct / 100)
             )
-            
+
             # 🔧 PRE-CALCULATE TRIAL_SL THRESHOLD based on current market conditions
             # Use the detector's cached Nifty data (updated every 4s by monitoring loop) —
             # avoid a fresh rate-limited API call here which delays SL placement.
             market_detector = get_market_condition_detector()
             expected_threshold, market_reason = market_detector.get_trial_sl_threshold()
+            if _idx_profile:
+                # H16c: index trail arms much higher — noise at index leverage reaches the stock
+                # arm level constantly; 12% arm was the consistent winner across the index grid.
+                expected_threshold = _idx_profile['trial_activation']
+                market_reason = f"INDEX_PROFILE ({position.underlying})"
             position.trial_sl_expected_threshold = expected_threshold
             logger.info(f"POSITION_ADD: TRIAL_SL_THRESHOLD_SET | {symbol} | Threshold={expected_threshold:.0f}% | Market={market_reason}")
             
@@ -1549,7 +1588,7 @@ class OptionPositionMonitor:
                     try:
                         exit_order_id = self.broker.place_options_order(
                             symbol=symbol,
-                            action='SELL',
+                            action=('BUY' if position.action == 'SELL' else 'SELL'),  # SELL_THETA: cover a short with BUY
                             quantity=position.quantity,
                             price=exit_premium,  # Market order at current LTP
                             order_type='MARKET',
@@ -1658,6 +1697,19 @@ class OptionPositionMonitor:
             live_greeks = self._capture_live_greeks(position)
             if live_greeks:
                 exit_greeks = live_greeks
+
+            # 2026-07-24: refresh the underlying's spot ONCE at exit so underlying_exit_price /
+            # underlying_move_pct in the trade record are real. The per-cycle update lived in
+            # refresh_position_greeks() which is never wired into the loop, so current_underlying_
+            # price stayed frozen at the alert price -> every record showed 0.0% move (made the
+            # UNITDSPR-type real gains look phantom). Post-SELL + best-effort = never delays exit.
+            try:
+                if position.underlying:
+                    _u = (self.broker.get_ltp_bulk([position.underlying], exchange="NSE") or {}).get(position.underlying)
+                    if _u:
+                        position.current_underlying_price = _u
+            except Exception:
+                pass  # telemetry only — never block the exit
 
             pnl_info = position.close_position(exit_premium, exit_reason, exit_greeks=exit_greeks)  # ADDED: Pass exit Greeks
             if exit_slippage_meta is not None and isinstance(pnl_info, dict):
@@ -1787,6 +1839,7 @@ class OptionPositionMonitor:
                     trailing_gap=trailing_gap,
                     market_trend=position.market_trend,
                     trend_strength=position.trend_strength,
+                    peak_premium=position.highest_premium,
                 )
                 live_tracker.save()
             except Exception as e:
@@ -1933,10 +1986,12 @@ class OptionPositionMonitor:
             'spread_pct': round(float(spread_pct), 3) if spread_pct is not None else None,
             'spread_is_synthetic': synthetic,
         })
-        if OptionsTradingConfig.PAPER_SLIPPAGE_MODELING and bid > 0 and not synthetic:
-            meta['fill'] = round(bid, 2)
+        if OptionsTradingConfig.PAPER_SLIPPAGE_MODELING and bid > 0 and ask > 0 and not synthetic:
+            # SELL_THETA: LONG exit SELLS at bid; SHORT cover BUYS at ask.
+            _fill = ask if getattr(position, 'action', 'BUY') == 'SELL' else bid
+            meta['fill'] = round(_fill, 2)
             meta['slippage_pct'] = (
-                round((bid - intended_exit) / intended_exit * 100, 3) if intended_exit > 0 else 0.0
+                round((_fill - intended_exit) / intended_exit * 100, 3) if intended_exit > 0 else 0.0
             )
             meta['applied'] = True
         else:
@@ -2013,10 +2068,13 @@ class OptionPositionMonitor:
             return True
         
         # Calculate SL from entry premium using configured SL% with 10 paise rounding
-        sl_premium_raw = position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
+        # (H16c: index underlyings use the wider index profile)
+        _idx_profile = OptionsTradingConfig.index_exit_profile(position.underlying)
+        _sl_pct = _idx_profile['hard_sl_pct'] if _idx_profile else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
+        sl_premium_raw = position.entry_premium * (1 - _sl_pct / 100)
         sl_premium = self._round_to_10_paise(sl_premium_raw)
-        
-        logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-{OptionsTradingConfig.STOP_LOSS_PERCENTAGE:.0f}%)")
+
+        logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-{_sl_pct:.0f}%)")
         
         try:
             # Place SELL order with STOPLOSS_MARKET so AngelOne executes the exit as soon as
@@ -2304,8 +2362,10 @@ class OptionPositionMonitor:
             stats['attempted'] += 1
             position.sl_retry_count += 1
             # BUG FIX #7: Use entry_premium (not entry_price) — consistent with place_stop_loss_order()
+            _ip = OptionsTradingConfig.index_exit_profile(position.underlying)
+            _slp = _ip['hard_sl_pct'] if _ip else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
             current_sl_price = self._round_to_10_paise(
-                position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100))
+                position.entry_premium * (1 - _slp / 100))
             
             logger.warning(f"RETRY_SL: Attempting SL placement (retry #{position.sl_retry_count}/{max_sl_retries}) | {symbol} | sl_price=₹{current_sl_price:.2f}")
             
@@ -2381,6 +2441,8 @@ class OptionPositionMonitor:
         return closed
     
     def check_profit_targets(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         """Close positions with intelligent trailing exit strategy
         
         TRIAL MODE: NO profit targets - let winners run!
@@ -2463,7 +2525,50 @@ class OptionPositionMonitor:
         
         return closed
     
+    def _hard_sl_breach_persisted(self, position, sl_price: float) -> bool:
+        """Phantom-tick guard for the HARD_SL (2026-07-24). A lone stale/bad LTP print can sit far
+        below the real sellable bid on wide-spread cheap options and fire an instant HARD_SL seconds
+        after entry (JSWENERGY on PUT: LTP 5.25 vs bid 6.20, +6.9% positive exit slippage). Require
+        the breach to PERSIST >= confirm seconds before firing. Shared by both HARD_SL paths
+        (check_trailing_stop_losses + check_hard_stop_loss) via a per-position timestamp, so calling
+        it from both in one cycle is idempotent. Resets on recovery; never fires on a missing tick.
+        """
+        confirm_s = float(os.getenv("OPTIONS_HARD_SL_CONFIRM_SECONDS", "4"))
+        prem = position.current_premium
+        if prem is None:
+            return False
+        if prem > sl_price:
+            position.hard_sl_first_breach_at = None
+            return False
+        first = getattr(position, 'hard_sl_first_breach_at', None)
+        now = datetime.now()
+        if first is None:
+            position.hard_sl_first_breach_at = now
+            logger.info(f"HARD_SL_UNCONFIRMED: {getattr(position,'symbol','?')} | premium ₹{prem:.2f} "
+                        f"<= SL ₹{sl_price:.2f} | starting {confirm_s:.0f}s persistence guard (phantom-tick)")
+            return False
+        return (now - first).total_seconds() >= confirm_s
+
+    def _nifty_md_cached(self, ttl: float = 5.0):
+        """NIFTY market-data, cached ~5s across positions/cycles. RATE-LIMIT FIX (2026-07-24):
+        the TRIAL_SL + STALE checks were calling get_market_data('NIFTY') PER-POSITION PER-CYCLE
+        (~1,457 calls/bot/day — the single largest rate-limit source), yet NIFTY is identical for
+        every position in a cycle. One shared fetch per TTL window instead."""
+        import time as _t
+        c = getattr(self, "_nifty_md_cache", None)
+        now = _t.time()
+        if c and (now - c[0]) < ttl:
+            return c[1]
+        try:
+            md = self.broker.get_market_data("NIFTY", exchange="NSE")
+        except Exception:
+            md = c[1] if c else None   # reuse last good value on a transient failure
+        self._nifty_md_cache = (now, md)
+        return md
+
     def check_trailing_stop_losses(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         """
         TRIAL SL Implementation:
         
@@ -2512,7 +2617,7 @@ class OptionPositionMonitor:
             nifty_open = None
             try:
                 # Try to get Nifty full market data from broker for market condition analysis
-                nifty_market_data = self.broker.get_market_data("NIFTY", exchange="NSE")
+                nifty_market_data = self._nifty_md_cached()
                 if nifty_market_data:
                     nifty_ltp = nifty_market_data.get('ltp')
                     nifty_open = nifty_market_data.get('open')
@@ -2610,23 +2715,19 @@ class OptionPositionMonitor:
             # PHASE 3: Update TRIAL SL as price moves up (TRAILING FROM PEAK)
             # ============================================================
             if is_trial_sl_enabled:
-                # 🎯 TRAILING FROM PEAK: SL = max(activation_threshold, peak - TRAILING_GAP)
+                # 🎯 PROGRESSIVE TRAILING FROM PEAK: SL = max(activation_floor, peak - GAP(peak))
                 #
-                # WHY: Staircase (int(peak/5)*5) had a 5%-wide dead zone — any peak between
-                # 5.0% and 9.9% locked at 5%, leaving 4.9% on the table.  Smaller steps (2%)
-                # solve the capture problem but create a noise problem: SL sits only 0-1%
-                # below current price, firing on normal options bid-ask wiggle.
-                #
-                # TRAILING GAP = 2%: tighter lock than 3%, while still leaving enough
-                # room for normal options noise after activation.
-                #   Peak  5% → SL = max(5%, 2%)  = 5%   (activation floor holds)
-                #   Peak  8% → SL = max(5%, 5%)  = 5%   (no change, floor holds)
-                #   Peak  9% → SL = max(5%, 6%)  = 6%   ← better than old 5%
-                #   Peak 12% → SL = max(5%, 9%)  = 9%   ← better than old 10% (stay in longer)
-                #   Peak 15% → SL = max(5%, 12%) = 12%  ← better than old 10%
-                #   Peak 29% → SL = max(5%, 26%) = 26%  ← better than old 25%
-                #
-                # The 2% gap keeps more profit than 3% while still avoiding 0-1% noise exits.
+                # The gap now WIDENS as the trade proves itself (see _progressive_trailing_gap),
+                # replacing the old fixed 2% gap. Regime-change trades are fat-tailed — the money is
+                # in the rare +30-280% runners, and a constant tight gap clipped them. Widening the
+                # gap with peak locks a rising FRACTION of the peak (give-back shrinks in %, absolute
+                # room grows), so runners breathe while modest winners still lock near the arm floor.
+                #   Peak  8% → gap 4% → SL max(5%, 4%)   = 5%   (arm floor holds)
+                #   Peak 12% → gap 6% → SL max(5%, 6%)   = 6%
+                #   Peak 25% → gap 9% → SL max(5%, 16%)  = 16%
+                #   Peak 60% → gap 12%→ SL max(5%, 48%)  = 48%
+                #   Peak 100%→ gap 12%→ SL max(5%, 88%)  = 88%  ← runner protected, not capped
+                trailing_gap = self._progressive_trailing_gap(peak_gain_percent)
                 trailing_sl_pct = max(buffered_activation_pct, peak_gain_percent - trailing_gap)
                 desired_trial_sl = position.entry_premium * (1 + trailing_sl_pct / 100)
                 new_trial_sl = min(desired_trial_sl, safe_trigger_ceiling)
@@ -2714,6 +2815,11 @@ class OptionPositionMonitor:
                 else:
                     sl_type = "HARD_SL"
 
+                # PHANTOM-TICK GUARD (2026-07-24): the HARD_SL needs the breach to PERSIST so a lone
+                # stale/bad LTP can't fire an instant stop. TRIAL_SL / BREAKEVEN fire immediately.
+                if sl_type == "HARD_SL" and not self._hard_sl_breach_persisted(position, effective_sl):
+                    continue
+
                 logger.warning(f"SL_HIT: {symbol} | Type: {sl_type} | SL: ₹{effective_sl:.2f} | "
                              f"Current: ₹{position.current_premium:.2f} | Peak: ₹{position.highest_premium:.2f}")
                 
@@ -2751,6 +2857,8 @@ class OptionPositionMonitor:
         return closed
     
     def check_hard_stop_loss(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         """
         🛑 ULTIMATE SAFETY NET: Hard stop loss at -10% from entry
         
@@ -2774,21 +2882,57 @@ class OptionPositionMonitor:
             
             if not position.hard_sl_price:
                 logger.warning(f"HARD_SL_CHECK: {symbol} | No hard SL price set, recalculating from config")
+                _ip = OptionsTradingConfig.index_exit_profile(position.underlying)
+                _slp = _ip['hard_sl_pct'] if _ip else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
                 position.hard_sl_price = self._round_to_10_paise(
-                    position.entry_premium * (1 - OptionsTradingConfig.STOP_LOSS_PERCENTAGE / 100)
+                    position.entry_premium * (1 - _slp / 100)
                 )
             
+            # H13.2 EARLY-LOSER CUT: tighter stop during the position's first N minutes.
+            # Runs BEFORE the -10% check so a fast-failing entry exits at -6% instead of
+            # riding to a full HARD_SL. Never fires once TRIAL_SL is armed (winner-shaped).
+            _ip = OptionsTradingConfig.index_exit_profile(position.underlying)
+            _ec_enabled = _ip['early_cut_enabled'] if _ip else OptionsTradingConfig.EARLY_LOSER_CUT_ENABLED
+            _ec_pct = _ip['early_cut_pct'] if _ip else OptionsTradingConfig.EARLY_LOSER_CUT_PCT
+            if (_ec_enabled
+                    and not position.trial_sl_enabled
+                    and isinstance(position.entry_time, datetime)
+                    and (datetime.now() - position.entry_time).total_seconds()
+                        <= OptionsTradingConfig.EARLY_LOSER_CUT_MINUTES * 60):
+                early_cut_price = position.entry_premium * (1 - _ec_pct / 100)
+                if position.current_premium <= early_cut_price:
+                    loss_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
+                    age_min = (datetime.now() - position.entry_time).total_seconds() / 60
+                    logger.warning(f"EARLY_LOSER_CUT: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
+                                   f"Current: ₹{position.current_premium:.2f} | Loss: {loss_percent:.1f}% | "
+                                   f"age={age_min:.1f}min <= {OptionsTradingConfig.EARLY_LOSER_CUT_MINUTES:.0f}min | "
+                                   f"cut@-{_ec_pct:.0f}%")
+                    pnl = self._reconcile_broker_stop_exit(
+                        symbol,
+                        position.current_premium,
+                        f"EARLY_LOSER_CUT (-{_ec_pct:.0f}% within "
+                        f"{OptionsTradingConfig.EARLY_LOSER_CUT_MINUTES:.0f}min of entry)"
+                    )
+                    if pnl:
+                        closed.append(pnl)
+                        logger.warning(f"EARLY_LOSER_CUT_EXECUTED: {symbol} | PnL: ₹{pnl.get('pnl', 0):.2f}")
+                    continue
+
             # Check if current premium has hit hard SL
             if position.current_premium <= position.hard_sl_price:
                 # HARD SL BREACHED - EXIT IMMEDIATELY
                 loss_percent = ((position.current_premium - position.entry_premium) / position.entry_premium) * 100
-                
+
                 logger.error(f"HARD_SL_BREACHED: {symbol} | Entry: ₹{position.entry_premium:.2f} | "
                            f"SL: ₹{position.hard_sl_price:.2f} | Current: ₹{position.current_premium:.2f} | "
                            f"Loss: {loss_percent:.1f}%")
                 
                 # Distinguish a true -10% hard stop from a breakeven-floor give-back.
-                _sl_label = "BREAKEVEN_FLOOR_HIT" if getattr(position, 'breakeven_floor_active', False) else "HARD_SL_HIT"
+                _is_breakeven = getattr(position, 'breakeven_floor_active', False)
+                _sl_label = "BREAKEVEN_FLOOR_HIT" if _is_breakeven else "HARD_SL_HIT"
+                # PHANTOM-TICK GUARD: a true HARD_SL must persist; breakeven give-backs fire now.
+                if not _is_breakeven and not self._hard_sl_breach_persisted(position, position.hard_sl_price):
+                    continue
                 pnl = self._reconcile_broker_stop_exit(
                     symbol,
                     position.hard_sl_price,
@@ -2837,7 +2981,8 @@ class OptionPositionMonitor:
             'lower_wick_pct_of_range': (lower_wick / candle_range * 100.0) if candle_range > 0 else 0.0,
         }
 
-    def _get_recent_underlying_candles(self, underlying: str, *, interval: str, count: int) -> List[Dict[str, Any]]:
+    def _get_recent_underlying_candles(self, underlying: str, *, interval: str, count: int,
+                                       force_refresh: bool = False) -> List[Dict[str, Any]]:
         if not underlying or not hasattr(self.broker, 'get_historical_data'):
             return []
 
@@ -2846,6 +2991,7 @@ class OptionPositionMonitor:
                 underlying,
                 interval=interval,
                 days_back=1,
+                force_refresh=force_refresh,
             )
         except Exception as e:
             logger.debug(f"CANDLE_MACD_FADE: CANDLE_FETCH_FAILED | {underlying} | interval={interval} | {str(e)}")
@@ -3210,7 +3356,95 @@ class OptionPositionMonitor:
 
         return score, required_score, reasons
 
+    @staticmethod
+    def _wilder_rsi(closes: List[float], period: int) -> List[Optional[float]]:
+        n = len(closes)
+        out: List[Optional[float]] = [None] * n
+        if n < period + 1:
+            return out
+        gain = loss = 0.0
+        for i in range(1, period + 1):
+            d = closes[i] - closes[i - 1]
+            gain += max(d, 0.0)
+            loss += max(-d, 0.0)
+        ag = gain / period
+        al = loss / period
+        out[period] = 100.0 - 100.0 / (1.0 + (ag / al if al else 1e9))
+        for i in range(period + 1, n):
+            d = closes[i] - closes[i - 1]
+            ag = (ag * (period - 1) + max(d, 0.0)) / period
+            al = (al * (period - 1) + max(-d, 0.0)) / period
+            out[i] = 100.0 - 100.0 / (1.0 + (ag / al if al else 1e9))
+        return out
+
+    def _h19_underlying_rsi(self, underlying: str, period: int, need: int) -> List[Optional[float]]:
+        """1-min underlying RSI series, cached per-underlying and recomputed only when a new
+        closed bar appears (bounds broker fetches to ~1/min/underlying, shared across positions)."""
+        cache = getattr(self, "_h19_rsi_cache", None)
+        if cache is None:
+            cache = self._h19_rsi_cache = {}
+        now_min = datetime.now().strftime("%Y-%m-%dT%H:%M")
+        hit = cache.get(underlying)
+        if hit and hit[0] == now_min:
+            return hit[1]
+        # force_refresh: the shared candle cache has a 300s TTL — without bypassing it H19
+        # evaluates "RSI falling 3 bars" on up-to-5-min-stale data and effectively never fires
+        # (AUDIT 2026-07-23: 0 fires in 3 days). Bounded cost: the per-minute cache above caps
+        # this at ~1 forced fetch per underlying per minute, un-armed positions only.
+        candles = self._get_recent_underlying_candles(underlying, interval="ONE_MINUTE",
+                                                      count=period + need + 6, force_refresh=True)
+        closes = [float(c.get("close") or 0.0) for c in candles if c.get("close")]
+        # drop the still-forming current-minute bar so the 3-bar check is on CLOSED bars only
+        if candles and str(candles[-1].get("timestamp") or "")[11:16] == now_min[11:16]:
+            closes = closes[:-1]
+        rsi = self._wilder_rsi(closes, period) if len(closes) >= period + 1 else []
+        cache[underlying] = (now_min, rsi)
+        return rsi
+
+    def check_h19_rsi_exit(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
+        """H19: exit when the underlying's 1-min RSI falls FALL_BARS consecutive closed bars.
+        Replaces EARLY_LOSER_CUT + PROFIT_FLOOR. TRIAL_SL/HARD_SL/STALE remain. PAPER study flag."""
+        from optcode.optconfig import SentimentConfig
+
+        closed: List[Dict[str, Any]] = []
+        if not SentimentConfig.ENABLE_H19_RSI_EXIT:
+            return closed
+
+        period = SentimentConfig.H19_RSI_PERIOD
+        fall = SentimentConfig.H19_RSI_FALL_BARS
+        positions = self._snapshot_positions_items()
+        for symbol, position in positions:
+            # let winners run on the trail; H19 replaces the LOSS-side cutters
+            if getattr(position, "trial_sl_enabled", False):
+                continue
+            if (datetime.now() - position.entry_time).total_seconds() < SentimentConfig.H19_MIN_SECONDS:
+                continue
+            underlying = getattr(position, "underlying", None)
+            if not underlying:
+                continue
+            rsi = self._h19_underlying_rsi(underlying, period, fall)
+            vals = [r for r in rsi if r is not None]
+            if len(vals) < fall + 1:
+                continue
+            window = vals[-(fall + 1):]
+            if all(window[i] < window[i - 1] for i in range(1, len(window))):
+                pnl = self.close_position(
+                    symbol, position.current_premium,
+                    f"H19_RSI_EXIT (RSI fell {fall} bars: {window[0]:.1f}->{window[-1]:.1f})"
+                )
+                if pnl:
+                    closed.append(pnl)
+                    logger.warning(
+                        f"H19_RSI_EXIT: {symbol} | underlying={underlying} | "
+                        f"RSI {'>'.join(f'{v:.1f}' for v in window)} | pnl=₹{pnl['pnl']:.2f}"
+                    )
+        return closed
+
     def check_candle_macd_fade_exit(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         from optcode.optconfig import SentimentConfig
 
         closed: List[Dict[str, Any]] = []
@@ -3260,6 +3494,8 @@ class OptionPositionMonitor:
         return closed
     
     def check_momentum_reversal(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         """
         ⭐ TIER 1 EARLY EXIT: Detect momentum reversal and exit early
         
@@ -3345,6 +3581,8 @@ class OptionPositionMonitor:
         return closed
     
     def check_stale_consolidation_exits(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         """
         ⭐ NEW EXIT: Exit STALE CONSOLIDATIONS < 10% gain (before momentum reversal)
         
@@ -3367,7 +3605,12 @@ class OptionPositionMonitor:
             List of closed position stats
         """
         closed = []
-        
+
+        # Disabled → rely purely on TRIAL_SL / HARD_SL (no time-based stale cut).
+        from optcode.optconfig import SentimentConfig
+        if not SentimentConfig.ENABLE_STALE_CONSOLIDATION_EXIT:
+            return closed
+
         # Get dynamic threshold based on market conditions
         market_detector = get_market_condition_detector()
         
@@ -3377,7 +3620,7 @@ class OptionPositionMonitor:
         nifty_open = None
         try:
             # Try to get Nifty full market data from broker for market condition analysis
-            nifty_market_data = self.broker.get_market_data("NIFTY", exchange="NSE")
+            nifty_market_data = self._nifty_md_cached()
             if nifty_market_data:
                 nifty_ltp = nifty_market_data.get('ltp')
                 nifty_open = nifty_market_data.get('open')
@@ -3395,8 +3638,13 @@ class OptionPositionMonitor:
             current_time=datetime.now()
         )
         
-        # Threshold from data analysis
-        stale_hold_time_min = 10  # 10 minutes: if TRIAL_SL not activated by 10min, trade is dead
+        # Threshold from data analysis. 2026-07-24: made env-driven and cut 10 -> 5 min.
+        # STALE (premium-peak based) is the ONLY exit that catches our dominant loser type:
+        # options bleeding to -16% via theta/IV/spread decay while the UNDERLYING is flat
+        # (+/-0.3%). H19 watches the underlying's RSI so it's blind to these (it fired 2/8);
+        # HARD_SL 18% is too wide (they stop ~-16% and sit). Cutting at 5 min instead of 10
+        # would have saved ~Rs7.5K on 07-24's 9 STALE trades (most were less-negative at 5min).
+        stale_hold_time_min = float(os.getenv("OPTIONS_STALE_CONSOLIDATION_MINUTES", "10"))
         
         positions = self._snapshot_positions_items()
         logger.info(f"STALE_CONSOLIDATION_CHECK: Starting | positions={len(positions)} | "
@@ -3447,86 +3695,33 @@ class OptionPositionMonitor:
             # Reality: Price can reach threshold, consolidate, and never activate trial_sl
             # Solution: Exit after 15 mins if trial_sl not activated (PERIOD)
             
-            # RULE 1 — PER-MINUTE CHECK at marks 5,6,7,8,9:
-            # Sample PnL ONCE per whole minute between 5-9 min. If current PnL < 3% at that snapshot,
-            # exit. Avoids killing momentary dips (2.9% that recovers to 4% within seconds).
-            # TRIAL_SL activation (option running strongly) overrides this entirely.
-            minute_mark = int(hold_time_min)
-            last_checked_min = getattr(position, '_slide_check_min', 0)
-            if (5 <= minute_mark <= 9 and
-                    minute_mark > last_checked_min and
-                    not position.trial_sl_enabled and
-                    current_pnl_pct < 0.03):
-                position._slide_check_min = minute_mark
-                logger.warning(
-                    f"DEAD_TRADE_5MIN: {symbol} | Hold: {hold_time_min:.1f}min (min={minute_mark}) | "
-                    f"Current: {current_pnl_pct*100:.2f}% (<3% at {minute_mark}min mark) | "
-                    f"Peak: +{peak_profit_pct*100:.2f}% | Exiting"
-                )
-                log_event(
-                    'DEAD_TRADE_5MIN',
-                    f"Per-min slide exit at {minute_mark}min | {symbol} | current={current_pnl_pct*100:.2f}% peak={peak_profit_pct*100:.2f}%",
-                    symbol=symbol,
-                    hold_time_min=round(hold_time_min, 1),
-                    minute_mark=minute_mark,
-                    peak_profit_pct=round(peak_profit_pct * 100, 2),
-                    current_pnl_pct=round(current_pnl_pct * 100, 2),
-                    entry_premium=position.entry_premium,
-                    highest_premium=position.highest_premium,
-                    current_premium=getattr(position, 'current_premium', None),
-                    entry_time=position.entry_time.isoformat() if position.entry_time else None,
-                )
+            # SINGLE RULE (user 2026-07-08): exit ONLY at >= 10 min held AND TRIAL_SL never armed.
+            # No earlier 5-9min per-minute check, no PnL sub-conditions — an unarmed trade at 10 min is
+            # dead (data: 84% of winners arm TRIAL_SL by 10min; the unarmed ones ride to -10% HARD_SL).
+            # The profit-floor guard above still protects trades that were meaningfully green.
+            if hold_time_min >= stale_hold_time_min and not position.trial_sl_enabled:
+                logger.warning(f"STALE_CONSOLIDATION_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
+                             f"trail never armed | Peak: +{peak_profit_pct*100:.2f}% | "
+                             f"Current: {current_pnl_pct*100:.2f}% | Action: exit (10min unarmed)")
                 pnl = self.close_position(
                     symbol,
                     position.current_premium,
-                    f"STALE_CONSOLIDATION (Current {current_pnl_pct*100:.1f}%, Peak +{peak_profit_pct*100:.1f}%, {minute_mark}min check)"
+                    f"STALE_CONSOLIDATION (Peak +{peak_profit_pct*100:.1f}%, Stale {hold_time_min:.0f}min, trail never armed)"
                 )
-                if pnl is not None:
-                    # Append the full close_position dict (pnl['pnl'] is the number, plus
-                    # symbol/duration/pnl_percent) — matches what the monitor loop expects.
-                    # Wrapping it as {'pnl': pnl} put a dict under 'pnl' and crashed f-string formatting.
+                if pnl:
                     closed.append(pnl)
-                continue
-            elif 5 <= minute_mark <= 9 and minute_mark > last_checked_min:
-                position._slide_check_min = minute_mark  # mark checked even if PnL >= 3%
-
-            if (hold_time_min >= stale_hold_time_min and  # Been stale for 15+ mins
-                not position.trial_sl_enabled):  # Trial SL not activated (regardless of peak)
-                
-                # Exit if near break-even/small profit
-                should_exit = current_pnl_pct >= -0.01
-                
-                # OR exit if we've started losing but not too deeply yet (catch before momentum hits)
-                # AND we can still salvage some capital vs waiting for -10% momentum loss
-                if not should_exit and -0.10 <= current_pnl_pct < -0.01:
-                    # Position lost <10% and has been stale - exit now vs waiting for momentum
-                    should_exit = True
-                    logger.debug(f"STALE_CONSOLIDATION: {symbol} showing loss {current_pnl_pct*100:.2f}% but peak minimal - exiting early to avoid momentum")
-                
-                if should_exit:
-                    logger.warning(f"STALE_CONSOLIDATION_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
-                                 f"Trial_SL: {position.trial_sl_enabled} | Peak: +{peak_profit_pct*100:.2f}% | "
-                                 f"Current: {current_pnl_pct*100:.2f}% | "
-                                 f"Action: Exit stale position (10+ min held, TRIAL_SL inactive)")
-                    
-                    pnl = self.close_position(
-                        symbol,
-                        position.current_premium,
-                        f"STALE_CONSOLIDATION (Peak +{peak_profit_pct*100:.1f}%, Stale {hold_time_min:.0f}min)"
+                    logger.warning(
+                        f"EARLY_EXIT_STALE_CONSOL: {symbol} | Hold: {hold_time_min:.1f}min | "
+                        f"Entry: ₹{position.entry_premium:.2f} | Peak: ₹{position.highest_premium:.2f} (+{peak_profit_pct*100:.1f}%) | "
+                        f"Exit: ₹{position.current_premium:.2f} ({current_pnl_pct*100:+.1f}%) | "
+                        f"PnL: ₹{pnl['pnl']:.2f} | Exited after 10min stale (TRIAL_SL not activated)"
                     )
-                    if pnl:
-                        closed.append(pnl)
-                        logger.warning(
-                            f"EARLY_EXIT_STALE_CONSOL: {symbol} | Hold: {hold_time_min:.1f}min | "
-                            f"Entry: ₹{position.entry_premium:.2f} | Peak: ₹{position.highest_premium:.2f} (+{peak_profit_pct*100:.1f}%) | "
-                            f"Exit: ₹{position.current_premium:.2f} ({current_pnl_pct*100:+.1f}%) | "
-                            f"PnL: ₹{pnl['pnl']:.2f} | "
-                            f"Exited after 10min stale (TRIAL_SL not activated)"
-                        )
         
         return closed
     
     def check_stale_positions(self) -> List[Dict[str, Any]]:
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            return []  # naked theta-sell: no intermediate exits, EOD square-off only
         """
         ⭐ TIME-BASED EXIT: Detect and exit stale (non-trending) positions
         
@@ -3548,7 +3743,13 @@ class OptionPositionMonitor:
             List of closed position stats (PnL, symbol, reason, etc)
         """
         closed = []
-        
+
+        # Disabled → rely purely on TRIAL_SL / HARD_SL (no time-based stale cut). Mirrors the
+        # STALE_CONSOLIDATION toggle; both off = trailing-SL-only exit regime.
+        from optcode.optconfig import SentimentConfig
+        if not SentimentConfig.ENABLE_STALE_TIMEOUT_EXIT:
+            return closed
+
         # Configuration thresholds (from data analysis)
         hold_time_threshold = 20 * 60  # 20 minutes in seconds
         momentum_threshold = 0.005  # 0.5% price change in lookback window
@@ -4119,6 +4320,56 @@ class OptionPositionMonitor:
         fake_move_detector = get_fake_move_detector()
         return fake_move_detector.get_statistics()
     
+    def _destale_premium(self, symbol: str, position: 'OptionPosition', current_ltp: float) -> float:
+        """Frozen-LTP guard (2026-07-28). LTP is last-TRADED price and freezes on illiquid options
+        with no trades while the real bid/ask moves. If the raw LTP has been unchanged for
+        STALE_QUOTE_SECONDS, pull live bid/ask and return the MARK when it has diverged ADVERSELY
+        (mark below the frozen LTP for our long option = the danger the frozen quote is hiding) by
+        >= STALE_QUOTE_MIN_DIVERGENCE_PCT. The freeze clock tracks the RAW LTP, so a still-frozen
+        quote keeps getting overridden every cycle until the LTP actually prints again.
+        (SIEMENS 3650PE: LTP stuck at 45.0 for 3.5min while bid fell to 24 → floor at 42.4 never
+        fired → exited −43%.)"""
+        try:
+            tracker = getattr(self, "_ltp_freeze", None)
+            if tracker is None:
+                tracker = self._ltp_freeze = {}
+            now = time.time()
+            prev = tracker.get(symbol)
+            if prev is None or abs(current_ltp - prev[0]) > 1e-9:
+                tracker[symbol] = (current_ltp, now)   # LTP printed a new value -> trust it
+                return current_ltp
+            frozen_secs = now - prev[1]
+            if frozen_secs < OptionsTradingConfig.STALE_QUOTE_SECONDS:
+                return current_ltp                     # frozen, but not long enough yet
+            md = self.broker.get_market_data(symbol, "NFO") if self.broker else None
+            if not md:
+                return current_ltp
+            bid = md.get("bid") or 0.0
+            ask = md.get("ask") or 0.0
+            if bid <= 0 or ask <= 0:
+                return current_ltp
+            mark = (bid + ask) / 2.0
+            div_pct = (mark - current_ltp) / current_ltp * 100.0 if current_ltp else 0.0
+            if div_pct <= -OptionsTradingConfig.STALE_QUOTE_MIN_DIVERGENCE_PCT:
+                logger.warning(
+                    f"STALE_QUOTE_OVERRIDE: {symbol} | frozen LTP ₹{current_ltp:.2f} held "
+                    f"{frozen_secs:.0f}s | live mark ₹{mark:.2f} (bid {bid:.2f}/ask {ask:.2f}) "
+                    f"| using mark for SL ({div_pct:+.1f}%)"
+                )
+                log_event(
+                    "STALE_QUOTE_OVERRIDE",
+                    f"⚠️ Frozen LTP {symbol}: ₹{current_ltp:.2f} held {frozen_secs:.0f}s → "
+                    f"using live mark ₹{mark:.2f} (bid {bid:.2f}/ask {ask:.2f})",
+                    symbol=symbol, stale_ltp=round(current_ltp, 2), mark=round(mark, 2),
+                    bid=round(bid, 2), ask=round(ask, 2), frozen_secs=round(frozen_secs, 1),
+                    divergence_pct=round(div_pct, 2),
+                )
+                return mark   # keep tracker on the RAW frozen LTP so we re-check next cycle
+            return current_ltp
+        except Exception as e:
+            logger.debug(f"STALE_QUOTE_GUARD: {symbol} | {str(e)}")
+            return current_ltp
+
     def refresh_position_ltps(self) -> Dict[str, Any]:
         """
         Refresh LTP and Greeks for ALL open positions from broker using active symbol pool.
@@ -4235,6 +4486,17 @@ class OptionPositionMonitor:
                         logger.warning(f"REFRESH_LTP: Failed to fetch LTP for {symbol} and no fallback available")
                         continue
                 
+                # STALE-QUOTE GUARD: if the LTP has frozen (illiquid, no trades) fall back to the
+                # live bid/ask mark so SL/trail/floor decisions see reality (see SIEMENS 3650PE −43%).
+                # DEFENSIVE (2026-07-29): getattr-default + local try so a missing config attr or any
+                # guard bug can NEVER break the premium refresh (a thrown AttributeError here froze
+                # every position's premium → Peak 0%, stops dead, all STALE exits).
+                if getattr(OptionsTradingConfig, 'STALE_QUOTE_GUARD_ENABLED', False):
+                    try:
+                        current_ltp = self._destale_premium(symbol, position, current_ltp)
+                    except Exception as _sq_err:
+                        logger.debug(f"STALE_QUOTE_GUARD: skipped | {symbol} | {_sq_err}")
+
                 # STEP 2: Monitoring path updates premium only.
                 # Entry-time Greeks remain stored on the position, but we do not
                 # refresh or use Greeks during live monitoring.
@@ -4777,12 +5039,15 @@ class OptionPositionMonitor:
             expired = self.check_expiry_close()
             monitoring_result['closed_by_expiry'] = [p['symbol'] for p in expired]
             
+            # SELL_THETA (2026-07-30): disable ALL intermediate exits — EOD square-off only.
+            _sell_mode = OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA'
+
             # Check and close positions by profit targets
-            profit_closes = self.check_profit_targets()
+            profit_closes = [] if _sell_mode else self.check_profit_targets()
             monitoring_result['closed_by_profit'] = [p['symbol'] for p in profit_closes]
-            
+
             # Check and close positions by trailing stop losses (20% SL, update every 10% gain)
-            trailing_closes = self.check_trailing_stop_losses()
+            trailing_closes = [] if _sell_mode else self.check_trailing_stop_losses()
             monitoring_result['closed_by_trailing'] = [p['symbol'] for p in trailing_closes]
             
             # Track which positions were closed by TRIAL_SL to avoid duplicate momentum check
@@ -4793,13 +5058,22 @@ class OptionPositionMonitor:
             monitoring_result['closed_by_greeks_delta'] = []
             greeks_closed_symbols = set()
             
-            candle_macd_fade_closes = self.check_candle_macd_fade_exit()
+            candle_macd_fade_closes = [] if _sell_mode else self.check_candle_macd_fade_exit()
             candle_macd_fade_closed_symbols = set(p['symbol'] for p in candle_macd_fade_closes)
             monitoring_result['closed_by_candle_macd_fade'] = [p['symbol'] for p in candle_macd_fade_closes]
 
+            # H19 (2026-07-21): RSI-falling-3-bars exit on the underlying — replaces EARLY_LOSER_CUT
+            # + PROFIT_FLOOR. Runs after trail (winners protected by TRIAL_SL, skipped inside).
+            h19_closes = [] if _sell_mode else [
+                p for p in self.check_h19_rsi_exit()
+                if p['symbol'] not in trailing_closed_symbols
+                and p['symbol'] not in candle_macd_fade_closed_symbols
+            ]
+            monitoring_result['closed_by_h19_rsi'] = [p['symbol'] for p in h19_closes]
+
             # ⭐ PRIORITY 2: Momentum reversal (TIER 1 early exit - backup if Greeks missed it)
             # Only check positions NOT already closed by Greeks delta or TRIAL_SL
-            momentum_closes = self.check_momentum_reversal()
+            momentum_closes = [] if _sell_mode else self.check_momentum_reversal()
             # Filter out any that were already closed by Greeks or TRIAL_SL
             momentum_closes = [
                 p for p in momentum_closes
@@ -4812,7 +5086,7 @@ class OptionPositionMonitor:
             # ⭐ PRIORITY 2.3: Stale consolidation exit
             # Enabled to cut low-momentum positions that never activate TRIAL_SL,
             # while keeping stale timeout disabled for stronger trend days.
-            stale_consol_closes = self.check_stale_consolidation_exits()
+            stale_consol_closes = [] if _sell_mode else self.check_stale_consolidation_exits()
             monitoring_result['closed_by_stale_consolidation'] = [p['symbol'] for p in stale_consol_closes]
 
             if stale_consol_closes:

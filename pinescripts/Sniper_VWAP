@@ -1,0 +1,339 @@
+//@version=6
+indicator("VWAP Breakout v33 (1-Min)", overlay=true, max_labels_count=500)
+// v33: AUDIT FIXES (2026-07-24) — three defects found in a full-script audit, no new features:
+//   1. CLOSED THE v32 REGRESSION ("35-40 falling-ADX hole"): v30's invariant was "strong ADX AND
+//      not rolling over" — but the exhaust gate only blocks falling ADX ABOVE 40. When v32 lowered
+//      the entry floor 40->35 it silently allowed BREAKOUT entries with ADX 35-40 and FALLING
+//      (a trend decaying through the band = the exact enter-at-the-fade failure this stack exists
+//      to prevent; continuation was never exposed — it has its own ADX-rising gate). adxStrongOK
+//      now requires adxVal >= adxVal[3] (not decaying) alongside the level. This also makes the
+//      ENTRY-B tooltip's long-standing "not falling" claim actually true in code.
+//   2. SAME-BAR DOUBLE-FIRE FIX: both patterns could fire on the same bar (latch updates after
+//      both signals compute) -> two alerts, two bot workers for one move (live: IRCTC on the PUT
+//      twin, 2 alerts at 14:06:02). Continuation now defers to breakout on the bar they collide.
+//   3. ENTRY-C tooltip listed RSI twice; deduped (cosmetic).
+//   Everything else unchanged from v32 (ADX 35 floor, H21 continuous-window toggle, all H9/H12
+//   gates). CRITICAL: re-paste + RE-CREATE alerts (TradingView snapshots inputs at creation).
+// v32: ADX STRONG-TREND FLOOR 40 -> 35 (2026-07-22). The ADX>=40 gate was firing entries ~9min
+//   into a move, near exhaustion (live 07-22: POLYCAB entered at RSI84/ADX53 one bar after the top,
+//   -Rs5.6K; LTF same). ADX is a lagging indicator by construction — it can't be high early in a
+//   fresh move — so ADX>=40 ANDed with the fast thrust gate mathematically selects the TOP of the
+//   move, not the middle. 20-day sweep {20,25,30,35,40} PAIRED WITH the now-live H19 RSI-fall exit:
+//   ADX>=35 had the best win rate (52.3%, beating 40's 51.5%) and a modest chop-day rise (07-14:
+//   12->22 trades) that H19 makes survivable. Note: WITHOUT H19 the sweep said do NOT lower ADX
+//   (chop flood returns for no Rs/trade gain); it is the H19 exit that makes an earlier, slightly-
+//   less-confirmed entry pay. Under ~20 is Wilder's "no trend" noise zone; 35 is the middle ground.
+//   Revert = set adxStrongLevel input back to 40. Everything else in v30/v31 unchanged.
+// v31: H21 CONTINUOUS-WINDOW TEST TOGGLE (2026-07-19). New input "TEST: continuous 09:30-14:30
+//   window" (default ON) replaces the two split sessions (09:30-11:00 + 13:30-14:30) with one
+//   continuous 09:30-14:30 window. ALL v30 entry gates unchanged — this tests the WINDOW only.
+//   Context: live 07-17 afternoon (13:30-14:30) produced 5 trades +Rs4,285 under v30 (beat the
+//   morning; KALYANKJIL runner second leg +Rs4,753), reversing the sim-based afternoon-cut plan.
+//   The midday 11:00-13:30 stretch has NO live evidence and was negative in every 90-day sim, so
+//   this is a bounded 2-3 day PAPER experiment: after it, UNTICK the toggle (and re-create alerts
+//   — TradingView snapshots inputs at alert-creation time) to revert to the split windows without
+//   re-pasting code. Bot-side: NO change needed — tools/.env already sets
+//   ENTRY_FILTER_MARKET_CLOSE_{NEUTRAL,BAD}=1500 (verified in /proc of running bots 07-19), so
+//   midday alerts pass the MarketHoursValidator; H7b recovery gate still guards BAD regimes.
+// v30: H12 STRONG-MOMENTUM GATES (from the 2026-07-15 THIRTY-DAY universe study: 210 F&O stocks,
+//   20 trading days 06-17..07-15, ~1.9M bar-observations, all 1,024 AND-combinations of the top
+//   conditions tested with per-day consistency required — the "right order" study: data first,
+//   rule derived from it, not the other way). The five conditions below are the best volume-band
+//   rule found; on the study label they lift WR from ~31% base to ~46-48% and, more importantly,
+//   collapse junk volume on chop days (sim took 12 trades on 07-14 vs the 96 the bots really took).
+//   HONESTY NOTE: these gates are a risk-reducer, NOT a profit engine — the same study proved the
+//   best possible 1-min entry is roughly breakeven before costs; profit comes from day-quality
+//   sizing (bot-side H13.1), the 10-min early-loser cut (bot-side H13.2), and the WIDE progressive
+//   TRIAL_SL capturing runners (H13.3). Four new toggles, ALL default ON, BOTH entry patterns:
+//   1. THRUST      — require the 5-min move (close vs close[5]) >= 0.4%. "Drift" (0-0.15%) lost to
+//      the base rate on 20 OUT OF 20 days — the single most reliable loser state in the study.
+//   2. ADX_STRONG  — require ADX >= 40 (beat base 18/20 days). Combined with v29's ADX_EXHAUST
+//      (block >40-and-falling), the net requirement is ADX >= 40 and NOT rolling over. Note this
+//      subsumes the continuation pattern's old adxMinLevel=20 when ON.
+//   3. RSI_STRONG  — require RSI >= 68. High RSI is GOOD at the 60-min horizon (70-80 band beat
+//      base 17/20 days); the bot's own >82 overbought ceiling still applies downstream, so the
+//      effective band is ~68-82.
+//   4. HIST_5M     — require the last CLOSED 5-minute MACD histogram > 0 (multi-timeframe
+//      confirmation; non-repainting request.security [1]+lookahead_on idiom).
+//   (5th condition of the study rule, price > prev day close, was already present since v22/v23.)
+//   Payload adds run_5m + macd_hist_5m for telemetry. Nightly validation (H13.5,
+//   universe-validation.timer) re-checks these conditions on every new trading day.
+//   CRITICAL: TradingView snapshots inputs at alert-CREATION time — re-create alerts after pasting.
+// v29: H9 EXHAUSTION GATES (from the 2026-07-15 3-day candle backtest, 341 signals, gates required
+//   to be net-positive on ALL of 07-13 trend / 07-14 chop / 07-15 gap-up days; package would have
+//   cut 3-day losses −128,687 → −47,557 while keeping 8 of the top-10 winners). Three independent
+//   toggles, ALL default ON, applied to BOTH entry patterns:
+//   1. VOL_FADE   — block if signal-bar volume < 0.7x the average of the prior 5 bars. Losers are
+//      exhaustion entries: the alert fires on the last gasp after participation has left. This was
+//      the single biggest separator (−57K of losers cut). Known cost: rare quiet-bar-then-explode
+//      winners (SHREECEM/LICHSGFIN type) are lost at any threshold.
+//   2. ADX_EXHAUST — block if ADX > 40 AND falling (adxVal < adxVal[3]): trend already stretched
+//      and losing force (−26K cut, near-zero winner cost).
+//   3. BIG_GAP    — block if the stock's own day open gapped > +0.75% above prev day close: the
+//      move already happened in the gap (−17K cut; fires zero times on normal-open days).
+//   CRITICAL: TradingView snapshots inputs at alert-CREATION time — re-create alerts after pasting.
+// v28: title-only bump (no logic change vs v27).
+// v27: TREND-CONTINUATION ENTRY ENABLED BY DEFAULT (enableContinuationEntry false -> true).
+//   Goes live alongside pattern 1 — CRITICAL: TradingView alerts snapshot inputs at CREATION time,
+//   so this only takes effect on alerts (re)created from a chart running this version. Both patterns
+//   are tagged with their own entry_type (VWAP_BREAKOUT / TREND_CONTINUATION) in the payload, so
+//   win rate is still measurable per-pattern from the trade log despite going live together.
+//   Bot-side verified: TREND_CONTINUATION falls through to the validator's default MIN_CONFIDENCE=90
+//   path (payload sends 90/90 → passes); router keys off action=BUY → CE bots.
+// v26: SESSION START REVERTED 09:45 -> 09:30. The 07-06 shift to 09:45 was based on a single
+//   day's data (opening-whipsaw HARD_SLs); real momentum in 09:30-09:44 was being missed since.
+//   Reverted in both Pine (this) and the bot (ENTRY_FILTER_MARKET_OPEN 945 -> 930, CE .env).
+// v25: TWO TRADING SESSIONS instead of one continuous 09:45-15:00 window: 09:30-11:00 and
+//   13:30-14:30 (window 1 start updated in v26). No entries fire outside these two windows
+//   (late-morning/midday chop and the final 30min are excluded entirely, not just de-prioritized).
+// v24: BACKTESTING LABELS — PRESENTATION ONLY, NO ENTRY-LOGIC CHANGE. Both ENTRY-B and ENTRY-C labels
+//   now carry a hover TOOLTIP with the actual gate values (bars-since-cross, RSI, MACD hist, VWAP
+//   slope for B; ADX/RSI for C) so replay/backtesting can verify WHY a signal fired without
+//   cross-referencing the alert JSON. max_labels_count=500 is already TradingView's indicator
+//   ceiling — cannot be raised further; entries/exits are one label each so 500 comfortably covers a
+//   full session on any single symbol.
+// v23: ADDS A SECOND, INDEPENDENT ENTRY PATTERN — "TREND CONTINUATION" — ALONGSIDE THE EXISTING
+//   FRESH-CROSS ENTRY. v21 removed upper-band entries because on average they fired late into
+//   exhausted moves. But "late on average" isn't "late always" — some upper-band situations are the
+//   START of a strong continuation leg (price already through VWAP, through VWAP-upper, still
+//   trending). The difference between "exhausted" and "still running" is trend strength, which is
+//   now measured with ADX. This is a SEPARATE condition block, SEPARATE alert entry_type
+//   (TREND_CONTINUATION vs VWAP_BREAKOUT), so win rate can be measured on each independently in the
+//   trade log. The original fresh-cross logic (v18-v22) is UNCHANGED below.
+//
+//   enableContinuationEntry defaulted to FALSE in v23-v26 (hold-off while the v22 stack was
+//   untested); SUPERSEDED in v27 — now defaults TRUE (see v27 note above).
+//
+// CONTINUATION ENTRY fires when ALL of:
+//   1. close > vwapUpper (the exact condition v21 excluded from the fresh-cross entry)
+//   2. ADX >= adxMinLevel AND ADX rising over adxRisingBars (still trending, not exhausted —
+//      on the GAIL chart, ADX was already declining well before the late/exhausted part of the
+//      move, so this keeps you out of the tail-end while still catching the early-to-mid ride)
+//   3. RSI not rolling over: rsi > rsi[rsiContinuationLookback] (relative, no fixed threshold)
+//   4. price above previous day close (same context filter as the fresh-cross entry)
+//   5. in trade window, 1-min chart
+//   Shares the SAME entryOpen latch as the fresh-cross entry (one leg open at a time — the bot's
+//   dedup is external, but this keeps the two entry types from double-firing on the same move).
+//
+// v21: VWAP-LINE-ONLY ENTRY + FIXED HISTOGRAM GATE.
+//   (1) UPPER-BAND entry REMOVED from fresh-cross logic — noisy/late vs the VWAP-line cross.
+//   (2) FIXED histogram gate: hist must be RISING bar-over-bar (negative-and-shrinking = sellers
+//       fading = rising; positive-and-expanding = buyers building = rising). Simply
+//       `ta.rising(macdHist, macdHistBars)`.
+// v22: VWAP SLOPE GATE — vwapVal > vwapVal[3], fresh cross above a FLAT VWAP is a weak signal.
+// v19: re-arm per leg (was once/day); window starts 09:45 (matches bot ENTRY_FILTER_MARKET_OPEN=945).
+// v18: FRESH-BREAK gate — only fire near the genuine cross, not for the whole state-true leg.
+// EXIT: NONE from the pine by default. ALL exits are the bot's job: TRIAL_SL / HARD_SL / bot EOD
+//   square-off. VWAP band-breakdown exit is OFF (enableVwapExit=false).
+
+mult = input.float(1.0, "VWAP Band Multiplier")
+minDipBars = input.int(3, "Minimum Consecutive Bars Below VWAP for EXIT", minval=1)
+enableVwapExit = input.bool(false, "Enable VWAP-breakdown EXIT (off = rely on bot TRIAL_SL/HARD_SL)")
+rsiLen = input.int(14, "RSI Length")
+maxBarsAfterBreak = input.int(3, "Max bars after VWAP-line cross to still fire (freshness)", minval=1)
+macdFast = input.int(12, "MACD Fast")
+macdSlow = input.int(26, "MACD Slow")
+macdSignalLen = input.int(9, "MACD Signal")
+macdHistBars = input.int(2, "MACD histogram must be RISING for N bars", minval=1, maxval=5)
+showLabels = input.bool(true, "Show Labels")
+
+// ── v23 continuation entry inputs ──
+enableContinuationEntry = input.bool(true, "Enable Trend-Continuation Entry (above VWAP Upper)")
+adxLen = input.int(14, "ADX Length")
+adxMinLevel = input.float(20.0, "ADX Minimum Level (trending vs choppy)", minval=1)
+adxRisingBars = input.int(2, "ADX must be RISING for N bars", minval=1, maxval=5)
+rsiContinuationLookback = input.int(3, "RSI-not-rolling-over lookback bars", minval=1)
+
+// ── v29 H9 exhaustion gates (apply to BOTH entry patterns) ──
+enableVolFadeGate = input.bool(true, "H9: Block fading-volume entries")
+volFadeRatio = input.float(0.7, "H9: Min signal-bar volume vs 5-bar average", minval=0.1, step=0.1)
+enableAdxExhaustGate = input.bool(true, "H9: Block ADX-exhaustion entries (high AND falling)")
+adxExhaustLevel = input.float(40.0, "H9: ADX exhaustion level", minval=20)
+enableGapGate = input.bool(true, "H9: Block big-gap-up-day entries")
+maxGapPct = input.float(0.75, "H9: Max opening gap % vs prev day close", step=0.05)
+
+// ── v30 H12 strong-momentum gates (20-day universe study; apply to BOTH patterns) ──
+enableThrustGate = input.bool(true, "H12: Require 5-min thrust (drift = 20/20-day loser)")
+minRun5mPct = input.float(0.4, "H12: Min 5-min move %", step=0.05)
+enableAdxStrongGate = input.bool(true, "H12: Require strong ADX")
+adxStrongLevel = input.float(35.0, "H12: ADX strong-trend level (v32: 40->35, earlier entry)", minval=10)
+enableRsiStrongGate = input.bool(true, "H12: Require strong RSI")
+rsiStrongLevel = input.float(68.0, "H12: RSI momentum level", minval=50, maxval=90)
+enableHist5mGate = input.bool(true, "H12: Require 5-min MACD histogram > 0")
+
+isOneMin = timeframe.isminutes and timeframe.multiplier == 1
+
+//──────── SESSION VWAP + BAND (manual, resets daily) ────────
+var float sumSrcVol = na
+var float sumVol = na
+var float sumSrcSrcVol = na
+var bool entryOpen = false
+var int dipCount = 0
+var int barsSinceLineBreak = 9999
+isNewDay = ta.change(time("D")) != 0
+if isNewDay
+    sumSrcVol := 0.0
+    sumVol := 0.0
+    sumSrcSrcVol := 0.0
+    entryOpen := false
+    dipCount := 0
+    barsSinceLineBreak := 9999
+sumSrcVol := sumSrcVol + hlc3 * volume
+sumVol := sumVol + volume
+sumSrcSrcVol := sumSrcSrcVol + hlc3 * hlc3 * volume
+
+vwapVal = sumSrcVol / sumVol
+variance = sumSrcSrcVol / sumVol - vwapVal * vwapVal
+stdevVal = math.sqrt(math.max(variance, 0))
+vwapUpper = vwapVal + mult * stdevVal
+
+//──────── FRESH-BREAK GATE (unchanged from v22) ────────
+crossedVwapLine = ta.crossover(close, vwapVal)
+if crossedVwapLine
+    barsSinceLineBreak := 0
+else if close > vwapVal
+    barsSinceLineBreak := barsSinceLineBreak + 1
+else
+    barsSinceLineBreak := 9999
+freshLineBreak = barsSinceLineBreak <= maxBarsAfterBreak
+
+//──────── PREVIOUS DAY CLOSE (repaint-safe) ────────
+prevDayClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+priceAbovePrevClose = close > prevDayClose
+
+//──────── RSI ────────
+rsi = ta.rsi(close, rsiLen)
+rsiRisingOK = ta.rising(rsi, 2)
+rsiNotRollingOver = rsi > rsi[rsiContinuationLookback]
+
+//──────── MACD HISTOGRAM RISING (unchanged from v21) ────────
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignalLen)
+histRisingOK = ta.rising(macdHist, macdHistBars)
+
+//──────── VWAP SLOPE (unchanged from v22) ────────
+vwapSlopeOK = vwapVal > vwapVal[3]
+
+//──────── ADX (v23 — trend strength for continuation entry) ────────
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+adxTrendingOK = adxVal >= adxMinLevel
+adxRisingOK = ta.rising(adxVal, adxRisingBars)
+
+//──────── v29 H9 EXHAUSTION GATES (both patterns) ────────
+// VOL_FADE: losers fire on the last gasp after participation left; require the signal bar to
+// still carry volume vs its immediate context. sma must be computed on every bar (Pine rule).
+volAvg5Prev = ta.sma(volume, 5)[1]
+volRatio = volAvg5Prev > 0 ? volume / volAvg5Prev : na
+volOK = not enableVolFadeGate or (not na(volRatio) and volRatio >= volFadeRatio)
+// ADX_EXHAUST: high AND falling = stretched move losing force. Distinct from the continuation
+// pattern's own adxRisingOK (that one requires strictly rising N bars; this blocks the
+// high-and-rolling-over case for the BREAKOUT pattern too, which has no ADX gate of its own).
+adxNotExhausted = not enableAdxExhaustGate or not (adxVal > adxExhaustLevel and adxVal < adxVal[3])
+// BIG_GAP: the day's own open vs prev close — a big gap already consumed the move. Daily open is
+// fixed after 09:15 so lookahead_on is repaint-safe intraday (same pattern as prevDayClose above).
+dayOpen = request.security(syminfo.tickerid, "D", open, barmerge.gaps_off, barmerge.lookahead_on)
+gapPct = (dayOpen / prevDayClose - 1) * 100
+gapOK = not enableGapGate or gapPct <= maxGapPct
+h9GatesOK = volOK and adxNotExhausted and gapOK
+
+//──────── v30 H12 STRONG-MOMENTUM GATES (both patterns) ────────
+// THRUST: 5-min move must show real participation. The 0-0.15% "drift" state lost to the
+// universe base rate on 20 of 20 days — blocking it is the most reliable filter in the study.
+run5mPct = (close / close[5] - 1) * 100
+thrustOK = not enableThrustGate or run5mPct >= minRun5mPct
+// ADX_STRONG + RSI_STRONG: established trend, real momentum (beat base 18/20 and 17/20 days).
+// v33: "and not decaying" (adxVal >= adxVal[3]) restores the v30 invariant at the lower v32
+// floor — without it, ADX 35-40 FALLING (decaying trend) passed the breakout pattern.
+adxStrongOK = not enableAdxStrongGate or (adxVal >= adxStrongLevel and adxVal >= adxVal[3])
+rsiStrongOK = not enableRsiStrongGate or rsi >= rsiStrongLevel
+// HIST_5M: last CLOSED 5-min MACD histogram must be positive. The [1] + lookahead_on pair is
+// the standard non-repainting idiom — always returns the completed 5-min bar, never the
+// still-forming one, so historical and realtime behavior match.
+f_macdHist5() =>
+    [_m5, _s5, _h5] = ta.macd(close, macdFast, macdSlow, macdSignalLen)
+    _h5
+macdHist5 = request.security(syminfo.tickerid, "5", f_macdHist5()[1], barmerge.gaps_off, barmerge.lookahead_on)
+hist5OK = not enableHist5mGate or (not na(macdHist5) and macdHist5 > 0)
+h12GatesOK = thrustOK and adxStrongOK and rsiStrongOK and hist5OK
+
+//──────── SESSION WINDOW (v26: start reverted 09:45 -> 09:30; v31: H21 continuous-window test) ────────
+// Split mode: 09:30-11:00 (morning momentum) and 13:30-14:30 (afternoon momentum). The 07-06
+// shift to 09:45 was based on a single day's data; real momentum in 09:30-09:44 was being missed.
+// v31 test mode (default ON, 2-3 day PAPER experiment): one continuous 09:30-14:30 window.
+// UNTICK after the test and RE-CREATE alerts to revert — inputs snapshot at alert creation.
+enableContinuousWindow = input.bool(true, "TEST: continuous 09:30-14:30 window (H21)", group="Session")
+hourIST = hour(time, "Asia/Kolkata")
+minuteIST = minute(time, "Asia/Kolkata")
+minutesSinceMidnight = hourIST * 60 + minuteIST
+inWindow1 = minutesSinceMidnight >= 570 and minutesSinceMidnight <= 660   // 09:30-11:00
+inWindow2 = minutesSinceMidnight >= 810 and minutesSinceMidnight <= 870   // 13:30-14:30
+inTradeWindow = enableContinuousWindow ? (minutesSinceMidnight >= 570 and minutesSinceMidnight <= 870) : (inWindow1 or inWindow2)
+
+//──────── ENTRY: FRESH VWAP-LINE CROSS (unchanged v22 logic) ────────
+conditionMet_Breakout = freshLineBreak and rsiRisingOK and histRisingOK and priceAbovePrevClose and vwapSlopeOK and h9GatesOK and h12GatesOK and inTradeWindow and isOneMin
+entrySignal_Breakout = conditionMet_Breakout and not entryOpen
+
+//──────── ENTRY: TREND CONTINUATION ABOVE VWAP UPPER (v23; v33: defers to breakout on same bar) ────────
+conditionMet_Continuation = enableContinuationEntry and close > vwapUpper and adxTrendingOK and adxRisingOK and rsiNotRollingOver and priceAbovePrevClose and h9GatesOK and h12GatesOK and inTradeWindow and isOneMin
+// v33: "and not entrySignal_Breakout" — both patterns could fire the SAME bar (latch updates after
+// both compute), sending two alerts for one move. Breakout wins the collision; one alert per bar.
+entrySignal_Continuation = conditionMet_Continuation and not entryOpen and not entrySignal_Breakout
+
+//──────── COMBINED ENTRY (either pattern can fire, shared latch) ────────
+entrySignal = entrySignal_Breakout or entrySignal_Continuation
+
+//──────── EXIT ────────
+dippingBar = close < vwapVal
+dipCount := dippingBar ? dipCount + 1 : 0
+dipExit = enableVwapExit and dipCount == minDipBars and entryOpen and inTradeWindow and isOneMin
+exitSignal = dipExit
+
+if entrySignal
+    entryOpen := true
+if exitSignal
+    entryOpen := false
+// RE-ARM per leg: once price falls back below the VWAP line the leg is over.
+if entryOpen and close < vwapVal
+    entryOpen := false
+
+//──────── ALERT JSON ────────
+format_value(x) => str.tostring(x, format.mintick)
+format_ind(x) => str.tostring(x, "#.####")
+// confidence + score = 90 REQUIRED: the bot hard-rejects at OPTIONS_MIN_CONFIDENCE=90 otherwise.
+jsonMsg_Entry_Breakout = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"confidence\":\"90\",\"score\":\"90\",\"entry_type\":\"VWAP_BREAKOUT\",\"price\":\"" + format_value(close) + "\",\"vwap_value\":\"" + format_value(vwapVal) + "\",\"vwap_upper\":\"" + format_value(vwapUpper) + "\",\"rsi_value\":\"" + format_ind(rsi) + "\",\"adx_value\":\"" + format_ind(adxVal) + "\",\"macd_line\":\"" + format_ind(macdLine) + "\",\"macd_signal\":\"" + format_ind(macdSignal) + "\",\"macd_hist\":\"" + format_ind(macdHist) + "\",\"prev_day_close\":\"" + format_value(prevDayClose) + "\",\"vol_ratio\":\"" + format_ind(volRatio) + "\",\"gap_pct\":\"" + format_ind(gapPct) + "\",\"run_5m\":\"" + format_ind(run5mPct) + "\",\"macd_hist_5m\":\"" + format_ind(macdHist5) + "\",\"tv_setup_label\":\"VWAP_BREAKOUT\"}"
+jsonMsg_Entry_Continuation = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"BUY\",\"confidence\":\"90\",\"score\":\"90\",\"entry_type\":\"TREND_CONTINUATION\",\"price\":\"" + format_value(close) + "\",\"vwap_value\":\"" + format_value(vwapVal) + "\",\"vwap_upper\":\"" + format_value(vwapUpper) + "\",\"rsi_value\":\"" + format_ind(rsi) + "\",\"adx_value\":\"" + format_ind(adxVal) + "\",\"macd_line\":\"" + format_ind(macdLine) + "\",\"macd_signal\":\"" + format_ind(macdSignal) + "\",\"macd_hist\":\"" + format_ind(macdHist) + "\",\"prev_day_close\":\"" + format_value(prevDayClose) + "\",\"vol_ratio\":\"" + format_ind(volRatio) + "\",\"gap_pct\":\"" + format_ind(gapPct) + "\",\"run_5m\":\"" + format_ind(run5mPct) + "\",\"macd_hist_5m\":\"" + format_ind(macdHist5) + "\",\"tv_setup_label\":\"TREND_CONTINUATION\"}"
+// is_exit=true REQUIRED: routes SELL to the bot's close-if-open handler.
+jsonMsg_Exit = "{\"symbol\":\"" + syminfo.ticker + "\",\"action\":\"SELL\",\"is_exit\":\"true\",\"entry_type\":\"VWAP_EXIT\",\"price\":\"" + format_value(close) + "\",\"vwap_value\":\"" + format_value(vwapVal) + "\",\"dip_bars\":\"" + str.tostring(dipCount) + "\",\"tv_setup_label\":\"VWAP_EXIT\"}"
+
+alertcondition(entrySignal_Breakout, title="VWAP Breakout Entry", message="VWAP_BREAKOUT_ENTRY")
+alertcondition(entrySignal_Continuation, title="Trend Continuation Entry", message="TREND_CONTINUATION_ENTRY")
+alertcondition(exitSignal, title="VWAP Exit", message="VWAP_EXIT")
+if entrySignal_Breakout
+    alert(jsonMsg_Entry_Breakout, alert.freq_once_per_bar_close)
+if entrySignal_Continuation
+    alert(jsonMsg_Entry_Continuation, alert.freq_once_per_bar_close)
+if exitSignal
+    alert(jsonMsg_Exit, alert.freq_once_per_bar_close)
+
+//──────── LABELS ────────
+// Tooltips carry the actual gate values (RSI/MACD/ADX/VWAP-slope) so backtesting/replay can verify
+// WHY each entry fired without cross-referencing the alert JSON — hover the label for the breakdown.
+// max_labels_count=500 is already TradingView's indicator ceiling; can't be raised further.
+if showLabels and entrySignal_Breakout
+    label.new(bar_index, low, "ENTRY-B", style=label.style_label_up, color=color.lime, textcolor=color.black, size=size.small,
+      tooltip="FRESH VWAP-LINE CROSS\nBars since cross: " + str.tostring(barsSinceLineBreak) + " (<= " + str.tostring(maxBarsAfterBreak) + ")\nRSI: " + format_ind(rsi) + " (rising 2 bars)\nMACD hist: " + format_ind(macdHist) + " (rising " + str.tostring(macdHistBars) + " bars)\nVWAP: " + format_value(vwapVal) + " (rising vs 3 bars ago: " + format_value(vwapVal[3]) + ")\nPrev day close: " + format_value(prevDayClose) + " (price above)\nVol ratio: " + format_ind(volRatio) + " (>= " + str.tostring(volFadeRatio) + ")\nGap: " + format_ind(gapPct) + "% (<= " + str.tostring(maxGapPct) + "%)\nADX: " + format_ind(adxVal) + " (>= " + str.tostring(adxStrongLevel) + ", not falling)\n5m thrust: " + format_ind(run5mPct) + "% (>= " + str.tostring(minRun5mPct) + "%)\n5m MACD hist: " + format_ind(macdHist5) + " (> 0)")
+if showLabels and entrySignal_Continuation
+    label.new(bar_index, low, "ENTRY-C", style=label.style_label_up, color=color.yellow, textcolor=color.black, size=size.small,
+      tooltip="TREND CONTINUATION (above VWAP upper)\nVWAP upper: " + format_value(vwapUpper) + "\nADX: " + format_ind(adxVal) + " (>= " + str.tostring(adxMinLevel) + ", rising " + str.tostring(adxRisingBars) + " bars)\nRSI: " + format_ind(rsi) + " (not rolling over vs " + str.tostring(rsiContinuationLookback) + " bars ago: " + format_ind(rsi[rsiContinuationLookback]) + ")\nPrev day close: " + format_value(prevDayClose) + " (price above)\nVol ratio: " + format_ind(volRatio) + " (>= " + str.tostring(volFadeRatio) + ")\nGap: " + format_ind(gapPct) + "% (<= " + str.tostring(maxGapPct) + "%)\n5m thrust: " + format_ind(run5mPct) + "% (>= " + str.tostring(minRun5mPct) + "%)\n5m MACD hist: " + format_ind(macdHist5) + " (> 0)\nRSI floor H12: " + format_ind(rsi) + " (>= " + str.tostring(rsiStrongLevel) + ")")
+if showLabels and exitSignal
+    label.new(bar_index, high, "EXIT", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small,
+      tooltip="VWAP-breakdown exit (optional, off by default)\nDip bars: " + str.tostring(dipCount) + " / " + str.tostring(minDipBars))
+
+plotshape(showLabels and entrySignal_Breakout, title="ENTRY-Breakout marker", location=location.belowbar, style=shape.labelup, text="B", color=color.lime, textcolor=color.black, size=size.small)
+plotshape(showLabels and entrySignal_Continuation, title="ENTRY-Continuation marker", location=location.belowbar, style=shape.labelup, text="C", color=color.yellow, textcolor=color.black, size=size.small)
+plotshape(showLabels and exitSignal, title="EXIT marker", location=location.abovebar, style=shape.labeldown, text="EXIT", color=color.red, textcolor=color.white, size=size.small)
+
+//──────── PLOTS ────────
+plot(vwapVal, color=color.blue, title="VWAP")
+plot(vwapUpper, color=color.green, title="VWAP Upper")
+plot(adxVal, color=color.orange, title="ADX", display=display.data_window)
+bgcolor(not isOneMin ? color.new(color.red, 88) : na, title="Use 1-Minute Chart")

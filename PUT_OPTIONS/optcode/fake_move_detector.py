@@ -462,7 +462,13 @@ class PremiumReversionMonitor:
             return False, None
         
         entry_premium = entry_data['entry_premium']
-        reversion_percent = abs(current_premium - entry_premium) / entry_premium if entry_premium > 0 else 0
+        # DIRECTIONAL fix (2026-07-28): only an ADVERSE move — premium falling BELOW entry — is a
+        # real fake-move/reversion. The old abs() also fired on a favorable +50% surge, force-exiting
+        # genuine winners inside the 30s window (HINDUNILVR +61%/+50%, KALYANKJIL +50% all clipped as
+        # "fake"). A RISING premium is a real winner — let the trail SL manage it, never exit it here.
+        # A >=50% adverse drop is normally caught by the -10% HARD_SL first, so this now only backstops
+        # the genuine spike-and-collapse case and can no longer clip upside.
+        reversion_percent = (entry_premium - current_premium) / entry_premium if entry_premium > 0 else 0
         
         logger.debug(f"REVERSION_MONITOR: CHECK | {symbol} | elapsed={time_since_entry:.1f}s | reversion={reversion_percent*100:.2f}%")
         

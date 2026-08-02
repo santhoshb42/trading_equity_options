@@ -173,20 +173,48 @@ class OptionsCapitalConfig:
                 return cls.INDEX_CAP_PER_TRADE_NEUTRAL
         return cls.get_cap_for_market_trend(market_trend)
 
-    # Commission and charges per trade
-    BROKERAGE_PER_TRADE = 15.0  # ₹15 flat brokerage per options order
-    STT_PERCENTAGE = 0.005  # 0.5% STT on sell side (higher for options)
-    TRANSACTION_CHARGES = 0.00005  # Higher for options on NSE
-    GST_PERCENTAGE = 0.18  # 18% GST on brokerage
-    
+    # Commission and charges per round-trip options trade (buy-to-open, sell-to-close).
+    # Rates verified 2026-07-10 against the user's real Angel One "Trades and Charges" statement
+    # (27-Jun to 03-Jul-2026, Equity F&O, 108 orders): Brokerage ₹2160.00 / 108 = ₹20.00/order exactly.
+    # GST ₹498.19 = 18% * (2160.00 + 606.03 exch_txn + 1.71 sebi) = 18% * 2767.74 = 498.1932 — exact
+    # match, confirming both the flat brokerage and the GST base (brokerage+exch_txn+sebi, NOT
+    # including STT/stamp duty, which are government levies outside the GST net). Exchange txn / STT /
+    # stamp duty / SEBI fee RATES below are the standard published NSE/SEBI/Govt rates for F&O options
+    # (not individually back-solvable from the statement's single weekly total without per-trade
+    # turnover) — the formula STRUCTURE is confirmed, the split is standard-rate best-estimate.
+    BROKERAGE_PER_ORDER = 20.0                 # ₹20 flat per executed order (verified exact)
+    EXCHANGE_TXN_CHARGE_PCT = 0.03503 / 100     # NSE F&O options, on total turnover (buy+sell)
+    STT_SELL_PCT = 0.1 / 100                    # STT on options SELL(-to-close) premium turnover only
+    STAMP_DUTY_BUY_PCT = 0.003 / 100            # Stamp duty on options BUY(-to-open) turnover only
+    SEBI_FEES_PCT = 0.0001 / 100                # ₹10 per crore turnover
+    GST_PERCENTAGE = 0.18                       # 18% GST on (brokerage + exchange txn + SEBI fees)
+
     @classmethod
-    def calculate_total_charges(cls, trade_value: float) -> float:
-        """Calculate total charges for an options trade"""
-        brokerage = cls.BROKERAGE_PER_TRADE
-        stt = trade_value * cls.STT_PERCENTAGE
-        trans = trade_value * cls.TRANSACTION_CHARGES
-        gst = (brokerage + trans) * cls.GST_PERCENTAGE
-        return brokerage + stt + trans + gst
+    def calculate_round_trip_charges(cls, entry_premium: float, exit_premium: float, quantity: int) -> Dict[str, float]:
+        """Total charges for one round-trip options trade (buy-to-open @ entry_premium,
+        sell-to-close @ exit_premium). Both CE and PUT positions are always long options
+        (BUY-to-open even for PE), so entry=buy leg / exit=sell leg applies uniformly."""
+        buy_turnover = entry_premium * quantity
+        sell_turnover = exit_premium * quantity
+        total_turnover = buy_turnover + sell_turnover
+
+        brokerage = cls.BROKERAGE_PER_ORDER * 2  # one order to open, one to close
+        exchange_txn = total_turnover * cls.EXCHANGE_TXN_CHARGE_PCT
+        stt = sell_turnover * cls.STT_SELL_PCT
+        stamp_duty = buy_turnover * cls.STAMP_DUTY_BUY_PCT
+        sebi_fees = total_turnover * cls.SEBI_FEES_PCT
+        gst = (brokerage + exchange_txn + sebi_fees) * cls.GST_PERCENTAGE
+        total_charges = brokerage + exchange_txn + stt + stamp_duty + sebi_fees + gst
+
+        return {
+            'brokerage': round(brokerage, 2),
+            'exchange_txn_charges': round(exchange_txn, 2),
+            'stt': round(stt, 2),
+            'stamp_duty': round(stamp_duty, 2),
+            'sebi_fees': round(sebi_fees, 2),
+            'gst': round(gst, 2),
+            'total_charges': round(total_charges, 2),
+        }
     
     @classmethod
     def calculate_quantity_for_capital(cls, premium: float, capital: float, lot_size: int = 1) -> int:
@@ -668,6 +696,24 @@ class OptionsTradingConfig:
     # Risk management - SENTIMENT-DRIVEN: 10% hard SL with TRIAL_SL as primary exit signal
     MAX_LOSS_PER_TRADE = float(os.getenv("OPTIONS_MAX_LOSS_PER_TRADE", "5000"))  # Safety limit (emergency exit)
     STOP_LOSS_PERCENTAGE = float(os.getenv("OPTIONS_STOP_LOSS_PERCENTAGE", "10.0"))  # 10% hard SL (broker STOPLOSS_LIMIT order)
+
+    # ── STRATEGY MODE (2026-07-30): BUY (existing) | SELL_THETA (naked theta-sell: PUT alert->SELL
+    # CALL, CE alert->SELL PUT; ITM=immediate strike, OTM=next; all intermediate exits off, EOD only) ──
+    STRATEGY_MODE = os.getenv("OPTIONS_STRATEGY_MODE", "BUY").upper()
+    # L1 (2026-08-01): a naked SELL blocks SPAN+exposure margin, NOT the premium credit. The LIVE
+    # funds gate uses (strike-notional × this rate) as a conservative margin proxy for SELL entries
+    # (broker RMS is the ultimate backstop). Tune via OPTIONS_SELL_MARGIN_RATE. Unused in BUY/PAPER.
+    SELL_MARGIN_RATE = float(os.getenv("OPTIONS_SELL_MARGIN_RATE", "0.20"))
+
+    # ── STALE-QUOTE GUARD (2026-07-28) ──────────────────────────────────────────
+    # LTP is last-TRADED price; on an illiquid option with no trades it freezes at the last print
+    # while the real bid/ask collapses (SIEMENS 3650PE: LTP stuck at 45.0 for 3.5min while bid fell
+    # to 24 → breakeven floor at 42.4 never fired → exited −43%). When the LTP is unchanged for
+    # STALE_QUOTE_SECONDS, fall back to the live bid/ask MARK for SL/trail/floor decisions, but only
+    # on a MATERIAL ADVERSE divergence (mark below the frozen LTP for a long option).
+    STALE_QUOTE_GUARD_ENABLED = os.getenv("OPTIONS_STALE_QUOTE_GUARD_ENABLED", "true").lower() == "true"
+    STALE_QUOTE_SECONDS = float(os.getenv("OPTIONS_STALE_QUOTE_SECONDS", "20"))
+    STALE_QUOTE_MIN_DIVERGENCE_PCT = float(os.getenv("OPTIONS_STALE_QUOTE_MIN_DIVERGENCE_PCT", "3.0"))
     PROFIT_TARGET_PERCENTAGE = float(os.getenv("OPTIONS_PROFIT_TARGET_PERCENTAGE", "0"))  # NO PROFIT TARGET - let winners run!
     
     # Lot sizing is BUDGET-DRIVEN (not fixed lots).
@@ -705,6 +751,20 @@ class OptionsTradingConfig:
     # With the +1% buffer this means the trail effectively arms at ~4% peak (was ~6%/11%).
     # Lowering the arm does NOT cap upside — the peak-minus-gap trail keeps trailing up.
     TRIAL_SL_BASE_ACTIVATION_PCT = float(os.getenv("OPTIONS_TRIAL_SL_BASE_ACTIVATION_PCT", "3.0"))
+
+    # PROGRESSIVE TRAILING GAP (2026-07-08, mirrored from CE): the trail gap WIDENS as the trade
+    # proves itself, instead of a single fixed gap. Regime-change option trades are fat-tailed —
+    # the P&L is in the rare runners, and a constant tight gap clips them. Widening the gap with
+    # peak locks a RISING FRACTION of the peak: give-back shrinks in % terms while absolute room
+    # grows. Tiers are (peak-band -> gap), all env-tunable:
+    #   arm..T1 -> T0 gap | T1..T2 -> T1 gap | T2..T3 -> T2 gap | T3+ -> T3 gap
+    TRIAL_GAP_T0 = float(os.getenv("OPTIONS_TRIAL_GAP_T0", "4.0"))            # peak +5..+12%
+    TRIAL_GAP_T1 = float(os.getenv("OPTIONS_TRIAL_GAP_T1", "6.0"))            # peak +12..+25%
+    TRIAL_GAP_T2 = float(os.getenv("OPTIONS_TRIAL_GAP_T2", "9.0"))            # peak +25..+60%
+    TRIAL_GAP_T3 = float(os.getenv("OPTIONS_TRIAL_GAP_T3", "12.0"))           # peak +60%+
+    TRIAL_GAP_T1_PEAK = float(os.getenv("OPTIONS_TRIAL_GAP_T1_PEAK", "12.0"))
+    TRIAL_GAP_T2_PEAK = float(os.getenv("OPTIONS_TRIAL_GAP_T2_PEAK", "25.0"))
+    TRIAL_GAP_T3_PEAK = float(os.getenv("OPTIONS_TRIAL_GAP_T3_PEAK", "60.0"))
 
     # PROFIT FLOOR (breakeven protection):
     # Once a trade has been green >= TRIGGER%, move the hard SL up to the LOCK% floor and never
@@ -1218,6 +1278,22 @@ class SentimentConfig:
     # Early Exit - Momentum Reversal Detection (Post-Entry Protection)
     # =========================================================================
     
+    # Set OPTIONS_ENABLE_STALE_CONSOLIDATION_EXIT=false to rely purely on TRIAL_SL / HARD_SL (no
+    # time-based stale cut) — mirrors the CE change.
+    ENABLE_STALE_CONSOLIDATION_EXIT = os.getenv("OPTIONS_ENABLE_STALE_CONSOLIDATION_EXIT", "true").strip().lower() == "true"
+    # STALE_TIMEOUT (check_stale_positions) — the other time-based stale cut. false = pure TRIAL_SL/HARD_SL.
+    ENABLE_STALE_TIMEOUT_EXIT = os.getenv("OPTIONS_ENABLE_STALE_TIMEOUT_EXIT", "true").strip().lower() == "true"
+
+    # H19 (2026-07-22, ported from CE): exit on the UNDERLYING's 1-min RSI turning against the put.
+    # PUT is a BEARISH position (profits when the stock FALLS), so the reversal against us is RSI
+    # RISING 3 consecutive bars (the mirror of CE, which exits on RSI FALLING). Replaces
+    # PROFIT_FLOOR + the IV exits (fixed price/IV triggers churn on chop). TRIAL_SL/HARD_SL/STALE
+    # remain. One switch, PAPER only.
+    ENABLE_H19_RSI_EXIT = os.getenv("OPTIONS_H19_EXIT_ENABLED", "false").strip().lower() == "true"
+    H19_RSI_PERIOD = int(os.getenv("OPTIONS_H19_RSI_PERIOD", "14"))
+    H19_RSI_FALL_BARS = int(os.getenv("OPTIONS_H19_RSI_FALL_BARS", "3"))
+    H19_MIN_SECONDS = int(os.getenv("OPTIONS_H19_MIN_SECONDS", "60"))
+
     ENABLE_EARLY_EXIT_MOMENTUM = False       # Exit early if momentum reverses post-entry (DISABLED - leaving too much on table)
     EARLY_EXIT_MOMENTUM_THRESHOLD = 10.0     # Exit if price drops >10% from peak (catches 75% of hard SLs)
     # Example: Entry ₹100 → Peak ₹104 → Current ₹93.6 (10% below peak) → EXIT
@@ -1259,14 +1335,14 @@ class SentimentConfig:
     # Early Exit - IV Crash Detection (Premium Collapse Protection)
     # =========================================================================
     
-    ENABLE_EARLY_EXIT_IV_CRASH = True        # Exit early if IV collapses (premium dies)
+    ENABLE_EARLY_EXIT_IV_CRASH = os.getenv("ENABLE_EARLY_EXIT_IV_CRASH", "true").strip().lower() == "true"  # 2026-07-22: env-driven (H22 exit simplification)
     EARLY_EXIT_IV_CRASH_THRESHOLD = 10.0     # Exit if IV drops >10% from entry (no recovery potential)
     # Rationale: IV crash = premium is dying = no point staying
     # This catches the root cause that triggers MOMENTUM_REVERSAL
     # Earlier signal than momentum (IV crashes before big reversals)
     # Expected impact: Save ₹20-30k on choppy/reversal days
     
-    ENABLE_EARLY_EXIT_IV_SPIKE = True        # Exit early if IV spikes (fear spike = market crash)
+    ENABLE_EARLY_EXIT_IV_SPIKE = os.getenv("ENABLE_EARLY_EXIT_IV_SPIKE", "true").strip().lower() == "true"  # 2026-07-22: env-driven (H22 exit simplification)
     EARLY_EXIT_IV_SPIKE_THRESHOLD = 15.0     # Exit if IV rises >15% from entry (market panic)
     EARLY_EXIT_IV_SPIKE_MIN_TIME = 5         # Minimum seconds in position before checking IV spike
     # Rationale: IV spike (opposite of crash) signals market panic/crash in progress

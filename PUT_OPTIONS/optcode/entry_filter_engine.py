@@ -418,8 +418,13 @@ class MomentumValidator:
             macd_value = macd_15m.get('macd', 0)
             if action == 'BUY' and entry_type != 'MOMENTUM' and macd_value < 0:
                 return False, f"CE entry: MACD {macd_value:.4f} should be positive (uptrend)"
-            elif action == 'SELL' and entry_type != 'MOMENTUM' and macd_value < 0:
-                return False, f"PE entry: MACD {macd_value:.4f} should be positive"
+            elif action == 'SELL' and entry_type != 'MOMENTUM' and macd_value > 0:
+                # FIX (2026-07-28): a PUT wants BEARISH momentum → reject only on POSITIVE MACD.
+                # The old check copied the CE branch verbatim (macd_value < 0 / "should be positive"),
+                # which rejected puts for being bearish — exactly when a put SHOULD fire. This threw
+                # out ~all Pine breakdown puts (they fire on negative MACD). Inverting it also blocks
+                # bullish-momentum bounce-traps (e.g. ABB rising = positive MACD = correctly blocked).
+                return False, f"PE entry: MACD {macd_value:.4f} should be negative (downtrend)"
         
         return True, f"Momentum confirmed (RSI {rsi_15m:.1f})"
 
@@ -953,6 +958,10 @@ class ComprehensiveEntryFilter:
         self.pre_breakout_min_pass = int(os.getenv("ENTRY_FILTER_PRE_BREAKOUT_MIN_PASS", "4"))
         self.pullback_min_pass = int(os.getenv("ENTRY_FILTER_PULLBACK_MIN_PASS", "5"))
         self.momentum_min_pass = int(os.getenv("ENTRY_FILTER_MOMENTUM_MIN_PASS", "6"))
+        # Data-aware floor: when validators can't evaluate (broker fetch throttled at the open, or a
+        # field the Pine doesn't send), don't demand more passes than validators that actually produced
+        # a verdict — but require at least this many to have data, so we never fire on near-zero checks.
+        self.min_evaluable_validators = int(os.getenv("ENTRY_FILTER_MIN_EVALUABLE", "4"))
         
         logger.info(f"{self.name}: Initialized | Mode: {'ALL_REQUIRED' if self.require_all_filters else f'MIN_{self.min_filters_pass}_PASS'}")
         logger.info(f"{self.name}: Active validators: {list(self.validators.keys())}")
@@ -1190,8 +1199,31 @@ class ComprehensiveEntryFilter:
             is_valid = all(v['valid'] for v in validation_results.values())
             decision = "ALL filters required"
         else:
-            is_valid = passed_count >= required_passes
-            decision = f"Need {required_passes}/{len(self.validators)} passed"
+            # Data-aware threshold (mirrors CE). "Evaluable" = validators that produced a real verdict
+            # (counted pass or hard fail); skipped ones had no data (throttled broker fetch at the open)
+            # or weren't applicable. Don't demand more passes than evaluable — else a rate-limit-starved
+            # fetch guarantees a reject on a clean signal — but require a coverage floor.
+            evaluable = len(self.validators) - len(skipped_validators)
+            if evaluable < self.min_evaluable_validators:
+                failure_reason = (
+                    f"Insufficient data to validate: only {evaluable} of {len(self.validators)} "
+                    f"validators had data (need >= {self.min_evaluable_validators}); "
+                    f"skipped: {', '.join(skipped_validators)}"
+                )
+                reason_key = "INSUFFICIENT_DATA"
+                self.rejected_by_reason[reason_key] = self.rejected_by_reason.get(reason_key, 0) + 1
+                validation_results['_summary'] = {
+                    'counted_passes': passed_count,
+                    'skipped_validators': skipped_validators,
+                    'required_passes': required_passes,
+                    'evaluable': evaluable,
+                }
+                logger.warning(f"{self.name}: ❌ INSUFFICIENT_DATA | {symbol} {action} | evaluable={evaluable} | {failure_reason}")
+                self._log_rejection(signal, market_data, failure_reason, filter_name='INSUFFICIENT_DATA')
+                return False, failure_reason, validation_results
+            effective_required = min(required_passes, evaluable)
+            is_valid = passed_count >= effective_required
+            decision = f"Need {effective_required}/{evaluable} evaluable passed (nominal {required_passes}/{len(self.validators)})"
         
         if is_valid:
             self.passed += 1

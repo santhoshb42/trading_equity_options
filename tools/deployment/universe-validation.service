@@ -1,0 +1,15 @@
+[Unit]
+Description=Nightly F&O universe validation (H11/H13.5 — LIVE gate evidence)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/CE_OPTIONS
+ExecStart=/usr/bin/nice -n 15 /usr/bin/python3 /root/santhosh/trading/tools/universe_study/nightly_validation.py
+TimeoutStartSec=2400
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=universe-validation

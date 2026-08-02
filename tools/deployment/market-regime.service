@@ -1,0 +1,25 @@
+[Unit]
+Description=Market Regime Daemon (NIFTY trend-efficiency, shared by all 4 bots)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/santhosh/trading/CE_OPTIONS
+ExecStart=/usr/bin/python3 /root/santhosh/trading/tools/market_regime_daemon.py
+
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=market-regime
+
+SuccessExitStatus=0 1 SIGTERM SIGKILL
+
+[Install]
+WantedBy=multi-user.target

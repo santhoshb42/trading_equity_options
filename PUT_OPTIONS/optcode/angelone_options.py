@@ -1264,7 +1264,9 @@ class AngelOneOptionsBroker:
         # entry-premium with margin. Without this, tight-interval names (e.g. RELIANCE 10pt
         # strikes) balloon the LTP fetch to 60+ contracts when we use one.
         if light and atm_contracts_data_filtered:
-            _N = 1
+            # SELL_THETA needs the 2nd strike out (OTM bot sells the NEXT strike), so widen to +-2;
+            # BUY only ever selects ATM+-1, keep it at 1. (VBL 2026-07-31: +-1 missed the 460 next-strike.)
+            _N = 2 if os.getenv("OPTIONS_STRATEGY_MODE", "BUY").upper() == "SELL_THETA" else 1
             _strikes = sorted(strikes_set)
             _idx = min(range(len(_strikes)), key=lambda i: abs(_strikes[i] - atm_strike))
             _keep = set(_strikes[max(0, _idx - _N): _idx + _N + 1])
@@ -1715,6 +1717,7 @@ class AngelOneOptionsBroker:
                            price: float = 0,
                            order_type: str = "MARKET",
                            product_type: str = "INTRADAY",
+                           track_pending: bool = False,
                            allow_queue: bool = True) -> Optional[str]:
         """
         allow_queue=False: if rate-limited, return None immediately instead of queuing.
@@ -1840,7 +1843,7 @@ class AngelOneOptionsBroker:
                     })
                     
                     # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism (LIVE mode)
-                    if action == "BUY":
+                    if action == "BUY" or track_pending:  # L2: track SELL_THETA entry too, so fill-confirm works
                         pending_record = {
                             'order_id': order_id,
                             'symbol': symbol,
@@ -1851,7 +1854,7 @@ class AngelOneOptionsBroker:
                         }
                         self.pending_buy_orders[order_id] = pending_record
                         self.pending_buy_orders_by_symbol[symbol] = order_id
-                        logger.debug(f"ORDER_TRACKING: Pending BUY tracked (LIVE) | {symbol} | order_id={order_id} | qty={quantity}")
+                        logger.debug(f"ORDER_TRACKING: Pending {action} tracked (LIVE) | {symbol} | order_id={order_id} | qty={quantity}")
                     
                     return order_id
                 elif isinstance(response, dict) and response.get('status'):
@@ -1869,7 +1872,7 @@ class AngelOneOptionsBroker:
                     })
                     
                     # 🔧 CRITICAL: Track pending BUY orders for confirmation mechanism (LIVE mode - dict response)
-                    if action == "BUY":
+                    if action == "BUY" or track_pending:  # L2: track SELL_THETA entry too, so fill-confirm works
                         pending_record = {
                             'order_id': order_id,
                             'symbol': symbol,
@@ -1880,7 +1883,7 @@ class AngelOneOptionsBroker:
                         }
                         self.pending_buy_orders[order_id] = pending_record
                         self.pending_buy_orders_by_symbol[symbol] = order_id
-                        logger.debug(f"ORDER_TRACKING: Pending BUY tracked (LIVE dict) | {symbol} | order_id={order_id} | qty={quantity}")
+                        logger.debug(f"ORDER_TRACKING: Pending {action} tracked (LIVE dict) | {symbol} | order_id={order_id} | qty={quantity}")
                     
                     return order_id
                 else:
@@ -3244,7 +3247,8 @@ class AngelOneOptionsBroker:
         threading.Thread(target=_do_write, daemon=True, name=f"candle-cache-write-{cache_key}").start()
 
     def get_historical_data(self, symbol: str, interval: str = "FIVE_MINUTE",
-                           days_back: int = 2, exchange: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+                           days_back: int = 2, exchange: Optional[str] = None,
+                           force_refresh: bool = False) -> Optional[List[Dict[str, Any]]]:
         """
         Get historical candlestick data for a symbol.
 
@@ -3252,7 +3256,11 @@ class AngelOneOptionsBroker:
             symbol: Symbol name (e.g., 'BANKNIFTY', 'NIFTY')
             interval: Time interval ('ONE_MINUTE', 'FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR', 'ONE_DAY')
             days_back: Number of days of historical data to fetch
-            
+            force_refresh: Skip both cache layers and hit the API directly. The 300s TTL
+                below is fine for RSI/MACD confirmation but too stale for anything tracking
+                intraday regime/trend shifts on a ~1min cadence (e.g. market_regime_daemon.py).
+                Still writes the fresh result back to both caches for other callers.
+
         Returns:
             List of OHLC candles or None if failed
         """
@@ -3262,22 +3270,23 @@ class AngelOneOptionsBroker:
                 logger.warning(f"HISTORICAL: Not authenticated for {symbol}")
                 return None
 
-            # Check broker-level cache before hitting the API.
-            # RSI/MACD on 5m/15m candles don't need sub-5-minute freshness.
             hist_cache_key = f"{symbol}:{interval}:{days_back}"
-            cached_entry = self._historical_data_cache.get(hist_cache_key)
-            if cached_entry is not None:
-                cached_data, cached_at = cached_entry
-                if time.time() - cached_at < self._historical_cache_ttl:
-                    logger.debug(f"HISTORICAL: CACHE_HIT for {symbol} {interval} (age={(time.time()-cached_at):.0f}s)")
-                    return cached_data
+            if not force_refresh:
+                # Check broker-level cache before hitting the API.
+                # RSI/MACD on 5m/15m candles don't need sub-5-minute freshness.
+                cached_entry = self._historical_data_cache.get(hist_cache_key)
+                if cached_entry is not None:
+                    cached_data, cached_at = cached_entry
+                    if time.time() - cached_at < self._historical_cache_ttl:
+                        logger.debug(f"HISTORICAL: CACHE_HIT for {symbol} {interval} (age={(time.time()-cached_at):.0f}s)")
+                        return cached_data
 
-            # Check shared cross-process cache (avoids redundant fetches from OTM/ITM/CE bots)
-            shared_data = self._read_shared_candle_cache(hist_cache_key)
-            if shared_data is not None:
-                self._historical_data_cache[hist_cache_key] = (shared_data, time.time())
-                logger.debug(f"HISTORICAL: SHARED_CACHE_HIT for {symbol} {interval}")
-                return shared_data
+                # Check shared cross-process cache (avoids redundant fetches from OTM/ITM/CE bots)
+                shared_data = self._read_shared_candle_cache(hist_cache_key)
+                if shared_data is not None:
+                    self._historical_data_cache[hist_cache_key] = (shared_data, time.time())
+                    logger.debug(f"HISTORICAL: SHARED_CACHE_HIT for {symbol} {interval}")
+                    return shared_data
 
             resolved_exchange = exchange or self._get_underlying_cash_exchange(symbol)
             token = self.get_instrument_token(symbol, exchange=resolved_exchange)

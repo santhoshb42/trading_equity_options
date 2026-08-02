@@ -17,6 +17,7 @@ import traceback
 from threading import RLock
 import atexit
 import os
+from pathlib import Path
 
 # Per-bot concurrency cap: limits simultaneous broker-heavy alert threads to prevent OOM.
 # Threads start immediately (webhook returns 202 at once); only the broker work is gated.
@@ -38,6 +39,59 @@ from .optsignalvalidator import (
     OptionsSignalValidator, get_options_signal_filter
 )
 from .optlogging import logger, log_alert, log_signal_validation, log_event
+
+# ============================================================================
+# MARKET REGIME READER — reads the shared NIFTY trend snapshot published by
+# tools/market_regime_daemon.py (one writer, all 4 bots read). GOOD/NEUTRAL/BAD
+# capital caps are equal in OptionsCapitalConfig (sizing stays a no-op), but
+# the BAD-regime recovery check below (entry_advice) is a LIVE PAPER gate as
+# of 2026-07-14: BAD + not-recovering rejects new entries; NEUTRAL/GOOD never
+# blocked (user: "in NEUTRAL some ups and downs are fine").
+# ============================================================================
+_MARKET_REGIME_FILE = DATA_DIR.parent.parent.parent / "tools" / "market_regime.json"
+_MARKET_REGIME_STALE_SECONDS = 90
+_MARKET_REGIME_READ_TTL = 3  # seconds — avoid a file read on every single alert
+_market_regime_cache = {"value": "NEUTRAL", "read_at": 0.0}
+_market_regime_snapshot_cache = {"snapshot": None, "read_at": 0.0}
+
+
+def _read_market_regime_snapshot() -> Optional[dict]:
+    """Read the daemon's full latest snapshot (market_trend, entry_advice, etc).
+    Returns None on any miss (missing file, stale >90s, malformed JSON) — callers
+    must fail open (ALLOW) on None, a stalled daemon must never silently block
+    every trade."""
+    now = time.time()
+    if now - _market_regime_snapshot_cache["read_at"] < _MARKET_REGIME_READ_TTL:
+        return _market_regime_snapshot_cache["snapshot"]
+    snapshot = None
+    try:
+        with open(_MARKET_REGIME_FILE, 'r') as fh:
+            raw = json.load(fh)
+        computed_at = datetime.fromisoformat(raw["computed_at"])
+        age = (datetime.now().astimezone() - computed_at).total_seconds()
+        if age <= _MARKET_REGIME_STALE_SECONDS:
+            snapshot = raw
+    except Exception:
+        snapshot = None
+    _market_regime_snapshot_cache["snapshot"] = snapshot
+    _market_regime_snapshot_cache["read_at"] = now
+    return snapshot
+
+
+def _read_market_regime(fallback: str = "NEUTRAL") -> str:
+    """Read the daemon's latest NIFTY regime. Fail-open to `fallback` (caller
+    passes the alert's own market_trend field, itself defaulting to NEUTRAL)
+    on any miss: missing file, stale snapshot, or malformed JSON — a stalled
+    daemon must never silently gate/resize every trade."""
+    now = time.time()
+    if now - _market_regime_cache["read_at"] < _MARKET_REGIME_READ_TTL:
+        return _market_regime_cache["value"]
+    snapshot = _read_market_regime_snapshot()
+    value = str(snapshot.get("market_trend", fallback)).strip().upper() if snapshot else fallback
+    _market_regime_cache["value"] = value
+    _market_regime_cache["read_at"] = now
+    return value
+
 
 # Entry filter engine integration
 try:
@@ -233,6 +287,28 @@ def create_options_api_app():
             elapsed = time.time() - start_time
             result_status = result.get('status', 'unknown') if isinstance(result, dict) else 'unknown'
             logger.info(f"ALERT_TIMING [{tname}]: symbol={symbol} | status={result_status} | sem_wait_ms={sem_wait_ms:.0f} | proc_ms={proc_ms:.0f} | total_ms={elapsed*1000:.0f}")
+            # Single per-alert outcome line (grep ALERT_RESULT): symbol | SELECT/REJECT [| reason]
+            if result_status == 'success':
+                logger.info(f"ALERT_RESULT: {symbol} | SELECT")
+                _tail = f"SELECT | {(result.get('contract') or result.get('strike') or '') if isinstance(result, dict) else ''}"
+            else:
+                _rr = (result.get('reason') or result.get('message') or result_status) if isinstance(result, dict) else result_status
+                logger.info(f"ALERT_RESULT: {symbol} | REJECT | {_rr}")
+                _tail = f"REJECT | {_rr}"
+            # Dedicated per-alert audit file: logs/<date>/trades.log
+            # timestamp | symbol | alert_price | SELECT/REJECT | strike(contract) or reason
+            try:
+                from .optlogging import LOGS_DIR
+                _day = LOGS_DIR / datetime.now().strftime("%Y-%m-%d")
+                _day.mkdir(parents=True, exist_ok=True)
+                _tf = _day / "trades.log"
+                _new = not _tf.exists()
+                with open(_tf, "a") as _fh:
+                    if _new:
+                        _fh.write("timestamp | symbol | alert_price | result | strike/reason\n")
+                    _fh.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {symbol} | {alert.get('price', '')} | {_tail}\n")
+            except Exception as _e:
+                logger.debug(f"TRADE_LOG_WRITE_FAILED: {symbol} | {_e}")
             _details = _build_alert_completion_details(alert, result, elapsed * 1000)
             if isinstance(_details, dict):
                 _details['sem_wait_ms'] = round(sem_wait_ms, 0)
@@ -778,6 +854,8 @@ def create_options_api_app():
                     gain_percent = 0
                     if entry_premium > 0:
                         gain_percent = ((current_ltp - entry_premium) / entry_premium) * 100
+                        if pos.get('action') == 'SELL':   # L4: a short gains when premium FALLS
+                            gain_percent = -gain_percent
                     
                     # Detect stagnant positions (0% gain for 24+ hours)
                     is_stagnant = False
@@ -1501,6 +1579,105 @@ def _build_alert_indicator_snapshot(*, alert: Dict[str, Any], market_trend: str,
 # Disabled neural ML to reduce memory footprint and simplify alert processing
 # Kept as separate file for future use with proper integration
 
+def _process_exit_signal(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
+    """Pine-driven EXIT (e.g. VWAP band breakdown, alert has is_exit=true).
+
+    Closes the open CE position for this underlying IF one is still held. If the bot already
+    exited it (TRIAL_SL / HARD_SL / profit-floor / EOD), this is a safe no-op — the bot's own
+    position table is the single source of truth, and Pine's 'in trade' view may be stale. Two
+    layers make it race-safe: (1) we look up the open position here, and (2) monitor.close_position()
+    itself no-ops when the symbol isn't found and holds a double-close lock, so a concurrent
+    bot-managed exit can't produce a double SELL.
+    """
+    timestamp = datetime.now().isoformat()
+    raw_symbol = str(alert.get('symbol', 'UNKNOWN'))
+    underlying = raw_symbol.upper().strip()
+    if underlying.startswith('NSE:'):
+        underlying = underlying[4:]
+
+    monitor = state.get('monitor')
+    if not monitor:
+        logger.warning(f"EXIT_SIGNAL: monitor unavailable | underlying={underlying}")
+        return {'symbol': raw_symbol, 'timestamp': timestamp, 'status': 'rejected',
+                'reason': 'monitor not initialized', 'stage': 'exit_signal'}
+
+    # Find the OPEN option position for this underlying (skip already-closed rows).
+    open_pos = None
+    for pos in monitor.get_all_positions():
+        if pos.get('exit_premium') or pos.get('exit_time'):
+            continue
+        if str(pos.get('underlying', '')).upper().strip() == underlying:
+            open_pos = pos
+            break
+
+    if not open_pos:
+        # Already exited by a bot-managed stop, or never opened. This is the intended no-op —
+        # exactly the TRIAL_SL/HARD_SL-already-fired case the exit design has to tolerate.
+        logger.info(f"EXIT_SIGNAL: NO_OPEN_POSITION | underlying={underlying} | "
+                    f"already exited or never held — ignoring Pine exit (no-op)")
+        log_alert(alert=alert, status='exit_noop',
+                  details={'underlying': underlying, 'reason': 'no_open_position'})
+        return {'symbol': raw_symbol, 'timestamp': timestamp, 'status': 'noop',
+                'reason': f'No open position for {underlying} (already exited)', 'stage': 'exit_signal'}
+
+    option_symbol = open_pos.get('symbol')
+    entry_premium = open_pos.get('entry_premium', 0) or 0
+    # Exit-fill LTP: live current_premium first, then broker, then entry_premium as last resort
+    # (mirrors the EOD squareoff fallback hierarchy).
+    current_ltp = open_pos.get('current_premium') or open_pos.get('current_ltp')
+    if not current_ltp:
+        try:
+            live_ltp = state['broker'].get_ltp(option_symbol, 'NFO')
+            current_ltp = float(live_ltp) if live_ltp else None
+        except Exception:
+            current_ltp = None
+    if not current_ltp:
+        current_ltp = entry_premium
+        logger.warning(f"EXIT_SIGNAL: {option_symbol} | no live LTP, using entry_premium={entry_premium}")
+
+    logger.info(f"EXIT_SIGNAL: CLOSING | underlying={underlying} | symbol={option_symbol} | ltp={current_ltp}")
+    pnl_result = monitor.close_position(option_symbol, current_ltp, "VWAP_EXIT_SIGNAL")
+
+    if pnl_result:
+        pnl = pnl_result.get('pnl')
+        log_event("VWAP_EXIT_SIGNAL_CLOSED",
+                  f"✅ Pine exit closed {option_symbol} (underlying {underlying})"
+                  + (f" | PnL: ₹{pnl:.2f}" if isinstance(pnl, (int, float)) else ""),
+                  symbol=option_symbol, underlying=underlying)
+        return {'symbol': option_symbol, 'timestamp': timestamp, 'status': 'closed',
+                'reason': 'VWAP exit signal', 'pnl': pnl, 'stage': 'exit_signal'}
+
+    # close_position returned None: raced with a bot-managed exit (double-close guard) or the
+    # position vanished between lookup and close. Both are safe no-ops.
+    logger.info(f"EXIT_SIGNAL: CLOSE_NOOP | {option_symbol} | close_position returned None "
+                f"(already closing/closed by a bot-managed exit) — safe no-op")
+    return {'symbol': option_symbol, 'timestamp': timestamp, 'status': 'noop',
+            'reason': 'position already closing/closed (bot-managed exit won the race)',
+            'stage': 'exit_signal'}
+
+
+def _theta_sell_contract(chain, spot, alert_ctype, bot_mode):
+    """SELL_THETA strike/side selection (2026-07-30). CE alert (bullish) -> SELL a PUT below spot;
+    PE alert (bearish) -> SELL a CALL above spot. bot_mode ITM = immediate strike, OTM = next (2nd).
+    Returns (contract, sold_type) or None if that strike isn't listed."""
+    try:
+        sold_type = 'PE' if alert_ctype == 'CE' else 'CE'
+        steps = 1 if str(bot_mode).upper() == 'ITM' else 2   # ITM=immediate, OTM=next
+        cons = [c for c in chain.contracts.values()
+                if c.contract_type == sold_type and getattr(c, 'strike', 0) > 0]
+        if not cons:
+            return None
+        if sold_type == 'PE':                # PUT: strikes BELOW spot, nearest first
+            cand = sorted([c for c in cons if c.strike < spot], key=lambda c: -c.strike)
+        else:                                # CALL: strikes ABOVE spot, nearest first
+            cand = sorted([c for c in cons if c.strike > spot], key=lambda c: c.strike)
+        if len(cand) < steps:
+            return None
+        return (cand[steps - 1], sold_type)
+    except Exception:
+        return None
+
+
 def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     """Process single options alert with detailed logging"""
     _entry_ip: set = state.get('entry_in_progress', set())
@@ -1530,7 +1707,14 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # CRITICAL: Check broker session health BEFORE processing alert
         # This prevents alerts from being silently dropped due to Invalid Token
         state['broker']._detect_and_fix_invalid_token()
-        
+
+        # ── PINE-DRIVEN EXIT SIGNAL (is_exit=true) ──
+        # Route BEFORE signal validation: an exit carries action=SELL, which the CE validator
+        # would otherwise reject as a PE entry. The handler closes the open position for this
+        # underlying if one exists, else no-ops (TRIAL_SL/HARD_SL may have already exited it).
+        if str(alert.get('is_exit', '')).strip().lower() == 'true':
+            return _process_exit_signal(alert, state)
+
         # Validate signal
         is_valid, processed, reason = state['signal_filter'].validate(alert)
         
@@ -1646,13 +1830,29 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 pass
         
         # ====================================================================
-        # MARKET TREND GATE  (Pine Script 7.18-E → market_trend alert field)
+        # MARKET TREND GATE  (bot-computed NIFTY regime, tools/market_regime_daemon.py
+        # → falls back to Pine's market_trend alert field, then NEUTRAL, if the
+        # daemon snapshot is missing/stale)
         # GOOD    → trade at CAP_PER_TRADE_GOOD    (2x when capital allows)
         # NEUTRAL → trade at CAP_PER_TRADE_NEUTRAL  (1x, default for missing)
         # BAD     → use the configured BAD-trend budget for the underlying
         # ====================================================================
-        market_trend   = str(alert.get('market_trend', 'NEUTRAL')).strip().upper()
-        cap_this_trade = OptionsCapitalConfig.get_cap_for_symbol_and_trend(underlying, market_trend)
+        alert_market_trend = str(alert.get('market_trend', 'NEUTRAL')).strip().upper()
+        market_trend   = _read_market_regime(fallback=alert_market_trend)
+        # H13.1 SIZING TIER — session-cumulative NIFTY health (daemon field session_health:
+        # efficiency>=8% AND net>+0.05% measured from 09:30 to now), NOT the noisy trailing
+        # 15-min market_trend (that stays the H7b BLOCK signal below). 20-day evidence: trades
+        # during HEALTHY sessions +9.5% vs WEAK -9.4%, but only 8/18 healthy days positive ->
+        # sizing signal only, never a veto. HEALTHY -> GOOD cap, everything else (WEAK/NA/stale
+        # snapshot) -> NEUTRAL cap. Sizing master switch OPTIONS_MARKET_TREND_SIZING_ENABLED
+        # still governs; with it off, everything sizes as NEUTRAL.
+        _sizing_snapshot = _read_market_regime_snapshot()
+        session_health = (_sizing_snapshot or {}).get("session_health", "NA")
+        if OptionsCapitalConfig.MARKET_TREND_SIZING_ENABLED:
+            trend_for_sizing = "GOOD" if session_health == "HEALTHY" else "NEUTRAL"
+        else:
+            trend_for_sizing = "NEUTRAL"
+        cap_this_trade = OptionsCapitalConfig.get_cap_for_symbol_and_trend(underlying, trend_for_sizing)
         if cap_this_trade == 0.0:
             logger.warning(
                 f"ALERT_PROCESS: MARKET_TREND_BUDGET_REJECTED | symbol={symbol} "
@@ -1670,10 +1870,56 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 'market_trend': market_trend,
                 **base_context,
             }
-        logger.debug(
+        logger.info(
             f"ALERT_PROCESS: MARKET_TREND_OK | symbol={symbol} "
-            f"| market_trend={market_trend} | cap_this_trade=₹{cap_this_trade:.0f}"
+            f"| market_trend={market_trend} | session_health={session_health} "
+            f"| sizing_tier={trend_for_sizing} | cap_this_trade=₹{cap_this_trade:.0f}"
         )
+
+        # ====================================================================
+        # BAD-REGIME RECOVERY GATE (live PAPER filter, added 2026-07-14)
+        # market_trend BAD alone doesn't distinguish "bottoming" from "still
+        # falling" — 07-13 opened BAD and recovered (good CE day), 07-14 went
+        # NEUTRAL->BAD and kept worsening (bad CE day). Block new entries only
+        # when BAD and the daemon's short-window momentum isn't recovering.
+        # NEUTRAL/GOOD are never touched by this gate. Fails open (ALLOW) if
+        # the daemon snapshot is stale/missing — see _read_market_regime_snapshot.
+        # Master switch: OPTIONS_BAD_REGIME_BLOCK_ENABLED (default true — this
+        # gate is live). Independent of MARKET_TREND_SIZING_ENABLED above.
+        # ====================================================================
+        if market_trend == "BAD":
+            regime_snapshot = _read_market_regime_snapshot()
+            entry_advice = (regime_snapshot or {}).get("entry_advice", "ALLOW")
+            if entry_advice == "BLOCK":
+                short_move = (regime_snapshot or {}).get("short_window_net_move_pct")
+                if OptionsCapitalConfig.BAD_REGIME_BLOCK_ENABLED:
+                    logger.warning(
+                        f"ALERT_PROCESS: BAD_REGIME_NOT_RECOVERING_REJECTED | symbol={symbol} "
+                        f"| short_window_net_move_pct={short_move}"
+                    )
+                    log_alert(alert=alert, status='bad_regime_not_recovering_rejected', details={
+                        'market_trend': market_trend,
+                        'short_window_net_move_pct': short_move,
+                    })
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': 'NIFTY in BAD regime and not recovering — no new entries until momentum turns',
+                        'stage': 'bad_regime_recovery_gate',
+                        'market_trend': market_trend,
+                        **base_context,
+                    }
+                # PAPER study mode (flag off): trade anyway but tag the alert so the
+                # H7b counterfactual (blocked-advice vs allowed trades) stays measurable.
+                logger.warning(
+                    f"ALERT_PROCESS: BAD_REGIME_SHADOW_BLOCK | symbol={symbol} "
+                    f"| short_window_net_move_pct={short_move} | trading anyway (block disabled)"
+                )
+                log_alert(alert=alert, status='bad_regime_shadow_block', details={
+                    'market_trend': market_trend,
+                    'short_window_net_move_pct': short_move,
+                })
 
         limit_rejection = _evaluate_entry_limits(
             alert=alert,
@@ -1697,7 +1943,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # ========================================================================
         pct_limit  = OptionsCapitalConfig.DAILY_LOSS_LIMIT_PCT
         min_trades = OptionsCapitalConfig.DAILY_CB_MIN_TRADES
-        if pct_limit > 0 and OptionsTradingConfig.TRADING_MODE != "PAPER":
+        # 2026-07-24 LIVE-READINESS: the breaker was gated `!= "PAPER"`, so it NEVER ran and was
+        # untested before real money would rely on it. Now it EVALUATES + LOGS in both modes (so
+        # the killswitch is genuinely exercised), but only ENFORCES the halt in LIVE — or in PAPER
+        # if OPTIONS_DAILY_CB_ENFORCE_IN_PAPER=true — so PAPER study data isn't cut by default.
+        if pct_limit > 0:
             live = OptionsCapitalConfig.get_today_live_summary()
             trades_today      = live['trades_today']
             total_pnl         = live['total_pnl']
@@ -1710,33 +1960,37 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"< min_trades={min_trades} | warming up"
                 )
             elif total_pnl_percent <= -pct_limit:
+                _enforce = (OptionsTradingConfig.TRADING_MODE == "LIVE" or
+                            os.getenv("OPTIONS_DAILY_CB_ENFORCE_IN_PAPER", "false").strip().lower() == "true")
                 logger.warning(
-                    f"ALERT_PROCESS: DAILY_LOSS_CIRCUIT_BREAKER | symbol={symbol} "
-                    f"| total_pnl_percent={total_pnl_percent:.2f}% "
-                    f"≤ -{pct_limit}% limit "
-                    f"| today_pnl=₹{total_pnl:.0f} "
+                    f"ALERT_PROCESS: DAILY_LOSS_CIRCUIT_BREAKER {'ENFORCED' if _enforce else 'OBSERVED(paper)'} "
+                    f"| symbol={symbol} | total_pnl_percent={total_pnl_percent:.2f}% "
+                    f"≤ -{pct_limit}% limit | today_pnl=₹{total_pnl:.0f} "
                     f"| budget_used=₹{budget_used:.0f} | trades={trades_today}"
                 )
-                log_alert(alert=alert, status='circuit_breaker_rejected', details={
+                log_alert(alert=alert, status=('circuit_breaker_rejected' if _enforce else 'circuit_breaker_observed'), details={
                     'total_pnl':         round(total_pnl, 2),
                     'total_pnl_percent': round(total_pnl_percent, 2),
                     'limit_pct':         pct_limit,
                     'budget_used':       round(budget_used, 2),
                     'trades_today':      trades_today,
+                    'enforced':          _enforce,
                 })
-                return {
-                    'symbol': symbol,
-                    'timestamp': timestamp,
-                    'status': 'rejected',
-                    'reason': (
-                        f'Daily loss circuit breaker: '
-                        f'{total_pnl_percent:.2f}% ≤ -{pct_limit}% '
-                        f'(₹{total_pnl:.0f} on ₹{budget_used:.0f} deployed)'
-                    ),
-                    'stage': 'daily_loss_circuit_breaker',
-                    'budget': round(budget_used, 2),
-                    **base_context,
-                }
+                if _enforce:
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': (
+                            f'Daily loss circuit breaker: '
+                            f'{total_pnl_percent:.2f}% ≤ -{pct_limit}% '
+                            f'(₹{total_pnl:.0f} on ₹{budget_used:.0f} deployed)'
+                        ),
+                        'stage': 'daily_loss_circuit_breaker',
+                        'budget': round(budget_used, 2),
+                        **base_context,
+                    }
+                # PAPER observe mode: logged that it WOULD halt; fall through (study data preserved)
             else:
                 logger.debug(
                     f"ALERT_PROCESS: CIRCUIT_BREAKER_OK "
@@ -2126,7 +2380,23 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: ATM_CONTRACTS | ce={ce.symbol} | pe={pe.symbol}")
         
         # Select contract based on action
-        selected_contract = ce if contract_type == 'CE' else pe
+        entry_action = 'BUY'
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            _bmode = os.getenv("BOT_MODE", "OTM").upper()
+            _theta = _theta_sell_contract(chain, alert_price, contract_type, _bmode)
+            if not _theta:
+                return {
+                    'symbol': symbol, 'timestamp': timestamp, 'status': 'rejected',
+                    'reason': f'SELL_THETA: no {"PUT" if contract_type=="CE" else "CALL"} strike '
+                              f'({"immediate" if _bmode=="ITM" else "next"}) listed',
+                    'stage': 'theta_strike_selection', 'expiry': expiry, **base_context,
+                }
+            selected_contract, contract_type = _theta[0], _theta[1]
+            entry_action = 'SELL'
+            logger.info(f"SELL_THETA: {symbol} alert -> SELL {contract_type} {selected_contract.symbol} "
+                        f"(mode={_bmode}, strike={selected_contract.strike})")
+        else:
+            selected_contract = ce if contract_type == 'CE' else pe
 
         # LIGHT chain skipped per-contract greeks (the ~2s bottleneck). Compute REAL greeks for
         # the SELECTED contract ONLY — this is the only contract whose greeks are used (greeks
@@ -2579,12 +2849,19 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
 
         logger.debug(f"ALERT_PROCESS: DYNAMIC_LOT_SIZING | contract={selected_contract.symbol} | premium=₹{pricing_premium:.2f} | order_type={entry_order_type} | lot_size={lot_size} | budget=₹{effective_budget} | requested_budget=₹{cap_this_trade} | market_trend={market_trend} | qty={quantity} | lots={quantity // lot_size} | actual_cost=₹{actual_cost:.2f} | utilization={utilization_pct:.1f}% | scaled_down_for_oi={scaled_down_for_oi}")
 
+        # L1: naked shorts block SPAN+exposure margin, not the premium credit. Gate the LIVE funds
+        # check on a conservative notional-based margin proxy for SELL entries (BUY = premium × qty).
+        if entry_action == 'SELL':
+            _sell_notional = float(getattr(selected_contract, 'strike', 0) or 0) * quantity
+            _required_cash = _sell_notional * OptionsTradingConfig.SELL_MARGIN_RATE
+        else:
+            _required_cash = actual_cost
         funds_rejection = _evaluate_broker_funds(
             alert=alert,
             state=state,
             symbol=symbol,
             timestamp=timestamp,
-            required_cash=actual_cost,
+            required_cash=_required_cash,
             base_context=order_context,
         )
         if funds_rejection:
@@ -2599,7 +2876,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     bot_type='options',
                     order_details={
                         'symbol': selected_contract.symbol,
-                        'action': 'BUY',
+                        'action': entry_action,
                         'quantity': quantity,
                         'price': pricing_premium,
                         'order_type': entry_order_type,
@@ -2614,10 +2891,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         for _attempt in range(3):
             _raw = state['broker'].place_options_order(
                 symbol=selected_contract.symbol,
-                action='BUY',
+                action=entry_action,
                 quantity=quantity,
                 price=pricing_premium,
                 order_type=entry_order_type,
+                track_pending=True,   # L2: track entry (incl. SELL_THETA) so LIVE fill-confirm resolves
                 allow_queue=False,
             )
             if _raw and not str(_raw).startswith("QUEUED_"):
@@ -2780,9 +3058,37 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         }
         if (OptionsTradingConfig.TRADING_MODE != "LIVE"
                 and OptionsTradingConfig.PAPER_SLIPPAGE_MODELING
+                and entry_action == 'SELL' and _real_bid > 0 and not spread_is_synthetic):
+            # SELL_THETA (2026-07-31): a short entry fills at the BID (you sell at bid). Phantom guard:
+            # a fresh bid can't sit wildly ABOVE the LTP; if it does, book at the LTP instead.
+            if _entry_ideal_ltp > 0 and _real_bid > _entry_ideal_ltp * float(os.getenv("OPTIONS_ENTRY_BID_MAX_FRACTION", "2.0")):
+                actual_entry_premium = _entry_ideal_ltp
+                entry_slippage_meta['phantom_bid_rejected'] = True
+                entry_slippage_meta['applied'] = False
+            else:
+                actual_entry_premium = _real_bid
+                entry_slippage_meta['applied'] = True
+        elif (OptionsTradingConfig.TRADING_MODE != "LIVE"
+                and OptionsTradingConfig.PAPER_SLIPPAGE_MODELING
                 and _real_ask > 0 and not spread_is_synthetic):
-            actual_entry_premium = _real_ask
-            entry_slippage_meta['applied'] = True
+            # PHANTOM-ASK GUARD (2026-07-30): a real BUY fills at the ask, but a fresh ask can never
+            # sit wildly BELOW the last-traded LTP (a bid-ask spread is a few %, not 70%). When the
+            # ask is a stale/phantom LOW quote (RADICO 4450CE: ltp ₹165.9 but ask ₹45.39, -73%),
+            # booking it manufactures a nonsensical entry basis (and a bogus SL). Trust the LTP (a
+            # real print, within the day range) over an egregiously-low ask. env-tunable, default 0.5.
+            _ask_min_frac = float(os.getenv("OPTIONS_ENTRY_ASK_MIN_FRACTION", "0.5"))
+            if _entry_ideal_ltp > 0 and _real_ask < _entry_ideal_ltp * _ask_min_frac:
+                logger.warning(
+                    f"ENTRY_PHANTOM_ASK_GUARD: {selected_contract.symbol} | ask ₹{_real_ask:.2f} is "
+                    f"{(1 - _real_ask / _entry_ideal_ltp) * 100:.0f}% below ltp ₹{_entry_ideal_ltp:.2f} "
+                    f"— stale/phantom quote, booking at ltp instead"
+                )
+                actual_entry_premium = _entry_ideal_ltp
+                entry_slippage_meta['phantom_ask_rejected'] = True
+                entry_slippage_meta['applied'] = False
+            else:
+                actual_entry_premium = _real_ask
+                entry_slippage_meta['applied'] = True
         else:
             # STALE-LTP GUARD (PAPER): AngelOne's LTP is the last-traded price and goes stale on
             # less-liquid strikes (it returns a frozen high value until the next trade prints). A
@@ -2879,7 +3185,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             strike=selected_contract.strike,
             expiry=expiry,
             contract_type=contract_type,
-            action='BUY',
+            action=entry_action,
             quantity=quantity,
             entry_premium=actual_entry_premium,
             order_id=order_id,

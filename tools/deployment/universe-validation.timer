@@ -1,0 +1,9 @@
+[Unit]
+Description=Run nightly F&O universe validation at 18:30 IST Mon-Fri
+
+[Timer]
+OnCalendar=Mon..Fri 18:30:00 Asia/Kolkata
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -86,3 +86,4 @@ Thumbs.db
 nohup.out
 *.backup.*
 *.startup_*
+tools/universe_study/data/

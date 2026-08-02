@@ -1,11 +1,214 @@
 //@version=6
-indicator("Sniper CE 9.12 – MACD Reversal (1-Min)", overlay=true, max_labels_count=500)
+indicator("Sniper CE 9.19 – Explosive Burst (1-Min)", overlay=true, max_labels_count=500)
 // IMPORTANT: Run this script on 1-MINUTE chart only
 // Trading window: 09:30 - 15:00 IST (GOOD/NEUTRAL market)
 //
 // ═══════════════════════════════════════════════════════════════════════
 // CHANGE HISTORY — newest first
 // ═══════════════════════════════════════════════════════════════════════
+//
+// v9.19 — 2026-07-04 — Strip back to literal spec: SHREECEM still fired CONT at the peak on v9.18
+//
+//  SYMPTOM: v9.18 (price-scaled floor lowered) still produced a CONT entry right at the crest of a
+//  huge SHREECEM spike — the v9.16 dip-gate (macdHist[1] < macdHist[2]) that was supposed to force
+//  CONT to fire at the pause→resume kink clearly wasn't doing that job in practice.
+//
+//  USER CALL: stop layering incremental heuristics (dip-gate, price-scaled floor, strict multi-bar
+//  rising) on top of the spec — go back to literally what was asked, nothing added:
+//    1. macdHist flip -ve→+ve (or already +ve for CONT), 1st bloom candle ≥ 0.05 floor.
+//    2. Same 2-tier fire timing as always (≥2x → fire now; 1.5x-2x → defer one candle).
+//    3. Confluence = RSI/VWAP/EMA/Volume "building" over the previous 3 candles — NOT a rigid
+//       bar-by-bar staircase (that was v9.17's own invention, not requested).
+//
+//  CHANGES:
+//  1. Removed histFloorEff / price-scaling from all 4 burst gates — back to flat histFloor (0.05).
+//     A low flat floor clears almost immediately after a real flip, so it no longer delays the fire
+//     point (this was the DIXON/SHREECEM floor-mismatch problem from v9.14-v9.18 — moot now).
+//  2. Removed the v9.16 CONT dip-gate entirely — proven ineffective on SHREECEM, not part of the spec.
+//     CONT is back to: identical burst timing to DEEP, context split only by macdHist[2] > 0.
+//  3. risingRSI / risingEMA / vwapRising: now compare vs 3 bars ago (rsi>rsi[3] etc.) instead of a
+//     strict 1-2 bar staircase — matches "building over the previous 3 candles", tolerates normal
+//     1-min noise instead of demanding an unbroken monotonic run.
+//  4. risingVol: kept to volume > volMa only (NOT compared vs 3 bars ago). User's own catch: volume
+//     at a MACD flip is naturally choppy (capitulation sellers one candle, buyers the next) — it
+//     doesn't ramp smoothly like RSI/EMA/VWAP, so forcing it through the same 3-bar lens would
+//     penalize the exact reversal volume signature this is supposed to catch.
+//  5. histBurstMultiplier (1.15) / contStrongMult (1.3) UNCHANGED — kept over the literal 1.5x/2.0x
+//     from spec because live testing (v9.15) showed literal 1.5x/2.0x essentially never fires on real
+//     1-min MACD data. Flagged here explicitly rather than silently reverted.
+//
+//  TO REVERT v9.19 → v9.18: restore histFloorEff and the CONT dip-gate; risingRSI/EMA back to
+//  rsi[1]>=rsi[2] style; vwapRising back to vwapVal[1]; risingVol back to +volume[1]. Title → "9.18".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v9.18 — 2026-07-04 — Fix zero DEEP alerts on DIXON/SHREECEM: price is a bad proxy for hist scale
+//
+//  SYMPTOM: v9.17 replayed on 2026-07-03 DIXON and SHREECEM charts — both show an obvious, sharp
+//  MACD histogram V-recovery (deep negative → strong positive) with zero DEEP_MACD_REVERSAL labels
+//  anywhere, including the exact spike the user pointed at on DIXON (~12:45-13:00).
+//
+//  ROOT CAUSE: histFloorEff = max(histFloor, close * 0.04%) — a price-scaled floor added in v9.14 to
+//  avoid a meaningless flat 0.05 on expensive stocks. But price level tracks histogram AMPLITUDE
+//  poorly — it depends on the stock's own volatility/beta, not its price. Evidence from the two
+//  charts: DIXON (₹12,480) floor = 4.99, but DIXON's own histogram currently runs ~1.2-1.3 in
+//  magnitude — the floor was ~4x the stock's normal scale, so the 1st bloom candle could never
+//  clear it within the strict 1-2-bar-post-flip window (a smoothed oscillator builds gradually; by
+//  the time it reaches 5, the flip is long past, and the window has already closed). SHREECEM
+//  (₹26,750) floor = 10.7, but SHREECEM's histogram runs ~±27 — proportionally fine there. Same
+//  formula, opposite outcome: price alone does not predict which stocks it will break.
+//
+//  FIX: histFloorPricePct 0.04% → 0.01% (4x lower). Recalibrated directly off these two charts:
+//  DIXON floor → 1.25 (in line with its own normal scale, not 4x above it); SHREECEM floor → 2.67
+//  (still tiny relative to its ~27 range). No other gate touched.
+//
+//  TO REVERT v9.18 → v9.17: histFloorPricePct 0.01 → 0.04. Change title back to "Sniper CE 9.17".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v9.17 — 2026-07-04 — Fix near-zero alert frequency on 2026-07-03 replay: over-strict confluence
+//
+//  SYMPTOM: on 2026-07-03 charts, v9.16 fired almost no alerts anywhere.
+//
+//  ROOT CAUSE: deepReversalTrigger/momentumContinuationTrigger each AND together ~10 boolean
+//  conditions on a single bar (burst ratio + bloomingCandle + RSI/Vol/EMA/ADX/VWAP rising + day-open
+//  + time window [+ stockDayWinner for CONT]). Within that stack, risingRSI and risingEMA required
+//  TWO consecutive strictly-rising steps (rsi>rsi[1] and rsi[1]>=rsi[2]) while risingVol/vwapRising
+//  only required ONE. That inconsistency made RSI/EMA the tightest gates in the chain — demanding two
+//  back-to-back increments land on the exact bar a MACD burst also fires is a rare coincidence on noisy
+//  1-min data, not a deliberate quality bar the user asked for (the "no dip or flat" spec only requires
+//  the CURRENT step to hold).
+//
+//  FIX: risingRSI = rsi > rsi[1] (was + rsi[1]>=rsi[2]); risingEMA = ema9 > ema9[1] (was +
+//  ema9[1]>=ema9[2]). Now consistent with risingVol/vwapRising's 1-bar check. Still zero tolerance for
+//  any dip on the fire candle itself — nothing in the "explosive, no dip" spec is relaxed, only the
+//  redundant extra lookback bar is dropped.
+//
+//  TO REVERT v9.17 → v9.16: risingRSI/risingEMA add back "and rsi[1]>=rsi[2]" / "and ema9[1]>=ema9[2]".
+//  Change title back to "Sniper CE 9.16".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v9.16 — 2026-07-03 — Fix CONT firing late/at-peak: require a dip/pause before the burst
+//
+//  SYMPTOM: after v9.15, LUPIN produced one CONT alert that visibly fired near a local peak/rollover,
+//  not at a clean ignition kink. User supplied a reference diagram: DEEP fires at the trough where the
+//  histogram crosses negative→positive (the flip IS the kink); CONT should fire at the SAME kind of
+//  kink later in the day — a pause/dip in the histogram followed by a resumed burst — not partway up an
+//  already-running move.
+//
+//  ROOT CAUSE: contBurstStrong/Deferred only checked macdHist[2] > 0 (still in an up-day) and the
+//  ratio (macdHist >= macdHist[1]*mult). Nothing required macdHist[1] (the "1st bloom candle") to
+//  actually be a local low first — so the gate could fire on ANY 2-bar re-acceleration blip deep inside
+//  a trend, including a noisy secondary bump right before a top, which is what LUPIN hit.
+//
+//  FIX: added macdHist[1] < macdHist[2] (strong tier) / macdHist[2] < macdHist[3] (deferred tier) — the
+//  1st bloom candle must be a dip vs. the bar before it. This forces CONT to fire at a pause→resume
+//  kink, mirroring DEEP's negative→positive flip. No other logic changed.
+//
+//  TO REVERT v9.16 → v9.15: remove "macdHist[1] < macdHist[2] and " from contBurstStrong and
+//  "macdHist[2] < macdHist[3] and " from contBurstDeferred. Change title back to "Sniper CE 9.15".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v9.15 — 2026-07-03 — Fix zero-alert drought: burst ratio recalibrated to real MACD behavior
+//
+//  DATA: v9.14 (deployed, gate-by-gate debug labels added) produced ZERO DEEP/CONT alerts across
+//  full sessions on 3 different real stocks (UPL, SONA BLW, BHARAT FORGE). The debug overlay showed
+//  EVERY bloomingCandle bar reading "BURST✗" — the confluence gates (RSI/Vol/EMA/ADX/VWAP) were
+//  never even reached. The 1.5x/2.0x bar-over-bar histogram ratio was the sole, universal blocker.
+//
+//  ROOT CAUSE: MACD histogram is a smoothed oscillator (MACD line minus its own signal EMA, and the
+//  MACD line itself is a difference of two EMAs) — a 50-100% jump between two ADJACENT 1-minute
+//  candles is an extreme, rare event on real data, not what a normal ignition candle looks like.
+//  Requiring it structurally excluded almost every real move.
+//
+//  FIX: histBurstMultiplier 1.5 → 1.15, contStrongMult 2.0 → 1.3. Both tiers still require the
+//  histogram to be genuinely, directionally accelerating (not flat/noisy) — just at a threshold a
+//  real 1-min MACD histogram can actually clear. All other v9.13/v9.14 logic (all-rising confluence,
+//  no ceilings, confidence-gate fix, price-scaled floor) is untouched.
+//  Also removed the v9.14 gate-by-gate diagnostic labels (their job — finding this exact bug — is
+//  done); the clean MDR/CONT entry+type markers (LABELS section) are all that's left on the chart.
+//
+//  TO REVERT v9.15 → v9.14:
+//    histBurstMultiplier: 1.15 → 1.5.  contStrongMult: 1.3 → 2.0.
+//    Change indicator title back to "Sniper CE 9.14".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v9.14 — 2026-07-03 — Audit fixes: confidence-gate bug + correctness/scale issues (post-9.13 review)
+//
+//  Two independent reviews of v9.13 (one by Claude/Fable, one an external audit) surfaced issues.
+//  Most of the external audit's "logic vs intent" findings (contSustainedReady, DEEP's loose 3-bar
+//  flip, hardcoded 0.05, ADX ceiling) were ALREADY resolved by the v9.13 rewrite — verified against
+//  the actual code, not assumed. The following were real and are fixed here:
+//
+//  1. CRITICAL — cont_confidence floor (75.0) sat BELOW the bot's own 80% gate for
+//     MOMENTUM_CONTINUATION. Every genuine v9.13 trigger was silently discarded at the door.
+//     Confirmed live 2026-07-03: 320/320 rejections logged at exactly "75.0% < 80.0%" — the floor,
+//     not the underlying score, was always the binding number. Raised floor to 88.
+//  2. risingVol still carried volumeNotExcess (the 1.5-3.0× "chop band"), directly contradicting the
+//     explicit "no ceiling" spec — that band blocks exactly the 1.5-3x volume signature of a genuine
+//     ignition candle. Removed; risingVol is now purely rising + above-average, no ceiling.
+//  3. histFloor (0.05) is an ABSOLUTE MACD-histogram value, but the histogram scales with price —
+//     meaningless on a ₹11,700 stock (hist naturally runs 1-10+), borderline-strict on a ₹150 one.
+//     Added histFloorEff = max(histFloor, close × histFloorPricePct) and swapped it into all 4 burst
+//     gates (deep/cont × strong/deferred). The 1.5×/2.0× RATIO gates were already scale-invariant —
+//     only this one absolute-value floor needed fixing.
+//  4. dayOpen/prevDayClose used request.security(..., lookahead_off), which is correct in REALTIME
+//     but lags a full day on historical/replay bars (HTF values only resolve once the daily bar
+//     closes) — every past bar-replay audit was silently checked against yesterday's open/close.
+//     Live alerts were never wrong; this only restores trust in future replay-based tuning.
+//     dayOpen now computed locally (var + ta.change(time("D"))); prevDayClose/nifty50PrevClose use
+//     the close[1]-offset + lookahead_on pattern (safe from repaint, correct on replay too).
+//  5. DEEP fired on alert.freq_once_per_bar (mid-candle, unconfirmed — a wick could satisfy the 2×
+//     burst and reverse before bar close) while CONT used freq_once_per_bar_close. Aligned DEEP to
+//     bar-close so both categories only alert on a confirmed candle, and their telemetry snapshots
+//     (price/rsi/hist at alert time) are now comparable to each other.
+//
+//  NOT applied (flagged, not auto-applied — each changes trigger surface, needs explicit sign-off):
+//    - Candle-3 retry for the STRONG (2x+) tier: currently a 2x+ burst that misses candle-2 purely
+//      because one confluence gate lagged by a bar is lost forever (deferred-tier retry only covers
+//      the 1.5-2x MARGINAL case). Adding a symmetric retry would recover these but adds 2 more
+//      trigger paths (deep + cont).
+//    - stockDayWinner (CONT's "up on the day" gate) uses prevDayClose only — a stock that gapped
+//      down but is rallying hard intraday can never qualify, the mirror of the CDSL gap-up bug v9.2
+//      already fixed elsewhere via intradayChange. A cheap fix, but widens CONT's trigger surface.
+//
+//  TO REVERT v9.14 → v9.13:
+//    cont_confidence floor: 88.0 → 75.0.  risingVol: add "and volumeNotExcess" back.
+//    Replace histFloorEff with histFloor in all 4 burst gates; delete histFloorPricePct/histFloorEff.
+//    Restore dayOpen/prevDayClose/nifty50PrevClose to the 3 request.security(..., lookahead_off) lines.
+//    DEEP alert: freq_once_per_bar_close → freq_once_per_bar. Change indicator title back to "9.13".
+//
+// ───────────────────────────────────────────────────────────────────────
+//
+// v9.13 — 2026-07-03 — Explosive-only, catch the IGNITION not the fade (LIVE-driven rework)
+//
+//  LIVE 2026-07-03 (CE real money): 54 trades, 35% WR, net -₹9.8k. 70% of entries bought calls on
+//  stocks ALREADY up +1.5-2.5% that then stalled; 44% never ticked up (0% peak). ULTRATECH fired
+//  CONT with the MACD histogram already peaked/rolling over — i.e. at the fade, not the ignition.
+//  ROOT CAUSE: (1) contSustainedReady (v9.11) fired 3-bars-into-positive = late by design;
+//  (2) the confluence checked RANGES (rsi 40-82, adx 10-40) not RISING, so it passed a fading move.
+//
+//  REWRITE (user spec): ONLY 2 categories — DEEP_MACD_REVERSAL and MOMENTUM_CONTINUATION — sharing
+//  ONE 2-tier burst engine, split only by the pre-burst histogram sign:
+//    candle-0 = macdHist[1] ≥ 0.05 ; candle-1 = macdHist.
+//    Tier1 STRONG   : candle-1 ≥ 2.0× candle-0 → fire on candle-1 (immediate).
+//    Tier2 MARGINAL : candle-1 in [1.5×,2.0×)  → fire on candle-2 only if it holds.
+//    DEEP: macdHist[2] <= 0 (shift from negative).  CONT: macdHist[2] > 0 (dip-resume on +ve side).
+//  Confluence = ALL RISING, no ceilings: RSI/Volume/EMA rising sharply (2-bar), VWAP rising, ADX>20
+//  (light flip-confirmation floor — ADX lags, so we don't require it to rise on the burst candle).
+//  Any param flat/dipping ⇒ no trigger. DROPPED: contSustainedReady, stockNotOverextended, RSI/ADX
+//  ceilings, and MACD_REVERSAL + MOMENTUM_ACCELERATION (now false → never fire).
+//
+//  TO REVERT v9.13 → v9.12:
+//    Restore deepBurst*/risingAll block to the v9.12 earlyFlipBurst/earlyFlipQuality/deepReversalTrigger.
+//    Restore contBurst* (macdHist[2]<=0), contSustainedReady, combinedContReady, contRsiValid,
+//    contVolValid, contEmaRising, adxContValid, and the v9.12 momentumContinuationTrigger.
+//    Re-enable earlyContFlipTrigger. Change indicator title back to "Sniper CE 9.12".
+//
+// ───────────────────────────────────────────────────────────────────────
 //
 // v9.12 — 2026-06-24 — De-throttle CONTINUATION (too few alerts, late entries, top gainers blocked)
 //
@@ -372,10 +575,21 @@ volMultiplier       = input.float(1.2, "Volume Multiplier")
 niftySymbol         = input.symbol("NSE:NIFTY", "NIFTY Symbol")
 // v8.0: reverted 0.30 → 0.05 (original). The 1.5× burst multiplier on candle 2 is the real gate.
 histFloor           = input.float(0.05, "Histogram Floor Magnitude")
-histBurstMultiplier = input.float(1.5, "Histogram Burst Multiplier")
-// v9.10: CONTINUATION 2-tier burst — 2nd candle >= contStrongMult× the 1st → fire on candle 2;
-// if only histBurstMultiplier×-contStrongMult× → defer to candle 3 (fire only if it holds).
-contStrongMult      = input.float(2.0, "Continuation Strong Burst Multiplier (candle-2 fire)")
+// v9.14 added price-scaled floor scaling here; v9.19 REMOVED it from the burst gates (DIXON/SHREECEM
+// showed price is a bad proxy for histogram amplitude — see v9.18/v9.19 changelog). Back to the flat
+// histFloor above. Kept only for input-panel compatibility, same as histContMCFloor below.
+histFloorPricePct   = input.float(0.01, "Histogram Floor (% of price) [UNUSED v9.19]") / 100
+// v9.15 CRITICAL FIX: 1.5x/2.0x bar-over-bar was NEVER satisfied on real 1-min data — confirmed by
+// live debug run 2026-07-03: EVERY bloomingCandle bar on 3 different stocks (UPL, SONA BLW, BHARAT
+// FORGE), full sessions, showed "BURST✗" — the burst ratio was the sole, universal blocker; the
+// confluence gates (RSI/Vol/EMA/ADX/VWAP) were never even reached. Root cause: MACD histogram is a
+// smoothed oscillator (difference of two EMAs, itself further smoothed by the signal EMA) — a 50-100%
+// jump between two ADJACENT 1-min candles is an extreme, rare event, not what a normal ignition looks
+// like. Recalibrated to thresholds a genuine acceleration can actually clear: 1.15x/1.3x instead of
+// 1.5x/2.0x. Still requires real, directional acceleration (not a flat/noisy tick) — just not an
+// unrealistic one.
+histBurstMultiplier = input.float(1.15, "Histogram Burst Multiplier")
+contStrongMult      = input.float(1.3, "Continuation Strong Burst Multiplier (candle-2 fire)")
 // Data-driven: 9% WR disaster when vol > 1.5× with MACD 0.3-0.5
 volCeilMultiplier   = input.float(1.5, "Volume Ceiling Multiplier [UNUSED v9.5]")
 // v9.6: chop carve-out widened down to 1.5× — the 1.5-2.5× band was 13% win / -81% in live
@@ -405,9 +619,21 @@ volMa    = ta.sma(volume, volMaLen)
 // v8.0: ADX for trend bloom vs exhaustion gate
 [diPlus, diMinus, adxVal] = ta.dmi(14, 14)
 vwapVal  = ta.vwap(hlc3)
-prevDayClose  = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
-dayOpen       = request.security(syminfo.tickerid, "D", open,    barmerge.gaps_off, barmerge.lookahead_off)
-nifty50PrevClose = request.security(niftySymbol, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+// v9.14: dayOpen computed locally (var, zero repaint) instead of request.security("D", open, ...).
+// The security() form is correct in REALTIME but on historical/replay bars it lags a full day
+// (HTF values only resolve once the daily bar closes) — every bar-replay audit ("why did/didn't
+// this fire at 11:59") was silently checked against YESTERDAY's open/close. Live production alerts
+// were never affected (security() resolves the forming daily bar correctly intrabar in realtime),
+// but this removes the ambiguity entirely so future replay-based tuning is trustworthy.
+var float dayOpen = na
+if ta.change(time("D")) != 0
+    dayOpen := open
+// close[1] offset is immune to repaint even with lookahead_on (the standard safe HTF-close pattern)
+// and — unlike lookahead_off — resolves correctly on historical/replay bars too.
+prevDayClose  = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+nifty50PrevClose = request.security(niftySymbol, "D", close[1], barmerge.gaps_off, barmerge.lookahead_on)
+// nifty50Close (today's still-forming close) keeps lookahead_off — correct live; same one-day-lag
+// caveat as dayOpen applies only to replay of the market_trend telemetry field, not to live alerts.
 nifty50Close     = request.security(niftySymbol, "D", close,    barmerge.gaps_off, barmerge.lookahead_off)
 nifty50Change    = nifty50PrevClose > 0 ? (nifty50Close - nifty50PrevClose) / nifty50PrevClose * 100 : 0
 dayChange        = prevDayClose > 0 ? (close - prevDayClose) / prevDayClose * 100 : na
@@ -529,7 +755,7 @@ deepReversalSetup  = deepContext and sequenceReady
 //──────── PRICE STRUCTURE & VWAP FILTER ────────
 higherLow     = low > low[1] and low[1] >= low[2]
 bullishClose  = close > open
-vwapRising    = close > vwapVal and vwapVal > vwapVal[1]
+vwapRising    = close > vwapVal and vwapVal > vwapVal[3]
 // OR-based: accepts momentum on at least one dimension
 priceStructure = (higherLow or bullishClose) and vwapRising
 
@@ -601,19 +827,41 @@ macdReversalSetup    = earlyPositiveContext and sequenceReady   // much stricter
 
 // v9.4: Simplified unified flip detection — same burst logic, context split by MACD territory.
 // Replaces deepReversalTrigger complex gates + entire momentumAccelTrigger path.
-adxDeepValid         = adxVal > 15
+// ═══ v9.13: UNIFIED EXPLOSIVE 2-TIER BURST — only 2 categories fire (DEEP + CONT) ═══
+// candle-0 = macdHist[1] (first bloom, ≥ histFloor 0.05) ; candle-1 = macdHist (the fire bar).
+//   Tier 1 STRONG  : candle-1 ≥ contStrongMult(2.0)× candle-0        → fire on candle-1 (immediate).
+//   Tier 2 MARGINAL: candle-1 in [histBurstMultiplier(1.5)×, 2.0×)   → fire on candle-2 only if it holds.
+// DEEP = shift from ≤0 (macdHist[2] <= 0). CONT (below) = same burst on the +ve side (macdHist[2] > 0).
+// bloomingCandle (bullish body ≥ avg, close>ema9) is required inside each tier.
+// v9.19: back to the flat histFloor (0.05) per literal spec — no price scaling. Simpler, and a low
+// flat floor is trivially cleared right after a real flip, so it no longer delays the fire point.
+deepBurstStrong   = macdHist[2] <= 0 and macdHist[1] >= histFloor and macdHist >= macdHist[1] * contStrongMult and macdHist > macdHist[1] and bloomingCandle
+deepBurstDeferred = macdHist[3] <= 0 and macdHist[2] >= histFloor and macdHist[1] >= macdHist[2] * histBurstMultiplier and macdHist[1] < macdHist[2] * contStrongMult and macdHist >= macdHist[1] and bloomingCandle
+deepBurstReady    = deepBurstStrong or deepBurstDeferred
 
-// Shared burst: hist flip within 3 bars, 1.6x expansion, rising volume, bullish candle
-earlyFlipBurst = histShiftPrevBar and macdHist[1] >= histFloor and macdHist >= macdHist[1] * 1.60 and macdHist > macdHist[1] and close > open and volume > volume[1] and volumeNotExcess
+// Shared ALL-RISING confluence (NO ceilings): RSI / Volume / EMA rising SHARPLY (2 bars) + VWAP rising.
+// ADX = light flip-confirmation floor only (adxVal > 20). ADX is a smoothed lagging line; requiring it
+// to RISE on candle-1/2 would veto the fresh burst we want (that was the v9.12 "ADX lags candle-2" note).
+// Any one param flat/dipping ⇒ no trigger (kills the ULTRATECH-style "histogram peaked, params rolling over").
+// v9.14: dropped volumeNotExcess (the 1.5-3.0× "chop band") from risingVol — per explicit spec this
+// gate has NO ceiling; that band was blocking the exact 1.5-3x volume signature of a genuine ignition
+// candle, which was measured as bad only on LATE (post-burst, chasing) entries, not fresh candle-1/2 ones.
+// v9.19: confluence simplified to "building over the last 3 candles" (net change vs 3 bars ago),
+// not a rigid bar-by-bar staircase. Tolerates normal 1-min noise while still confirming a real
+// multi-candle build, per spec: "previous 3 candles RSI/VWAP/EMA/Volume building great".
+// Volume kept OUT of the 3-bar "building" comparison: right at a MACD flip, volume is naturally choppy
+// (sellers capitulating on one candle, buyers stepping in the next) — it spikes, it doesn't ramp
+// smoothly like RSI/EMA/VWAP. What matters is the FIRE candle itself being genuinely elevated.
+risingRSI  = rsi > rsi[3]
+risingVol  = volume > volMa
+risingEMA  = ema9 > ema9[3]
+adxConfirm = adxVal > 20
+risingAll  = risingRSI and risingVol and risingEMA and adxConfirm and vwapRising
 
-// Shared quality: RSI + VWAP + EMA trend + ADX floor + no wick rejection + above day open
-earlyFlipQuality = rsiRecovery and vwapRising and emaTrendFlexible and adxDeepValid and noUpperReject and close > dayOpen and inTradeWindow and isExpectedTimeframe
+deepReversalTrigger  = deepBurstReady and risingAll and priceAboveDayOpen and inTradeWindow and isExpectedTimeframe
 
-// Context split: MACD in negative territory = deep recovery; positive = pullback resumption
-deepReversalTrigger  = earlyFlipBurst and earlyFlipQuality and macdLine[1] <= 0
-earlyContFlipTrigger = earlyFlipBurst and earlyFlipQuality and macdLine[1] > 0
-
-// momentumAccelTrigger removed — covered by earlyContFlipTrigger (macdLine[1] > 0 path)
+// Legacy paths disabled (kept = false so the score/JSON blocks below still compile; only 2 categories fire).
+earlyContFlipTrigger = false
 momentumAccelTrigger = false
 
 // MACD Reversal: disabled by default (enableMACDReversal=false).
@@ -644,36 +892,18 @@ stockDayWinner    = not na(dayChange) and dayChange >= 0.25   // v8.0: was 0.50 
 //     wait one bar and fire on the 3rd candle only if it holds (macdHist >= the 2nd candle, no fizzle).
 //       macdHist[3]<=0 (flip 2 bars ago) · macdHist[2]>=0.05 (1st candle) ·
 //       macdHist[1] in [1.5×,2×) of macdHist[2] (the marginal 2nd candle) · macdHist>=macdHist[1] (3rd holds)
-contBurstStrong   = macdHist[2] <= 0 and macdHist[1] >= 0.05 and macdHist >= macdHist[1] * contStrongMult and macdHist > macdHist[1] and bloomingCandle
-contBurstDeferred = macdHist[3] <= 0 and macdHist[2] >= 0.05 and macdHist[1] >= macdHist[2] * histBurstMultiplier and macdHist[1] < macdHist[2] * contStrongMult and macdHist >= macdHist[1] and bloomingCandle
+// v9.19: dropped the v9.16 dip-gate (macdHist[1] < macdHist[2]) — confirmed on SHREECEM it did NOT
+// stop late/peak firing in practice, and it added complexity beyond spec. Back to the literal spec:
+// CONT = the identical burst timing as DEEP, context split only by macdHist[2] > 0 (already an up-day),
+// same flat histFloor.
+contBurstStrong   = macdHist[2] > 0 and macdHist[1] >= histFloor and macdHist >= macdHist[1] * contStrongMult and macdHist > macdHist[1] and bloomingCandle
+contBurstDeferred = macdHist[3] > 0 and macdHist[2] >= histFloor and macdHist[1] >= macdHist[2] * histBurstMultiplier and macdHist[1] < macdHist[2] * contStrongMult and macdHist >= macdHist[1] and bloomingCandle
 contBurstReady    = contBurstStrong or contBurstDeferred
-// v9.11: SUSTAINED-uptrend continuation — NO flip required. Fills the "top gainer never fires" gap:
-// a stock trending up all day keeps its histogram positive, so it never satisfies the candle-2
-// flip (macdHist[2]<=0) and was structurally invisible. This path fires on a re-acceleration while
-// the histogram STAYS positive: positive for 3 bars, paused 1 bar, now resuming up (>=0.05 body).
-// It is ADDITIVE (OR) and fully gated by the same rising confluence + rsi<78 ceiling below, so it
-// catches gap-up/trending leaders WITHOUT the blowoff-top problem the old earlyContFlip path had.
-contSustainedReady = macdHist > 0 and macdHist[1] > 0 and macdHist[2] > 0 and macdHist > macdHist[1] and macdHist[1] <= macdHist[2] and macdHist[1] >= 0.05 and bloomingCandle
-combinedContReady = contBurstReady or contSustainedReady
-// RSI: directional (rising) in healthy zone — not just absolute value
-contRsiValid      = rsi > 40 and rsi < 82 and rsi > rsi[1]   // v9.12: 78→82 (let hot gainers in; still blocks blowoff >82)
-// v9.8: Volume must be ABOVE AVERAGE *and RISING* bar-over-bar (was only > average).
-contVolValid      = volume > volMa * 1.0 and volume > volume[1] and volumeNotExcess
-// v9.8: EMA must be in uptrend AND rising (ema9 increasing) — was the loose emaTrendFlexible OR.
-contEmaRising     = ema9 > ema9[1]   // v9.12: dropped the lagging ema9>ema20 cross (it blocked candle-2 → late entry); keep ema9 rising
-// ADX: established uptrend, not exhausted. v9.6: cap 60 → 40 — ADX>40 = mature/exhausted, late entry.
-adxContValid      = adxVal > 10 and adxVal < 40   // v9.12: floor 18→10 (ADX lags a fresh burst → blocked candle-2 → late entry)
-// v9.8: CONT now requires the full rising confluence (hist burst + VWAP↑ + RSI↑ + Volume↑ + EMA↑)
-// as the best available proxy for a move that sustains — Pine cannot look 8-10 min ahead.
-// v9.9: removed the earlyContFlipTrigger OR-path — it bypassed the strict candle-2 burst and the
-// rsi<78 ceiling (rsiRecovery only checks rsi>40), letting blowoff-top entries through (e.g. BIOCON
-// fired at RSI 83.75, vol 8.2× on the fade). CONT now fires ONLY on the clean candle-2 bloom + confluence.
-// v9.11: dropped the standalone `macdHistRising` (2-bar rising) gate. It was redundant for the burst
-// paths (contBurstReady already implies hist rising) but it BLOCKED contSustainedReady, whose whole
-// point is a 1-bar pause (macdHist[1] <= macdHist[2]) before the resume. combinedContReady carries the
-// per-path momentum requirement, so removing this changes nothing for existing entries.
-// v9.12: removed closeInUpperHalf (redundant with bloomingCandle: close>open & body≥avg) to thin the gate stack.
-momentumContinuationTrigger = stockDayWinner and contRsiValid and contVolValid and combinedContReady and contEmaRising and adxContValid and vwapRising and stockNotOverextended and priceAboveDayOpen and inTradeWindow and isExpectedTimeframe and not deepReversalTrigger and not macdReversalTrigger
+// stockDayWinner (up ≥0.25% on the day) kept — a continuation implies an existing up-day.
+// DROPPED v9.13: contSustainedReady (the 3-bars-positive late path that fired ULTRATECH at the fade),
+// stockNotOverextended, and all RSI/ADX ceilings. CONT now fires ONLY on the fresh candle-1/2 burst
+// with every confluence param rising sharply — identical rules to DEEP, split only by macdHist[2] sign.
+momentumContinuationTrigger = contBurstReady and risingAll and stockDayWinner and priceAboveDayOpen and inTradeWindow and isExpectedTimeframe and not deepReversalTrigger and not macdReversalTrigger
 
 //──────── SIGNAL METRICS ────────
 trend_strength  = ema9 - ema9[1]
@@ -692,7 +922,12 @@ atr_pc          = close > 0   ? atr / close * 100 : 0.0
 signal_confidence = macdReversalTrigger  ? math.max(75.0, math.min(90.0, score / 85.0 * 100.0)) : math.min(90.0, score / 85.0 * 100.0)
 deep_confidence   = deepReversalTrigger  ? math.max(70.0, math.min(95.0,  deepScore / 75.0 * 100.0)) : math.min(95.0, deepScore / 75.0 * 100.0)
 mom_confidence    = momentumAccelTrigger ? math.max(80.0, math.min(90.0,  momScore / 80.0 * 100.0)) : math.min(90.0, momScore / 80.0 * 100.0)
-cont_confidence   = momentumContinuationTrigger ? math.max(75.0, math.min(90.0, contScore)) : math.min(90.0, contScore)
+// v9.14 CRITICAL FIX: this floor was 75.0, but the bot's own OPTIONS_MIN_CONFIDENCE_MOMENTUM_CONTINUATION
+// gate is 80 — EVERY genuine trigger was floored to exactly 75% and rejected at the door (confirmed live
+// 2026-07-03: 320/320 rejections logged at precisely "75.0% < 80.0%", zero variance = the floor, not the
+// score, was always the binding number). Raised to 88 (clears the 80 gate with headroom; a confirmed
+// 1.5-2x+ burst with every param rising sharply is a high-conviction setup and should score as one).
+cont_confidence   = momentumContinuationTrigger ? math.max(88.0, math.min(95.0, contScore)) : math.min(90.0, contScore)
 
 market_trend_label = nifty50Change >= 0.5 ? "GOOD" : nifty50Change > -0.4 ? "NEUTRAL" : "BAD"
 day_change         = prevDayClose > 0 ? (close - prevDayClose) / prevDayClose * 100 : na
@@ -717,7 +952,10 @@ alertcondition(momentumContinuationTrigger,  title="Momentum Continuation Entry"
 if macdReversalTrigger
     alert(jsonMsg_MACDReversal, alert.freq_once_per_bar_close)
 if deepReversalTrigger
-    alert(jsonMsg_DeepReversal, alert.freq_once_per_bar)
+    // v9.14: was freq_once_per_bar (fires mid-candle, unconfirmed — a wick can satisfy the 2x burst
+    // and be false by bar close; JSON snapshot of price/rsi/hist was captured at that same unconfirmed
+    // moment, so DEEP telemetry wasn't comparable to CONT's). Aligned to bar-close, same as CONT.
+    alert(jsonMsg_DeepReversal, alert.freq_once_per_bar_close)
 if momentumAccelTrigger
     alert(jsonMsg_MomentumAccel, alert.freq_once_per_bar)
 if momentumContinuationTrigger
@@ -744,3 +982,11 @@ plot(ema20,    color=color.orange, title="EMA20")
 plot(bbUpper,  color=color.gray,   title="BB Upper")
 plot(bbLower,  color=color.gray,   title="BB Lower")
 bgcolor(not isExpectedTimeframe ? color.new(color.red, 88) : na, title="Use 1-Minute Chart")
+
+// v9.14 diagnostic (gate-by-gate labels) removed after use — it did its job: on real 1-min data
+// (UPL + SONA BLW, full sessions) EVERY bloomingCandle bar showed "BURST✗". The confluence gates
+// (RSI/Vol/EMA/ADX/VWAP) were never even reached — the 1.5x/2x bar-over-bar histogram RATIO itself
+// is the sole blocker. See v9.15 note at the top of CHANGE HISTORY for the fix once approved.
+// Clean entry+type markers for historical review are the existing MDR (orange) / CONT (purple)
+// label.new + plotshape blocks above (LABELS section) — those already show entry + entry_type
+// exactly like the old v9.12 chart did; nothing new needed there once the burst ratio is fixed.
