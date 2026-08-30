@@ -1240,33 +1240,33 @@ class AngelOneOptionsBroker:
         atm_contracts_data_filtered = []
         strikes_set = set()
         
-        # Calculate strike range dynamically based on ATM value
-        # For large strikes, use a percentage-based window.
-        # For small strikes (100-5000), use absolute difference
-        if atm_strike > 10000:
-            # Large strikes (indices): ±300 pts gives ±3 BANKNIFTY strikes / ±6 NIFTY strikes
-            # max STRIKE_OFFSET used is ±1, so ±3 is a safe buffer
-            strike_range = 300
-        else:
-            # Small strikes (stocks): ±150 pts covers ±2-3 strikes for most symbols
-            strike_range = 150
-        
-        for cd in atm_contracts_data:
-            strike = cd.get('strike')
-            if strike is None:
-                continue
-            if abs(strike - atm_strike) <= strike_range:
-                atm_contracts_data_filtered.append(cd)
-                strikes_set.add(strike)
+        # Keep ±K strikes around ATM by RANK (interval-agnostic), not ±points. An absolute ±pts
+        # window starved wide-interval / high-strike names — a 100pt-strike stock (e.g. CUMMINSIND
+        # 5600) at ±150 kept only 1 strike below ATM, so the OTM SELL_THETA bot couldn't find the
+        # 2nd PUT strike below spot (7 "no strike (next) listed" rejects on 08-05). Count-based
+        # works for any strike spacing and stays perf-safe on tight-interval names (±K, not ±pts).
+        _sell_mode = os.getenv("OPTIONS_STRATEGY_MODE", "BUY").upper() == "SELL_THETA"
+        _K_each = int(os.getenv("OPTIONS_CHAIN_STRIKES_EACH_SIDE", "6" if _sell_mode else "2"))
+        _all_strk = sorted({cd.get('strike') for cd in atm_contracts_data
+                            if cd.get('strike') is not None and cd.get('strike') > 0})
+        if _all_strk:
+            _ai = min(range(len(_all_strk)), key=lambda i: abs(_all_strk[i] - atm_strike))
+            _keep_rank = set(_all_strk[max(0, _ai - _K_each): _ai + _K_each + 1])
+            for cd in atm_contracts_data:
+                strike = cd.get('strike')
+                if strike is not None and strike in _keep_rank:
+                    atm_contracts_data_filtered.append(cd)
+                    strikes_set.add(strike)
 
         # LIGHT: narrow to ±N STRIKES around ATM (not ±points). get_atm_contracts only ever
         # selects the strike nearest spot (ATM±1), so a ±3-strike window covers selection +
         # entry-premium with margin. Without this, tight-interval names (e.g. RELIANCE 10pt
         # strikes) balloon the LTP fetch to 60+ contracts when we use one.
         if light and atm_contracts_data_filtered:
-            # SELL_THETA needs the 2nd strike out (OTM bot sells the NEXT strike), so widen to +-2;
-            # BUY only ever selects ATM+-1, keep it at 1. (VBL 2026-07-31: +-1 missed the 460 next-strike.)
-            _N = 2 if os.getenv("OPTIONS_STRATEGY_MODE", "BUY").upper() == "SELL_THETA" else 1
+            # SELL_THETA OTM sells the 2nd strike out and needs margin, so keep ±K (default 6, same
+            # env as the coarse trim above — ±2 was too tight and starved the OTM sell side);
+            # BUY only ever selects ATM±1, keep it at 1.
+            _N = int(os.getenv("OPTIONS_CHAIN_STRIKES_EACH_SIDE", "6")) if os.getenv("OPTIONS_STRATEGY_MODE", "BUY").upper() == "SELL_THETA" else 1
             _strikes = sorted(strikes_set)
             _idx = min(range(len(_strikes)), key=lambda i: abs(_strikes[i] - atm_strike))
             _keep = set(_strikes[max(0, _idx - _N): _idx + _N + 1])
@@ -1293,6 +1293,14 @@ class AngelOneOptionsBroker:
             except Exception as e:
                 logger.warning(f"CHAIN_FETCH: ATM LTP fetch failed | {underlying} | {str(e)}")
         
+        # If the bulk LTP fetch was FULLY rate-limited (0 results), the per-contract retries below will
+        # ALL fail identically at ~1.5-2s each — for 24 contracts that's ~50s of latency (ETERNAL 08-06
+        # stalled 52s this exact way, producing a 1-min-stale entry). Skip the per-contract retry storm
+        # and use the fallback premium; the SELECTED contract's real price is fetched at the liquidity
+        # step regardless. Also cuts ~24 futile API calls/entry, easing the rate-limit pressure itself.
+        _bulk_ok = sum(1 for v in ltps.values() if v and v > 0)
+        _skip_ltp_retry = (_bulk_ok == 0 and len(all_symbols) > 2)
+
         # Add ONLY ATM contracts to chain (2 contracts: 1 CE + 1 PE)
         for contract_data in atm_contracts_data_filtered:
             symbol = contract_data['symbol']
@@ -1317,29 +1325,28 @@ class AngelOneOptionsBroker:
                 contract.ask = ltp * 1.02
                 logger.debug(f"CHAIN_FETCH: ATM {contract_data['contract_type']} | {symbol} | ltp=₹{ltp:.2f}")
             else:
-                # ⚠️ CRITICAL FIX: Retry LTP fetch if not available on first attempt
-                # This happens at market open when broker data isn't synced yet
-                logger.warning(f"CHAIN_FETCH: MISSING_LTP | {contract_data['contract_type']} | {symbol} | retrying...")
-                
-                import time
-                max_retries = 3
-                retry_delay = 0.5  # 500ms between retries
-                
-                for attempt in range(max_retries):
-                    try:
-                        time.sleep(retry_delay)
-                        single_ltp = self.get_ltp_bulk([symbol], exchange="NFO")
-                        
-                        if symbol in single_ltp and single_ltp[symbol] and single_ltp[symbol] > 0:
-                            ltp = single_ltp[symbol]
-                            contract.ltp = ltp
-                            contract.bid = ltp * 0.98
-                            contract.ask = ltp * 1.02
-                            logger.info(f"CHAIN_FETCH: RETRY_SUCCESS | {symbol} | ltp=₹{ltp:.2f} (attempt {attempt+1}/{max_retries})")
-                            break
-                    except Exception as retry_error:
-                        logger.debug(f"CHAIN_FETCH: RETRY_FAILED | {symbol} | attempt {attempt+1}/{max_retries} | {str(retry_error)}")
-                        continue
+                # bulk missed this symbol. Retry per-contract ONLY if the bulk partially worked; skip the
+                # retry storm when it was fully rate-limited (_skip_ltp_retry) and fall through to the
+                # fallback below — the SELECTED contract is priced for real at the liquidity step.
+                if not _skip_ltp_retry:
+                    logger.warning(f"CHAIN_FETCH: MISSING_LTP | {contract_data['contract_type']} | {symbol} | retrying...")
+                    import time
+                    max_retries = 3
+                    retry_delay = 0.5  # 500ms between retries
+                    for attempt in range(max_retries):
+                        try:
+                            time.sleep(retry_delay)
+                            single_ltp = self.get_ltp_bulk([symbol], exchange="NFO")
+                            if symbol in single_ltp and single_ltp[symbol] and single_ltp[symbol] > 0:
+                                ltp = single_ltp[symbol]
+                                contract.ltp = ltp
+                                contract.bid = ltp * 0.98
+                                contract.ask = ltp * 1.02
+                                logger.info(f"CHAIN_FETCH: RETRY_SUCCESS | {symbol} | ltp=₹{ltp:.2f} (attempt {attempt+1}/{max_retries})")
+                                break
+                        except Exception as retry_error:
+                            logger.debug(f"CHAIN_FETCH: RETRY_FAILED | {symbol} | attempt {attempt+1}/{max_retries} | {str(retry_error)}")
+                            continue
                 
                 # If still no LTP after retries, use conservative fallback
                 if contract.ltp == 0.0:
@@ -2458,6 +2465,22 @@ class AngelOneOptionsBroker:
                     spread_abs = max(ask - bid, 0.0) if bid > 0 and ask > 0 else 0.0
                     spread_pct = (spread_abs / ltp * 100.0) if ltp > 0 and spread_abs >= 0 else None
 
+                    # LTP FRESHNESS (2026-08-08): AngelOne's `ltp` = last-TRADED price, which stays at
+                    # the PRIOR-DAY CLOSE until the strike trades today (SUPREMEIND 3350PE booked at
+                    # ₹54=yesterday's close before it traded). exchTradeTime is the last actual trade
+                    # time — expose its age so callers can tell a stale last-trade from a live one and
+                    # price off the live book instead. Exchange time is IST; server runs IST (log ts
+                    # matches exchFeedTime), so a naive delta is correct.
+                    _ltt = quote_item.get('exchTradeTime') or quote_item.get('exchFeedTime')
+                    ltp_age_sec = None
+                    if _ltt:
+                        for _fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%y %H:%M:%S"):
+                            try:
+                                ltp_age_sec = (datetime.now() - datetime.strptime(_ltt, _fmt)).total_seconds()
+                                break
+                            except Exception:
+                                continue
+
                     market_data = {
                         'ltp': ltp,
                         'open': self._safe_float(quote_item.get('open')),
@@ -2470,6 +2493,8 @@ class AngelOneOptionsBroker:
                         'ask': ask,
                         'bid_ask_spread': spread_abs,
                         'bid_ask_spread_pct': spread_pct,
+                        'last_trade_time': _ltt,
+                        'ltp_age_sec': ltp_age_sec,
                         'timestamp': datetime.now().isoformat()
                     }
                     rate_limiter.record_call("market_data", True)

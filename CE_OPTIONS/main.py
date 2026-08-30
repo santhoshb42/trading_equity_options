@@ -688,7 +688,7 @@ class OptionsTradingBot:
                                     logger.warning(f"POSITION_MONITOR: EXPIRY_ALERT_FAILED | {str(e)}")
                     
                     # Check profit targets
-                    profitable = self.monitor.check_profit_targets()
+                    profitable = []  # DISABLED 2026-08-14: only TRIAL_SL/HARD_SL/STALE_CONSOLIDATION
                     if profitable:
                         # Record to learning engine
                         self._record_closed_positions_to_learning(profitable, "PROFIT_TARGET")
@@ -713,7 +713,7 @@ class OptionsTradingBot:
                     
                     # ⭐ CRITICAL: Check HARD SL FIRST (ultimate safety net)
                     # This runs BEFORE all other exit checks to ensure positions never exceed -10% loss
-                    hard_sl_exits = self.monitor.check_hard_stop_loss()
+                    hard_sl_exits = []  # DISABLED 2026-08-14: dup HARD_SL + BREAKEVEN_FLOOR off (check_stop_losses is the keeper)
                     if hard_sl_exits:
                         # Record to learning engine
                         self._record_closed_positions_to_learning(hard_sl_exits, "HARD_SL")
@@ -737,7 +737,7 @@ class OptionsTradingBot:
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: HARD_SL_ALERT_FAILED | {str(e)}")
 
-                    realtime_fade_exits = self.monitor.check_realtime_premium_fade_exit()
+                    realtime_fade_exits = []  # DISABLED 2026-08-14: only TRIAL_SL/HARD_SL/STALE_CONSOLIDATION
                     if realtime_fade_exits:
                         self._record_closed_positions_to_learning(realtime_fade_exits, "REALTIME_PREMIUM_FADE")
 
@@ -762,7 +762,7 @@ class OptionsTradingBot:
                     
                     # ⭐ NEW: Check momentum reversal (EARLY EXIT to prevent hard SL)
                     # This should run AFTER hard SL check for layered protection
-                    momentum_exits = self.monitor.check_momentum_reversal()
+                    momentum_exits = []  # DISABLED 2026-08-14: only TRIAL_SL/HARD_SL/STALE_CONSOLIDATION
                     if momentum_exits:
                         # Record to learning engine
                         self._record_closed_positions_to_learning(momentum_exits, "MOMENTUM_REVERSAL")
@@ -814,7 +814,7 @@ class OptionsTradingBot:
                     
                     # ⭐ STALE TIMEOUT: Exit non-trending positions >20min without momentum
                     # Catch positions that never developed into trending moves
-                    stale_timeout_exits = self.monitor.check_stale_positions()
+                    stale_timeout_exits = []  # DISABLED 2026-08-14: STALE_TIMEOUT off (keep STALE_CONSOLIDATION only)
                     if stale_timeout_exits:
                         # Record to learning engine
                         self._record_closed_positions_to_learning(stale_timeout_exits, "STALE_TIMEOUT")
@@ -840,7 +840,7 @@ class OptionsTradingBot:
                     
                     # ⭐ NEW: Check IV crash (EARLY EXIT when premium dies)
                     # This is complementary to momentum reversal - catches IV collapse signal
-                    iv_crash_exits = self.monitor.check_iv_crash()
+                    iv_crash_exits = []  # DISABLED 2026-08-14: only TRIAL_SL/HARD_SL/STALE_CONSOLIDATION
                     if iv_crash_exits:
                         # Record to learning engine
                         self._record_closed_positions_to_learning(iv_crash_exits, "IV_CRASH")
@@ -899,7 +899,48 @@ class OptionsTradingBot:
                                     )
                                 except Exception as e:
                                     logger.warning(f"POSITION_MONITOR: STOPLOSS_ALERT_FAILED | {str(e)}")
-                    
+
+                    # TRIAL_SL (I4): SELL_THETA peak-based profit-lock. Self-gates to SELL_THETA and
+                    # returns [] in shadow (OPTIONS_TRIAL_SL_ENABLED=false, logs SHADOW_TRIAL_SL only).
+                    trial_locked = self.monitor.check_trial_sl()
+                    if trial_locked:
+                        self._record_closed_positions_to_learning(trial_locked, "TRIAL_SL")
+                        for pos in trial_locked:
+                            print(f"   🎯 TRIAL_SL lock: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
+                            logger.info(f"POSITION_MONITOR: TRIAL_SL | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+                            if self.alert_manager:
+                                try:
+                                    self.alert_manager.alert_position_closed(
+                                        bot_type='options',
+                                        position={
+                                            'symbol': pos['symbol'],
+                                            'entry_price': pos.get('entry_premium', 0),
+                                            'exit_price': pos.get('exit_premium', 0),
+                                            'pnl': pos['pnl'],
+                                            'pnl_percent': pos.get('pnl_percent', 0),
+                                            'reason': 'TRIAL_SL profit-lock'
+                                        }
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"POSITION_MONITOR: TRIAL_SL_ALERT_FAILED | {str(e)}")
+
+                    # BROKER RATCHET (Option B, 2026-08-08): ratchet each SHORT's resting broker BUY-stop
+                    # DOWN as its peak profit crosses ladder tiers, so the profit-lock is broker-enforced
+                    # (survives a stall). Self-gates to SELL_THETA + a live SL order; no-op otherwise.
+                    try:
+                        self.monitor.check_broker_ratchet()
+                    except Exception as e:
+                        logger.warning(f"POSITION_MONITOR: BROKER_RATCHET_FAILED | {str(e)}")
+
+                    # STALE_CONSOLIDATION (I5): cut SELL_THETA shorts that never armed the trail after
+                    # N min (not moving). Self-gates to SELL_THETA + OPTIONS_STALE_ENABLED; [] otherwise.
+                    stale_cut = self.monitor.check_sell_stale()
+                    if stale_cut:
+                        self._record_closed_positions_to_learning(stale_cut, "STALE_CONSOLIDATION")
+                        for pos in stale_cut:
+                            print(f"   💤 STALE cut: {pos['symbol']} PnL: ₹{pos['pnl']:.2f}")
+                            logger.info(f"POSITION_MONITOR: STALE_CONSOLIDATION | {pos['symbol']} | PnL=₹{pos['pnl']:.2f}")
+
                     # Check trailing stop losses (TRIAL_SL) - profit locking mechanism
                     trailing_exited = self.monitor.check_trailing_stop_losses()
                     if trailing_exited:
@@ -948,7 +989,7 @@ class OptionsTradingBot:
                             try:
                                 start_time = time.time()
                                 logger.debug(f"POSITION_MONITOR: SENTIMENT_CHECK_ASYNC | starting background fetch")
-                                sentiment_exits = self.monitor.check_sentiment_exit()
+                                sentiment_exits = []  # DISABLED 2026-08-14: only TRIAL_SL/HARD_SL/STALE_CONSOLIDATION
                                 duration = time.time() - start_time
                                 
                                 if sentiment_exits:

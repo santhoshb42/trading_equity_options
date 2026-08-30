@@ -347,6 +347,7 @@ class OptionPosition:
         self.trial_sl_update_count = 0  # Count of TRIAL SL adjustments
         self.trial_sl_expected_threshold = None  # Expected threshold (5% or 10%) based on market at entry time
         self.hard_sl_price = None  # Hard SL: -20% from entry (default)
+        self.last_ltp_ok_ts = None  # FIX 4: last time a REAL broker LTP refreshed this position
         self.breakeven_floor_active = False  # Profit-floor engaged: hard SL raised to breakeven after being green
         
         # Rate limit optimization for modify_order (HYBRID strategy)
@@ -489,7 +490,7 @@ class OptionPosition:
             'entry_context': self.entry_context,
             # ── EXIT-CHANGE ANALYSIS (v2026-06-21: profit floor + trail-arm @4%) ──
             # Lets us measure, after 2-3 days, how the new exit rules behaved per trade.
-            'peak_pct': ((self.highest_premium - self.entry_premium) / self.entry_premium * 100) if self.entry_premium else 0,
+            'peak_pct': (((self.entry_premium - self.lowest_premium) if self.action == "SELL" else (self.highest_premium - self.entry_premium)) / self.entry_premium * 100) if self.entry_premium else 0,
             'breakeven_floor_active': getattr(self, 'breakeven_floor_active', False),
             'trial_sl_activation_threshold': getattr(self, 'trial_sl_expected_threshold', None),
             'hard_sl_price': getattr(self, 'hard_sl_price', None),
@@ -946,6 +947,15 @@ class OptionPositionMonitor:
         self.closed_positions: List[OptionPosition] = []  # Historical positions
         self.positions_file = DATA_DIR / "option_positions.json"
         self.pnl_history_file = DATA_DIR / "option_pnl_history.json"
+
+        # Early peak cut — see EARLY_PEAK_CUT block in check_stale_consolidation()
+        self._early_peak_cut_enabled = os.getenv("OPTIONS_EARLY_PEAK_CUT_ENABLED", "False").lower() == "true"
+        self._early_peak_cut_minutes = float(os.getenv("OPTIONS_EARLY_PEAK_CUT_MINUTES", "3"))
+        self._early_peak_cut_peak_pct = float(os.getenv("OPTIONS_EARLY_PEAK_CUT_PEAK_PCT", "1.0"))
+        logger.info(
+            f"EARLY_PEAK_CUT: enabled={self._early_peak_cut_enabled} | "
+            f"minutes={self._early_peak_cut_minutes} | peak_pct={self._early_peak_cut_peak_pct}"
+        )
         
         # Thread-safety: prevent concurrent close_position() calls for the same symbol.
         # The async sentiment-exit thread and the main monitor loop both call close_position(),
@@ -1010,6 +1020,14 @@ class OptionPositionMonitor:
         # Cap the arm threshold so the trail engages early and protects the +3-6% give-back zone.
         # Trailing still follows peak-minus-gap upward, so upside is unaffected.
         activation_threshold = min(activation_threshold, OptionsTradingConfig.TRIAL_SL_BASE_ACTIVATION_PCT)
+
+        # FORCE-ARM (2026-08-24): explicit arm point wins over every heuristic above. Needed
+        # because market_threshold is dynamic (5.0/10.0, no env hook), so the min() chain could
+        # not be pinned to a chosen value. 0 = disabled, keep the dynamic behaviour.
+        _force_arm = OptionsTradingConfig.TRIAL_SL_FORCE_ARM_PCT
+        if _force_arm > 0:
+            activation_threshold = _force_arm
+            profile = f"{profile}_FORCED{_force_arm:g}"
 
         return activation_threshold, trailing_gap, profile
 
@@ -1184,9 +1202,16 @@ class OptionPositionMonitor:
             # H16c: index underlyings get wider stops (leverage 2-5x stocks) — see optconfig.
             _idx_profile = OptionsTradingConfig.index_exit_profile(position.underlying)
             _sl_pct = _idx_profile['hard_sl_pct'] if _idx_profile else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
-            position.hard_sl_price = self._round_to_10_paise(
-                position.entry_premium * (1 - _sl_pct / 100)
-            )
+            # SELL_THETA (2026-08-08): a SHORT's disaster stop is ABOVE entry (premium RISES = loss);
+            # a LONG's is below. Direction-aware so the resting broker stop triggers on the right side.
+            if getattr(position, 'action', 'BUY') == 'SELL':
+                position.hard_sl_price = self._round_to_10_paise(
+                    position.entry_premium * (1 + _sl_pct / 100)
+                )
+            else:
+                position.hard_sl_price = self._round_to_10_paise(
+                    position.entry_premium * (1 - _sl_pct / 100)
+                )
 
             # 🔧 PRE-CALCULATE TRIAL_SL THRESHOLD based on current market conditions
             # Use the detector's cached Nifty data (updated every 4s by monitoring loop) —
@@ -1208,12 +1233,13 @@ class OptionPositionMonitor:
             
             # 🆕 PLACE STOP LOSS ORDER TO BROKER (for LIVE mode protection)
             # This ensures broker executes SL even if bot crashes
-            if action == "BUY":
-                sl_placed = self.place_stop_loss_order(symbol)
-                if sl_placed:
-                    logger.info(f"POSITION_ADD: SL_ORDER_PLACED | {symbol} | SL=₹{position.hard_sl_price:.2f}")
-                else:
-                    logger.warning(f"POSITION_ADD: SL_ORDER_FAILED | {symbol} | Will retry in monitoring loop")
+            # 2026-08-08: place the broker-side stop for SHORTS too (SELL_THETA). A naked short MUST
+            # have a resting BUY-stop so it is protected even if the bot stalls/crashes/rate-limits.
+            sl_placed = self.place_stop_loss_order(symbol)
+            if sl_placed:
+                logger.info(f"POSITION_ADD: SL_ORDER_PLACED | {symbol} | {action} | SL=₹{position.hard_sl_price:.2f}")
+            else:
+                logger.warning(f"POSITION_ADD: SL_ORDER_FAILED | {symbol} | Will retry in monitoring loop")
             
             # Initialize decay-aware monitoring
             decay_monitor = get_decay_monitor()
@@ -1488,7 +1514,29 @@ class OptionPositionMonitor:
             if not position:
                 logger.warning(f"POSITION_CLOSE: INNER_NOT_FOUND | {symbol}")
                 return None
-            
+
+            # FIX 3 (2026-08-08): if a PRIOR cover attempt already placed an exit order we couldn't
+            # confirm, reconcile it BEFORE placing another. A second cover on an already-filled order
+            # reverses the position (opens the opposite side). Only for manual LIVE exits.
+            if (OptionsTradingConfig.TRADING_MODE == "LIVE" and self.broker and not broker_managed_exit
+                    and getattr(position, 'exit_order_id', None)):
+                _prior = position.exit_order_id
+                _pst = self.broker.get_order_status(_prior) or {}
+                _ps = (_pst.get('status') or '').upper()
+                if _ps in {'COMPLETE', 'FILLED', 'FULLY_FILLED'}:
+                    logger.warning(f"POSITION_CLOSE: PRIOR_EXIT_ALREADY_FILLED | {symbol} | order_id={_prior} "
+                                   f"| booking at broker fill, NOT re-covering")
+                    broker_managed_exit = True
+                    exit_order_id = _prior
+                    exit_premium = float(_pst.get('average_price') or 0) or exit_premium
+                elif _ps in {'REJECTED', 'CANCELLED', 'EXPIRED'}:
+                    logger.info(f"POSITION_CLOSE: PRIOR_EXIT_{_ps} | {symbol} | order_id={_prior} | placing fresh cover")
+                    position.exit_order_id = None
+                else:
+                    logger.warning(f"POSITION_CLOSE: PRIOR_EXIT_PENDING | {symbol} | order_id={_prior} "
+                                   f"| status={_ps or 'UNKNOWN'} | waiting, NOT re-covering (double-order guard)")
+                    return None
+
             # EXIT GREEKS (for ML learning) start as the cheap fallback so the critical exit
             # path — SL cancel + MARKET SELL — is NOT delayed by a chain fetch. The accurate
             # live greeks are captured AFTER the SELL is placed, just before PnL booking (below).
@@ -1553,11 +1601,26 @@ class OptionPositionMonitor:
                         broker_managed_exit = True
                         exit_order_id = failed_sl_id
                         position.sl_order_id = None
+                    elif getattr(position, 'action', 'BUY') == 'SELL':
+                        # SHORT (2026-08-08): the resting stop is a BUY-stop. If we BUY-cover now while
+                        # it is still live, the orphaned BUY-stop can fire LATER and open an unwanted
+                        # LONG — a BUY cover and a BUY-stop do NOT conflict at the broker (unlike the
+                        # long case below). So do NOT place a blind cover: keep the stop TRACKED and
+                        # abort this attempt. The position stays PROTECTED by that same stop; the next
+                        # monitor cycle (or the EOD retry / MIS auto-square) retries cancel+cover.
+                        logger.error(
+                            f"POSITION_CLOSE: SHORT_SL_CANCEL_FAILED_ABORT | {symbol} | order_id={failed_sl_id} "
+                            f"| keeping position open+protected, will retry (no blind cover → no orphan long)"
+                        )
+                        log_event("SL_CANCEL_FAILED",
+                                 f"⚠️ SHORT SL cancel failed for {symbol} — aborting cover, will retry",
+                                 symbol=symbol, sl_order_id=failed_sl_id, exit_reason=exit_reason,
+                                 action="SHORT_ABORT_RETRY")
+                        return None
                     else:
-                        # SL is still open OR status unknown. Proceed with SELL anyway.
-                        # AngelOne will reject one of the two conflicting SELL orders;
-                        # leaving the position permanently open is worse than the tiny
-                        # double-fill risk from a SL that may execute a millisecond later.
+                        # LONG: cover is a SELL and the orphaned stop is also a SELL — AngelOne rejects
+                        # the duplicate (can't sell more than held), so only one executes. Safe to
+                        # proceed; leaving the position permanently open is worse than the double-fill risk.
                         logger.error(
                             f"POSITION_CLOSE: SL_CANCEL_FAILED_PROCEEDING | {symbol} | "
                             f"order_id={failed_sl_id} | placing MARKET SELL despite cancel failure"
@@ -1988,15 +2051,39 @@ class OptionPositionMonitor:
         })
         if OptionsTradingConfig.PAPER_SLIPPAGE_MODELING and bid > 0 and ask > 0 and not synthetic:
             # SELL_THETA: LONG exit SELLS at bid; SHORT cover BUYS at ask.
-            _fill = ask if getattr(position, 'action', 'BUY') == 'SELL' else bid
+            # PHANTOM/STALE-QUOTE GUARD (2026-08-08, mirror of entry): a real spread is a few %. A
+            # stale/phantom quote (SUPREMEIND bid 35.5 / ask 53.2 = 38% around a 47 mark) is NOT a
+            # tradeable fill — booking the cover at that raw ask wiped the locked TRIAL profit
+            # (+12.4% → +0.5%). Cap the modeled fill to a sane band around the LTP so PAPER P&L
+            # reflects a realistic market order, not a stale quote. env OPTIONS_EXIT_SLIPPAGE_MAX_PCT.
+            _is_short = getattr(position, 'action', 'BUY') == 'SELL'
+            _ref = ltp if ltp > 0 else float(intended_exit or 0.0)
+            _cap = float(os.getenv("OPTIONS_EXIT_SLIPPAGE_MAX_PCT", "5.0")) / 100.0
+            if _is_short:
+                _fill = min(ask, _ref * (1 + _cap)) if _ref > 0 else ask   # cover BUYS at ask, capped above LTP
+            else:
+                _fill = max(bid, _ref * (1 - _cap)) if _ref > 0 else bid   # long exit SELLS at bid, capped below LTP
+            if _ref > 0 and ((_is_short and ask > _ref * (1 + _cap)) or (not _is_short and bid < _ref * (1 - _cap))):
+                meta['phantom_quote_capped'] = True
+                logger.warning(f"SLIPPAGE_EXIT: PHANTOM_QUOTE_CAPPED | {position.symbol} | "
+                               f"{'ask' if _is_short else 'bid'}=₹{(ask if _is_short else bid):.2f} vs ltp=₹{_ref:.2f} "
+                               f"(spread {spread_pct:.1f}%) → fill capped at ₹{_fill:.2f}")
             meta['fill'] = round(_fill, 2)
             meta['slippage_pct'] = (
                 round((_fill - intended_exit) / intended_exit * 100, 3) if intended_exit > 0 else 0.0
             )
             meta['applied'] = True
         else:
-            meta['fill'] = round(float(intended_exit or 0.0), 2)
-            meta['slippage_pct'] = 0.0
+            # FLAT-SLIPPAGE MODE (2026-08-17): no bid/ask simulation. Book the REAL price we acted on
+            # (the SL trigger / current LTP) minus a fixed slippage %. The bid/ask model was inventing
+            # fills at prices that never traded; a flat haircut is honest and deterministic.
+            _flat = float(os.getenv("OPTIONS_FLAT_SLIPPAGE_PCT", "0.3")) / 100.0
+            _base = float(intended_exit or 0.0)
+            _is_short_f = getattr(position, 'action', 'BUY') == 'SELL'
+            _fill_f = _base * (1 + _flat) if _is_short_f else _base * (1 - _flat)   # always adverse
+            meta['fill'] = round(_fill_f, 2)
+            meta['slippage_pct'] = round(-_flat * 100, 3)
+            meta['flat_slippage'] = True
         return meta
 
     def _reconcile_broker_stop_exit(self, symbol: str, expected_exit_price: float, exit_reason: str) -> Optional[Dict[str, Any]]:
@@ -2071,17 +2158,25 @@ class OptionPositionMonitor:
         # (H16c: index underlyings use the wider index profile)
         _idx_profile = OptionsTradingConfig.index_exit_profile(position.underlying)
         _sl_pct = _idx_profile['hard_sl_pct'] if _idx_profile else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
-        sl_premium_raw = position.entry_premium * (1 - _sl_pct / 100)
+        # Direction-aware (2026-08-08): a SHORT (SELL_THETA) is stopped when premium RISES → BUY-stop
+        # ABOVE entry; a LONG is stopped when premium FALLS → SELL-stop below entry.
+        _is_short = getattr(position, 'action', 'BUY') == 'SELL'
+        if _is_short:
+            sl_premium_raw = position.entry_premium * (1 + _sl_pct / 100)
+            sl_action = 'BUY'
+        else:
+            sl_premium_raw = position.entry_premium * (1 - _sl_pct / 100)
+            sl_action = 'SELL'
         sl_premium = self._round_to_10_paise(sl_premium_raw)
 
-        logger.info(f"PLACE_SL: {symbol} | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} (-{_sl_pct:.0f}%)")
-        
+        logger.info(f"PLACE_SL: {symbol} | {sl_action}-stop | Entry: ₹{position.entry_premium:.2f} | SL: ₹{sl_premium:.2f} ({'+' if _is_short else '-'}{_sl_pct:.0f}%)")
+
         try:
-            # Place SELL order with STOPLOSS_MARKET so AngelOne executes the exit as soon as
-            # the trigger is hit. We keep explicit no-queue handling so order_ids are real.
+            # STOPLOSS_MARKET so AngelOne executes the exit as soon as the trigger is hit.
+            # BUY-stop for shorts (cover), SELL-stop for longs. no-queue → real order_id.
             sl_order_id = self.broker.place_options_order(
                 symbol=symbol,
-                action='SELL',
+                action=sl_action,
                 quantity=position.quantity,
                 price=sl_premium,
                 order_type='STOPLOSS_MARKET',
@@ -2155,13 +2250,22 @@ class OptionPositionMonitor:
         # higher trail is cooldown-skipped, and the locked profit is given back (DRREDDY 2026-07-03:
         # trail ₹30.65 skipped after peaking +4.4% → exited at breakeven ₹29.50, −0.5%).
         _placed_sl = float(position.sl_order_price or position.last_modified_sl_price or position.hard_sl_price or 0.0)
-        _is_upward_raise = _placed_sl > 0 and new_sl_price > _placed_sl * 1.005
+        # Direction-aware (2026-08-08): the profit-locking modify direction differs by side — a LONG
+        # RAISES its SELL-stop (higher=better); a SHORT LOWERS its BUY-stop (lower=better). This bypass
+        # must never block the profit-locking move for either side.
+        _is_short = getattr(position, 'action', 'BUY') == 'SELL'
+        if _is_short:
+            _is_upward_raise = _placed_sl > 0 and new_sl_price < _placed_sl * 0.995   # lower BUY-stop locks more
+        else:
+            _is_upward_raise = _placed_sl > 0 and new_sl_price > _placed_sl * 1.005   # higher SELL-stop locks more
 
         if position.next_modify_earliest_time and now < position.next_modify_earliest_time:
             if _is_upward_raise:
+                _dir = "lower BUY-stop" if _is_short else "raise SELL-stop"
+                _cmp = "<" if _is_short else ">"
                 logger.info(
-                    f"MODIFY_SL: COOLDOWN_BYPASS (upward raise) | {symbol} | "
-                    f"new_sl=₹{new_sl_price:.2f} > placed=₹{_placed_sl:.2f} — locking profit, not delaying"
+                    f"MODIFY_SL: COOLDOWN_BYPASS (profit-lock: {_dir}) | {symbol} | "
+                    f"new_sl=₹{new_sl_price:.2f} {_cmp} placed=₹{_placed_sl:.2f} — locking profit, not delaying"
                 )
             else:
                 wait_seconds = (position.next_modify_earliest_time - now).total_seconds()
@@ -2300,7 +2404,14 @@ class OptionPositionMonitor:
                     logger.warning(f"MODIFY_SL: Broker API error | {symbol} | {str(e)}")
                     rate_limiter.record_call("modify_order", False)
                     return False
-            
+            else:
+                # PAPER (2026-08-08): simulate the modify — update the tracked SL price so callers
+                # (esp. the broker ratchet) see the NEW trigger and don't re-fire every cycle. Without
+                # this, sl_order_price stayed at the original and the ratchet re-modified endlessly
+                # (SUPREMEIND: 597 modifies/position — a LIVE rate-limit storm waiting to happen).
+                position.sl_order_price = new_sl_price
+                position.last_modified_sl_price = new_sl_price
+
             # Record successful modify
             rate_limiter.record_call("modify_order", True)
             
@@ -2364,10 +2475,39 @@ class OptionPositionMonitor:
             # BUG FIX #7: Use entry_premium (not entry_price) — consistent with place_stop_loss_order()
             _ip = OptionsTradingConfig.index_exit_profile(position.underlying)
             _slp = _ip['hard_sl_pct'] if _ip else OptionsTradingConfig.STOP_LOSS_PERCENTAGE
-            current_sl_price = self._round_to_10_paise(
-                position.entry_premium * (1 - _slp / 100))
-            
-            logger.warning(f"RETRY_SL: Attempting SL placement (retry #{position.sl_retry_count}/{max_sl_retries}) | {symbol} | sl_price=₹{current_sl_price:.2f}")
+
+            # FIX 3 (2026-08-24): direction-aware, mirroring place_stop_loss_order(). A SHORT is
+            # stopped when premium RISES -> BUY-stop ABOVE entry. The old code hardcoded a SELL-stop
+            # BELOW entry for every position: for a short that is no protection at all, and on
+            # trigger it OPENS a second short instead of covering.
+            _is_short = getattr(position, 'action', 'BUY') == 'SELL'
+            _entry_stop = (position.entry_premium * (1 + _slp / 100)) if _is_short \
+                else (position.entry_premium * (1 - _slp / 100))
+            sl_action = 'BUY' if _is_short else 'SELL'
+
+            # FIX 2 (2026-08-24): never re-place BELOW the protection the trail already locked in.
+            # An exit that fails after its SL was cancelled used to come back at the ORIGINAL
+            # entry-based stop, silently discarding a trailed profit-lock (peak +20% / trail +12%
+            # -> re-placed at -10%). Keep whichever stop is tighter in the profit-locking direction.
+            _locked = 0.0
+            try:
+                _locked = float(getattr(position, 'last_modified_sl_price', None)
+                                or getattr(position, 'sl_order_price', None) or 0.0)
+            except (TypeError, ValueError):
+                _locked = 0.0
+            if _locked > 0:
+                # LONG locks profit by RAISING the stop; SHORT by LOWERING it.
+                _best = max(_entry_stop, _locked) if not _is_short else min(_entry_stop, _locked)
+                if abs(_best - _entry_stop) > 1e-9:
+                    logger.warning(
+                        f"RETRY_SL: PRESERVING_TRAILED_STOP | {symbol} | entry-based=Rs {_entry_stop:.2f} "
+                        f"-> using locked=Rs {_best:.2f} (trail protection retained)"
+                    )
+                _entry_stop = _best
+
+            current_sl_price = self._round_to_10_paise(_entry_stop)
+
+            logger.warning(f"RETRY_SL: Attempting SL placement (retry #{position.sl_retry_count}/{max_sl_retries}) | {symbol} | {sl_action}-stop | sl_price=Rs {current_sl_price:.2f}")
             
             try:
                 # Get rate limiter
@@ -2383,7 +2523,7 @@ class OptionPositionMonitor:
                 if self.broker and OptionsTradingConfig.TRADING_MODE == "LIVE":
                     sl_order_id = self.broker.place_options_order(
                         symbol=symbol,
-                        action='SELL',          # BUG FIX #5: Must be SELL (bot is LONG options)
+                        action=sl_action,       # FIX 3: direction-aware (BUY-stop covers a short)
                         quantity=position.quantity,
                         price=current_sl_price,
                         order_type='STOPLOSS_MARKET',
@@ -2526,29 +2666,42 @@ class OptionPositionMonitor:
         return closed
     
     def _hard_sl_breach_persisted(self, position, sl_price: float) -> bool:
-        """Phantom-tick guard for the HARD_SL (2026-07-24). A lone stale/bad LTP print can sit far
-        below the real sellable bid on wide-spread cheap options and fire an instant HARD_SL seconds
-        after entry (JSWENERGY on PUT: LTP 5.25 vs bid 6.20, +6.9% positive exit slippage). Require
-        the breach to PERSIST >= confirm seconds before firing. Shared by both HARD_SL paths
-        (check_trailing_stop_losses + check_hard_stop_loss) via a per-position timestamp, so calling
-        it from both in one cycle is idempotent. Resets on recovery; never fires on a missing tick.
+        """HARD_SL check — pure LTP, no depth fetch, no wall-clock grace (2026-08-24).
+
+        Design (per user spec): entry books at the real LTP, hard_sl_price is derived from
+        that entry, and the monitor polls LTP every ~2s. A breach fires as soon as it is seen
+        on N consecutive polls. N=2 (~4s) exists ONLY so a single bad print cannot fire a stop
+        by itself (JSWENERGY 2026-07-24: one LTP print 15% below the sellable price). It is a
+        two-sample check, not a delay.
+
+        REMOVED 2026-08-24:
+          - the 90s post-entry grace, which let a genuine fast decline run untouched until the
+            timer expired (VOLTAS25AUG261240CE, 1 DTE: -17.2% booked; the breach was visible at
+            -11% at 12:38:53 but no check was permitted until 12:39:31)
+          - bid/ask depth validation, which reintroduced the synthetic-quote problems
         """
-        confirm_s = float(os.getenv("OPTIONS_HARD_SL_CONFIRM_SECONDS", "4"))
+        need_ticks = int(os.getenv("OPTIONS_HARD_SL_CONFIRM_TICKS", "2"))
         prem = position.current_premium
         if prem is None:
-            return False
-        if prem > sl_price:
+            return False  # no valid price this cycle — never fire blind
+        # Direction-aware: a SHORT breaches when premium RISES to/above its (above-entry) stop;
+        # a LONG breaches when premium FALLS to/below its (below-entry) stop.
+        _is_short = getattr(position, 'action', 'BUY') == 'SELL'
+        _breached = (prem >= sl_price) if _is_short else (prem <= sl_price)
+        if not _breached:
+            position.hard_sl_breach_ticks = 0
             position.hard_sl_first_breach_at = None
             return False
-        first = getattr(position, 'hard_sl_first_breach_at', None)
-        now = datetime.now()
-        if first is None:
-            position.hard_sl_first_breach_at = now
-            logger.info(f"HARD_SL_UNCONFIRMED: {getattr(position,'symbol','?')} | premium ₹{prem:.2f} "
-                        f"<= SL ₹{sl_price:.2f} | starting {confirm_s:.0f}s persistence guard (phantom-tick)")
+        _ticks = getattr(position, 'hard_sl_breach_ticks', 0) + 1
+        position.hard_sl_breach_ticks = _ticks
+        if _ticks < need_ticks:
+            _cmp = ">=" if _is_short else "<="
+            logger.info(f"HARD_SL_UNCONFIRMED: {getattr(position,'symbol','?')} | premium Rs {prem:.2f} "
+                        f"{_cmp} SL Rs {sl_price:.2f} | tick {_ticks}/{need_ticks} (single-print guard)")
             return False
-        return (now - first).total_seconds() >= confirm_s
-
+        logger.warning(f"HARD_SL_CONFIRMED: {getattr(position,'symbol','?')} | premium Rs {prem:.2f} "
+                       f"| breach seen on {_ticks} consecutive LTP polls | firing")
+        return True
     def _nifty_md_cached(self, ttl: float = 5.0):
         """NIFTY market-data, cached ~5s across positions/cycles. RATE-LIMIT FIX (2026-07-24):
         the TRIAL_SL + STALE checks were calling get_market_data('NIFTY') PER-POSITION PER-CYCLE
@@ -2727,10 +2880,15 @@ class OptionPositionMonitor:
                 #   Peak 25% → gap 9% → SL max(5%, 16%)  = 16%
                 #   Peak 60% → gap 12%→ SL max(5%, 48%)  = 48%
                 #   Peak 100%→ gap 12%→ SL max(5%, 88%)  = 88%  ← runner protected, not capped
-                trailing_gap = self._progressive_trailing_gap(peak_gain_percent)
-                trailing_sl_pct = max(buffered_activation_pct, peak_gain_percent - trailing_gap)
+                # RATCHET (2026-08-13): hard PEAK-anchored profit floor. Replaces the progressive-gap +
+                # safe_ceiling clamp that dragged the lock down to ~current on a pullback (POWERINDIA
+                # +6% peak → +0.6% exit). Floor = highest tier crossed by PEAK (highest_premium),
+                # monotonic, and NOT clamped to current — once peak crosses a tier the profit is locked.
+                trailing_gap = self._progressive_trailing_gap(peak_gain_percent)  # telemetry only
+                ratchet_floor = OptionsTradingConfig.buy_ratchet_floor_pct(peak_gain_percent)
+                trailing_sl_pct = max(buffered_activation_pct, ratchet_floor)
                 desired_trial_sl = position.entry_premium * (1 + trailing_sl_pct / 100)
-                new_trial_sl = min(desired_trial_sl, safe_trigger_ceiling)
+                new_trial_sl = desired_trial_sl
 
                 # Only update if new SL is meaningfully higher than current (avoid micro-updates
                 # that spam broker modify_sl_order calls on every monitoring tick)
@@ -3683,6 +3841,35 @@ class OptionPositionMonitor:
                 )
                 continue
 
+            # ── EARLY PEAK CUT (2026-08-21): a trade that has not shown 1% of gain by
+            # minute 3 is, on the evidence, already dead — but the 5-min STALE gate still
+            # holds it for two more minutes of decay.
+            # 5-session shadow record (net = losses avoided minus recoveries forfeited,
+            # charges paid either way), from tools/shadow_peak_cut_eval.py:
+            #     peak<=1% @3min : +13,008 / -2,986 / +3,509 / +4,503 / +4,769 = +Rs22,802  (4/5 days)
+            #     peak<=2% @2min : +14,082 / -34,587 / -18,457 / -6,512 / -6,755 = -Rs52,230 (1/5)
+            # 2-minute variants all fail: at 2 min a winner and a loser are both underwater
+            # by roughly the spread, so the cut kills runners (three trades at 0.00% peak at
+            # 2 min went on to 22-28% peaks). Three minutes is where they separate.
+            # Off by default; enable per-bot via OPTIONS_EARLY_PEAK_CUT_ENABLED.
+            if self._early_peak_cut_enabled and not position.trial_sl_enabled:
+                if (hold_time_min >= self._early_peak_cut_minutes
+                        and peak_profit_pct * 100 < self._early_peak_cut_peak_pct):
+                    logger.warning(
+                        f"EARLY_PEAK_CUT_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
+                        f"Peak: +{peak_profit_pct*100:.2f}% < {self._early_peak_cut_peak_pct:.1f}% | "
+                        f"Current: {current_pnl_pct*100:.2f}% | trail never armed"
+                    )
+                    pnl = self.close_position(
+                        symbol,
+                        position.current_premium,
+                        f"EARLY_PEAK_CUT (Peak +{peak_profit_pct*100:.1f}% < "
+                        f"{self._early_peak_cut_peak_pct:.1f}% at {hold_time_min:.0f}min)"
+                    )
+                    if pnl:
+                        closed.append(pnl)
+                    continue
+
             # Check stale consolidation pattern
             # Exit if:
             # 1. Been holding for 15+ minutes (stale period)
@@ -4075,9 +4262,16 @@ class OptionPositionMonitor:
         sl_percent = OptionsTradingConfig.STOP_LOSS_PERCENTAGE
         max_loss = OptionsTradingConfig.MAX_LOSS_PER_TRADE  # Safety net only
         decay_monitor = get_decay_monitor()
-        
+        _sl_max_age = float(os.getenv("OPTIONS_SL_MAX_PRICE_AGE_SECONDS", "20"))
+
         for symbol, position in self._snapshot_positions_items():
-            
+            # FIX 4 (2026-08-08): never fire the SOFTWARE stop on a STALE price. If the last good LTP
+            # is older than the max age (feed frozen under rate-limit/throttle), skip — the resting
+            # BROKER stop placed at entry is the backstop. Acting on stale marks caused phantom exits.
+            _last_ok = getattr(position, 'last_ltp_ok_ts', None)
+            if _last_ok is not None and (datetime.now() - _last_ok).total_seconds() > _sl_max_age:
+                continue
+
             if position.unrealized_pnl < 0:
                 loss_percent = abs((position.unrealized_pnl / (position.entry_premium * position.quantity)) * 100)
                 
@@ -4091,13 +4285,13 @@ class OptionPositionMonitor:
                 close_reason = "LOSS"
                 
                 # Check percentage-based SL FIRST (PRIMARY exit logic)
-                if loss_percent >= sl_percent:
-                    # CRITICAL: Loss >= SL threshold MUST exit immediately
-                    # Don't wait for decay confirmation - losses this big need to be closed
+                if loss_percent >= sl_percent and self._hard_sl_breach_persisted(position, position.hard_sl_price):
+                    # FIX 2 (2026-08-08): require the breach to PERSIST (phantom-tick guard) before the
+                    # software cover fires — a lone stale/wide-spread tick no longer triggers an exit.
                     should_close = True
                     close_reason = f"HARD_SL_HIT (SL: ₹{position.hard_sl_price:.2f})"
                     decay_reason = decay_signal.get('reason', 'N/A') if decay_signal else 'N/A'
-                    logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% >= {sl_percent}% threshold | FORCED EXIT | {decay_reason}")
+                    logger.warning(f"STOP_LOSS: {symbol} | Loss {loss_percent:.1f}% >= {sl_percent}% threshold (persisted) | FORCED EXIT | {decay_reason}")
                 
                 # Check MAX_LOSS as SAFETY NET ONLY (catastrophic loss prevention)
                 if not should_close and abs(position.unrealized_pnl) >= max_loss:
@@ -4106,7 +4300,12 @@ class OptionPositionMonitor:
                     logger.warning(f"STOP_LOSS: {symbol} | SAFETY NET TRIGGERED: ₹{position.unrealized_pnl:.2f} >= ₹{max_loss:.2f}")
                 
                 if should_close:
-                    if close_reason.startswith("HARD_SL_HIT"):
+                    # 2026-08-08: shorts NOW carry a resting broker BUY-stop too. Route any HARD_SL
+                    # that has a broker stop order through reconcile — it books the broker fill if the
+                    # stop already triggered, and RETURNS without a market order while it is still
+                    # pending (also prevents a double-cover). Falls back to close_position when there
+                    # is no broker order (reconcile short-circuits to close_position in PAPER).
+                    if close_reason.startswith("HARD_SL_HIT") and position.sl_order_id:
                         pnl = self._reconcile_broker_stop_exit(
                             symbol,
                             position.hard_sl_price,
@@ -4120,7 +4319,149 @@ class OptionPositionMonitor:
                                    f"Exit: ₹{pnl.get('exit_premium', position.current_premium):.2f} | Loss: ₹{pnl['pnl']:.2f}")
         
         return closed
-    
+
+    def check_trial_sl(self) -> List[Dict[str, Any]]:
+        """I4 (2026-08-04): SELL_THETA peak-based profit-lock TRIAL_SL.
+        Arms once a short's profit reaches ARM%, then exits when profit gives back GAP points
+        from its peak — never turns a >=ARM% winner into a loser (peak = lowest_premium for a short).
+        SHADOW by default (OPTIONS_TRIAL_SL_ENABLED=false): logs SHADOW_TRIAL_SL (what it WOULD lock)
+        ONCE per position and does NOT close. Flip the flag to act (TRIAL_SL_HIT). SELL_THETA only.
+        """
+        closed = []
+        if OptionsTradingConfig.STRATEGY_MODE != 'SELL_THETA':
+            return closed
+        arm = OptionsTradingConfig.TRIAL_SL_ARM_PCT
+        gap = OptionsTradingConfig.TRIAL_SL_GAP_PCT
+        keep_frac = OptionsTradingConfig.TRIAL_SL_KEEP_FRAC
+        live = OptionsTradingConfig.TRIAL_SL_ENABLED
+        for symbol, position in self._snapshot_positions_items():
+            if getattr(position, 'action', 'BUY') != 'SELL':
+                continue
+            E = position.entry_premium
+            if not E or E <= 0:
+                continue
+            peak_profit = (E - position.lowest_premium) / E * 100.0   # short peak = lowest premium
+            cur_profit = (E - position.current_premium) / E * 100.0
+            if peak_profit < arm:
+                continue                       # trail not armed yet
+            # floor: PROPORTIONAL (keep KEEP_FRAC of peak) when configured, else legacy fixed-gap.
+            # Proportional preserves small peaks (a 5pt gap on an 8% peak locks ~3%; keep60 locks 4.8%).
+            floor_pct = peak_profit * keep_frac if keep_frac > 0 else (peak_profit - gap)
+            if cur_profit > floor_pct:
+                continue                       # still inside the trail band — hold
+            if (not live) and getattr(position, '_trial_shadow_logged', False):
+                continue                       # already shadow-logged this position
+            lock_pct = floor_pct
+            log_event(
+                "TRIAL_SL_HIT" if live else "SHADOW_TRIAL_SL",
+                f"{'' if live else '[SHADOW] '}TRIAL_SL {symbol} | peak +{peak_profit:.1f}% → "
+                f"gave back to +{cur_profit:.1f}% | lock ~+{lock_pct:.1f}%",
+                symbol=symbol,
+                peak_profit_pct=round(peak_profit, 2),
+                current_profit_pct=round(cur_profit, 2),
+                lock_pct=round(lock_pct, 2),
+                entry_premium=round(E, 2),
+                current_premium=round(position.current_premium, 2),
+                lowest_premium=round(position.lowest_premium, 2),
+                quantity=position.quantity,
+                would_lock_pnl=round(lock_pct / 100.0 * E * position.quantity, 2),
+                arm=arm, gap=gap, keep_frac=keep_frac, live=live,
+            )
+            if live:
+                pnl = self.close_position(symbol, position.current_premium,
+                                          f"TRIAL_SL (peak +{peak_profit:.1f}% → +{cur_profit:.1f}%)")
+                if pnl:
+                    closed.append(pnl)
+            else:
+                position._trial_shadow_logged = True
+        return closed
+
+    def check_broker_ratchet(self) -> None:
+        """Option B (2026-08-08): ratchet a SHORT's resting broker BUY-stop DOWN as its PEAK profit
+        crosses each ladder tier (OPTIONS_BROKER_RATCHET_LADDER "peak%:lock%,...") so the profit is
+        locked BROKER-side and survives a bot stall/crash. Ratchet-DOWN only (a lower BUY-stop locks
+        more for a short), coarse (~1 modify per tier), kept looser than the software TRIAL so software
+        takes profit first. SELL_THETA only; needs a live broker SL order (place_stop_loss_order at entry)."""
+        if OptionsTradingConfig.STRATEGY_MODE != 'SELL_THETA':
+            return
+        tiers = OptionsTradingConfig.broker_ratchet_tiers()
+        if not tiers:
+            return
+        for symbol, position in self._snapshot_positions_items():
+            if getattr(position, 'action', 'BUY') != 'SELL':
+                continue
+            if not position.sl_order_id:
+                continue  # no broker stop yet (retry_failed_sl_orders will place it) — nothing to ratchet
+            E = position.entry_premium
+            if not E or E <= 0:
+                continue
+            peak_profit = (E - position.lowest_premium) / E * 100.0
+            lock_pct = None
+            for pk, lk in tiers:            # tiers ascending; take the highest reached
+                if peak_profit >= pk:
+                    lock_pct = lk
+                else:
+                    break
+            if lock_pct is None:
+                continue                     # not to the first tier yet
+            target_trigger = self._round_to_10_paise(E * (1 - lock_pct / 100.0))
+            current_trigger = float(position.sl_order_price or position.hard_sl_price or 0.0)
+            if current_trigger <= 0 or target_trigger >= current_trigger:
+                continue                     # ratchet-DOWN only (lower trigger locks more for a short)
+            # never place the BUY-stop at/below the current premium (would fire instantly)
+            if position.current_premium and target_trigger <= position.current_premium:
+                continue
+            logger.info(f"BROKER_RATCHET: {symbol} | peak +{peak_profit:.1f}% → lock +{lock_pct:.0f}% | "
+                        f"BUY-stop ₹{current_trigger:.2f} → ₹{target_trigger:.2f}")
+            if self.modify_sl_order(symbol, target_trigger, position.sl_order_id):
+                log_event("BROKER_RATCHET", f"Ratcheted broker stop for {symbol}",
+                          symbol=symbol, peak_profit_pct=round(peak_profit, 2), lock_pct=lock_pct,
+                          old_trigger=round(current_trigger, 2), new_trigger=round(target_trigger, 2),
+                          entry_premium=round(E, 2))
+
+    def check_sell_stale(self) -> List[Dict[str, Any]]:
+        """I5 (2026-08-05): SELL_THETA STALE_CONSOLIDATION. If a short hasn't ARMED the trail
+        (peak profit < TRIAL_SL_ARM_PCT) after STALE_MINUTES, it's 'not moving' → cut it (BUY-cover).
+        Winners arm within ~30min (p90=35); what's still unarmed by then is dead weight heading to
+        the −12% HARD_SL. SELL_THETA only; gated by OPTIONS_STALE_ENABLED. Armed positions are left
+        to the TRIAL_SL. (Sim on 155 paths: cut@30min ≈ +₹8K vs no-stale; 15-20min LOSES.)"""
+        closed = []
+        if OptionsTradingConfig.STRATEGY_MODE != 'SELL_THETA' or not OptionsTradingConfig.STALE_ENABLED:
+            return closed
+        arm = OptionsTradingConfig.TRIAL_SL_ARM_PCT
+        mins = OptionsTradingConfig.STALE_MINUTES
+        now = datetime.now()
+        for symbol, position in self._snapshot_positions_items():
+            if getattr(position, 'action', 'BUY') != 'SELL':
+                continue
+            E = position.entry_premium
+            if not E or E <= 0:
+                continue
+            peak_profit = (E - position.lowest_premium) / E * 100.0
+            if peak_profit >= arm:
+                continue                       # armed → TRIAL_SL owns it, not stale
+            et = position.entry_time
+            if isinstance(et, str):
+                try: et = datetime.fromisoformat(et)
+                except Exception: continue
+            elapsed_min = (now - et).total_seconds() / 60.0
+            if elapsed_min < mins:
+                continue                       # not stale yet
+            cur_profit = (E - position.current_premium) / E * 100.0
+            log_event(
+                "STALE_CONSOLIDATION",
+                f"STALE cut {symbol} | unarmed (peak +{peak_profit:.1f}% < {arm:.0f}%) after "
+                f"{elapsed_min:.0f}min | cur {cur_profit:+.1f}%",
+                symbol=symbol, peak_profit_pct=round(peak_profit, 2),
+                current_profit_pct=round(cur_profit, 2), elapsed_min=round(elapsed_min, 1),
+                quantity=position.quantity,
+            )
+            pnl = self.close_position(symbol, position.current_premium,
+                                      f"STALE_CONSOLIDATION ({elapsed_min:.0f}min unarmed)")
+            if pnl:
+                closed.append(pnl)
+        return closed
+
     def check_sentiment_exit(self) -> List[Dict[str, Any]]:
         """
         Check market sentiment (PCR + OI Buildup) and exit positions if sentiment FADES.
@@ -4350,7 +4691,13 @@ class OptionPositionMonitor:
                 return current_ltp
             mark = (bid + ask) / 2.0
             div_pct = (mark - current_ltp) / current_ltp * 100.0 if current_ltp else 0.0
-            if div_pct <= -OptionsTradingConfig.STALE_QUOTE_MIN_DIVERGENCE_PCT:
+            # Direction-aware (2026-08-08): the ADVERSE move differs by side — a LONG is hurt when the
+            # mark falls BELOW the frozen LTP; a SHORT (SELL_THETA) is hurt when the mark rises ABOVE
+            # it (premium up = loss). Override toward the live mark on the side's adverse divergence.
+            _is_short = getattr(position, 'action', 'BUY') == 'SELL'
+            _min_div = OptionsTradingConfig.STALE_QUOTE_MIN_DIVERGENCE_PCT
+            _adverse = (div_pct >= _min_div) if _is_short else (div_pct <= -_min_div)
+            if _adverse:
                 logger.warning(
                     f"STALE_QUOTE_OVERRIDE: {symbol} | frozen LTP ₹{current_ltp:.2f} held "
                     f"{frozen_secs:.0f}s | live mark ₹{mark:.2f} (bid {bid:.2f}/ask {ask:.2f}) "
@@ -4473,7 +4820,11 @@ class OptionPositionMonitor:
                 
                 # Get LTP from bulk fetch result
                 current_ltp = ltps.get(symbol) if ltps else None
-                
+                # FIX 4 (2026-08-08): stamp the last time we got a REAL broker LTP (not the frozen
+                # fallback below). check_stop_losses uses this to refuse firing on a stale feed.
+                if current_ltp and current_ltp > 0:
+                    position.last_ltp_ok_ts = datetime.now()
+
                 if not current_ltp or current_ltp <= 0:
                     # FALLBACK: If LTP fetch failed, use last known current_premium
                     # This allows SL checks to continue even during temporary broker API failures
@@ -5115,17 +5466,26 @@ class OptionPositionMonitor:
             # Check and close positions by stop loss (hard SL if loss exceeds 20%)
             sl_closes = self.check_stop_losses()
             monitoring_result['closed_by_stoploss'] = [p['symbol'] for p in sl_closes]
+
+            # TRIAL_SL (I4, 2026-08-04): SELL_THETA peak-based profit-lock. SHADOW by default
+            # (logs SHADOW_TRIAL_SL, closes nothing) until OPTIONS_TRIAL_SL_ENABLED=true. Self-gates
+            # to SELL_THETA; returns [] in shadow so it never affects the live book.
+            trial_sl_closes = self.check_trial_sl()
+            monitoring_result['closed_by_trial_sl'] = [p['symbol'] for p in trial_sl_closes]
             
             # Check and close positions by sentiment fade
-            sentiment_closes = self.check_sentiment_exit()
+            # SELL_THETA: gated off — only HARD_SL(check_stop_losses) + EOD square-off should exit.
+            sentiment_closes = [] if _sell_mode else self.check_sentiment_exit()
             monitoring_result['closed_by_sentiment'] = [p['symbol'] for p in sentiment_closes]
-            
+
             # ⭐ NEW: Check and close positions by IV crash (premium decay)
-            iv_crash_closes = self.check_iv_crash()
+            # SELL_THETA: gated off — an IV crash = premium falling = the short WINNING; never exit on it.
+            iv_crash_closes = [] if _sell_mode else self.check_iv_crash()
             monitoring_result['closed_by_iv_crash'] = [p['symbol'] for p in iv_crash_closes]
-            
+
             # ⭐ NEW: Check and close positions by IV spike (panic/crash signal)
-            iv_spike_closes = self.check_iv_spike()
+            # SELL_THETA: gated off — the 12% HARD_SL handles adverse premium spikes.
+            iv_spike_closes = [] if _sell_mode else self.check_iv_spike()
             monitoring_result['closed_by_iv_spike'] = [p['symbol'] for p in iv_spike_closes]
             
             # Other Greeks-based monitoring exits disabled.
@@ -5399,8 +5759,46 @@ class OptionPositionMonitor:
                 tmp_path = tmp.name
 
             os.replace(tmp_path, self.pnl_history_file)
+
+            # Same-day re-entry guard: record losing closes to the shared ledger
+            # that SameDayLossValidator reads at entry time.
+            if float(pnl_info.get('pnl') or 0.0) < 0:
+                self._record_same_day_loss(pnl_info)
         except Exception as e:
             print(f"⚠️ Error saving P&L history: {str(e)}")
+
+    def _record_same_day_loss(self, pnl_info: Dict[str, Any]):
+        """
+        Append a losing close to the shared same-day loss ledger.
+
+        Every bot writes here and every bot reads it at entry, so a loss booked by
+        one bot also blocks re-entry on that underlying in the other three.
+        Best-effort: any failure is swallowed — this must never break the exit path.
+        """
+        try:
+            underlying = str(pnl_info.get('underlying') or '').strip().upper()
+            if not underlying:
+                return
+            ledger_dir = Path(__file__).resolve().parents[2] / "live_pnl"
+            ledger_dir.mkdir(parents=True, exist_ok=True)
+            ledger = ledger_dir / f"same_day_losses_{datetime.now().date().isoformat()}.jsonl"
+            row = json.dumps({
+                'ts': datetime.now().isoformat(),
+                'underlying': underlying,
+                'side': str(pnl_info.get('contract_type') or '').upper(),
+                'bot': f"{Path(__file__).resolve().parents[1].name}:{BOT_MODE}",
+                'pnl': round(float(pnl_info.get('pnl') or 0.0), 2),
+                'exit_reason': str(pnl_info.get('exit_reason') or '')[:40],
+            }, separators=(',', ':'))
+            with open(ledger, 'a', encoding='utf-8') as f:
+                f.write(row + "\n")
+            logger.info(
+                f"SAMEDAY_LOSS: RECORDED | {underlying} | "
+                f"Rs {pnl_info.get('pnl')} | ledger={ledger.name}"
+            )
+        except Exception as e:
+            logger.warning(f"SAMEDAY_LOSS: record failed | {e}")
+
 
 # =============================================================================
 # Global monitor instance

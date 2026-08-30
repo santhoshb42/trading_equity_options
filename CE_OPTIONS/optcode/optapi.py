@@ -1740,6 +1740,26 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         action = processed['action']
         alert_price = float(alert.get('price', 0) or 0)
 
+        # ── ENTRY-TIME GATE (SELL_THETA): skip the noisy open ──
+        # PUT bot's entire loss was the 09:30-09:45 open (short-CALLs crushed by up-drift);
+        # CE's open (09:30-09:45) is FINE (WR 52%) so CE keeps 09:15. Env-driven, default
+        # no-op; reversible per-bot via OPTIONS_ENTRY_START_TIME.
+        _entry_start = os.getenv("OPTIONS_ENTRY_START_TIME", "09:15")
+        try:
+            _es_h, _es_m = (int(x) for x in _entry_start.split(":"))
+            _now_t = datetime.now().time()
+            if (_now_t.hour, _now_t.minute) < (_es_h, _es_m):
+                logger.warning(f"ALERT_PROCESS: ENTRY_TOO_EARLY | symbol={symbol} | now={_now_t.strftime('%H:%M')} < start={_entry_start}")
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Entry before start time {_entry_start} (noisy open; SELL_THETA waits for a settled market)',
+                    'stage': 'entry_time_gate',
+                }
+        except Exception as _e_tg:
+            logger.debug(f"ALERT_PROCESS: entry-time-gate skipped ({_e_tg})")
+
         # Reserve this underlying so parallel workers don't double-enter the same stock
         _underlying_for_cleanup = underlying
         if _entry_ip_lock is not None:
@@ -2547,27 +2567,45 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # get_market_data (getMarketData FULL) already returns OI + volume — same source/extraction
         # as get_oi_data, so a separate OI call is redundant. One call instead of two halves the
         # broker round-trips in this (now-dominant) liquidity step.
-        liquidity_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
-        live_volume = int(liquidity_market_data.get('volume') or selected_contract.volume or 0)
-        live_oi = int(liquidity_market_data.get('open_interest') or selected_contract.open_interest or 0)
-
-        if live_volume <= 0 or live_oi <= 0:
+        # Fetch REAL OI + volume for the liquidity cap, with RETRIES (transient broker misses are
+        # common on the first hit). Do NOT fall back to the chain's placeholder OI (250000/240000) —
+        # sizing on synthetic liquidity is unsafe. If real values still can't be confirmed after all
+        # retries, we do NOT skip the trade (per requirement) — we cap it to 1 lot (safest) via the
+        # _liquidity_unconfirmed flag below. Retries only cost latency on failure (success breaks first).
+        _LIQ_RETRIES = int(os.getenv("OPTIONS_LIQUIDITY_FETCH_RETRIES", "3"))
+        liquidity_market_data = {}
+        live_volume = 0
+        live_oi = 0
+        for _liq_attempt in range(max(1, _LIQ_RETRIES)):
+            _md = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
+            _v = int(_md.get('volume') or 0)
+            _o = int(_md.get('open_interest') or 0)
+            # keep the best (non-empty) market_data + values seen across attempts
+            if _md and (_o > 0 or _v > 0 or not liquidity_market_data):
+                liquidity_market_data = _md
+            if _v > 0: live_volume = _v
+            if _o > 0: live_oi = _o
+            if live_oi > 0 and live_volume > 0:
+                break
             logger.warning(
-                f"ALERT_PROCESS: LIQUIDITY_REFETCH_TRIGGERED | contract={selected_contract.symbol} "
-                f"| volume={live_volume:,} | oi={live_oi:,} | retrying once"
+                f"ALERT_PROCESS: LIQUIDITY_REFETCH | contract={selected_contract.symbol} "
+                f"| attempt={_liq_attempt + 1}/{max(1, _LIQ_RETRIES)} | volume={live_volume:,} oi={live_oi:,} | retrying"
             )
-            time.sleep(0.25)
-            refetch_market_data = state['broker'].get_market_data(selected_contract.symbol, "NFO") or {}
-            refetch_volume = int(refetch_market_data.get('volume') or 0)
-            refetch_oi = int(refetch_market_data.get('open_interest') or 0)
-            if refetch_volume > 0:
-                liquidity_market_data = refetch_market_data
-                live_volume = refetch_volume
-            if refetch_oi > 0:
-                live_oi = refetch_oi
-            logger.info(
-                f"ALERT_PROCESS: LIQUIDITY_REFETCH_RESULT | contract={selected_contract.symbol} "
-                f"| volume={live_volume:,} | oi={live_oi:,}"
+            time.sleep(0.3 * (_liq_attempt + 1))
+        # NO synthetic fallback: if real OI/volume still unconfirmed, flag it → 1-lot cap (not a skip).
+        # 2026-08-17: respect the cap mode. Was (oi<=0 OR volume<=0), which contradicted
+        # cap_mode='oi' — a deep-OI strike with ~0 intraday volume (normal early-day / quiet
+        # strike) was flagged unconfirmed and force-capped to 1 lot. TITAN 5150CE: budget
+        # afforded 4 lots, order was 1, while the book showed 240k bid / 180k ask depth.
+        _cm_unconf = os.getenv("OPTIONS_LIQUIDITY_CAP_MODE", "oi").lower()
+        if _cm_unconf == "oi":
+            _liquidity_unconfirmed = (live_oi <= 0 and live_volume <= 0)   # only if BOTH absent
+        else:
+            _liquidity_unconfirmed = (live_oi <= 0 or live_volume <= 0)
+        if _liquidity_unconfirmed:
+            logger.warning(
+                f"ALERT_PROCESS: LIQUIDITY_UNCONFIRMED | contract={selected_contract.symbol} "
+                f"| volume={live_volume:,} oi={live_oi:,} after {max(1, _LIQ_RETRIES)} tries — capping to 1 lot (trade kept, sized safe)"
             )
 
         try: _entry_timing['t_liquidity'] = time.monotonic()
@@ -2575,21 +2613,52 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         live_bid = float(liquidity_market_data.get('bid') or selected_contract.bid or 0.0)
         live_ask = float(liquidity_market_data.get('ask') or selected_contract.ask or 0.0)
         live_spread_pct = liquidity_market_data.get('bid_ask_spread_pct')
-        # PREFER THE FRESH ENTRY LTP over the (possibly stale/fabricated) chain LTP.
-        # The chain fetch can fabricate ltp=max(1.0, strike*0.01) when ITS own LTP fetch missed, and
-        # that stale value persists on selected_contract.ltp. The entry get_market_data call above
-        # frequently HAS the real LTP (it returned real bid/ask/oi). Booking the stale fabricated LTP
-        # as the cost basis is what produced the phantom +300% surges (PREMIERENE fabricated ₹10.50
-        # while the live LTP was ₹38). Always use the fresh broker LTP when present.
+        # ── ENTRY PRICE = FRESH price, never a stale last-trade (ROOT-CAUSE FIX 2026-08-08) ──
+        # AngelOne's `ltp` = last-TRADED price, which stays at the PRIOR-DAY CLOSE until the strike
+        # trades TODAY. SUPREMEIND 3350PE: at 11:07 it hadn't traded → ltp=54 (yesterday's close),
+        # real market ~45 → we booked a phantom ₹53.46. The live ORDER BOOK is always current, so when
+        # the last trade is STALE (age > max) we price off the book MID. We never fabricate a price and
+        # never trust a stale last-trade. (The removed BIDASK_DERIVED guard did the opposite — trusted
+        # the stale ltp and invented bid/ask from it, manufacturing the phantom + hiding the spread.)
         _chain_ltp = float(selected_contract.ltp or 0.0)
         _fresh_ltp = float(liquidity_market_data.get('ltp') or 0.0)
-        if _fresh_ltp > 0 and abs(_fresh_ltp - _chain_ltp) > 0.01:
-            logger.info(
-                f"ALERT_PROCESS: LTP_REFRESHED_AT_ENTRY | {selected_contract.symbol} | "
-                f"chain_ltp=₹{_chain_ltp:.2f} → live_ltp=₹{_fresh_ltp:.2f}"
+        _book_mid = (live_bid + live_ask) / 2.0 if (live_bid > 0 and live_ask > 0) else 0.0
+        _ltp_age = liquidity_market_data.get('ltp_age_sec')
+        _ltp_max_age = float(os.getenv("OPTIONS_LTP_MAX_AGE_SECONDS", "120"))
+        _ltp_stale = (_ltp_age is not None and _ltp_age > _ltp_max_age)
+        if _ltp_stale and _book_mid > 0:
+            _mark = round(_book_mid, 2)
+            logger.warning(
+                f"ALERT_PROCESS: STALE_LTP_USING_BOOK_MID | {selected_contract.symbol} | "
+                f"last_trade_age={_ltp_age:.0f}s > {_ltp_max_age:.0f}s | stale_ltp=₹{_fresh_ltp:.2f} "
+                f"→ live book mid=₹{_mark:.2f} (bid=₹{live_bid:.2f}/ask=₹{live_ask:.2f})"
             )
-            selected_contract.ltp = _fresh_ltp
-        _ltp_ref = float(selected_contract.ltp or 0.0)
+        elif _fresh_ltp > 0:
+            _mark = _fresh_ltp
+            if abs(_fresh_ltp - _chain_ltp) > 0.01:
+                logger.info(
+                    f"ALERT_PROCESS: LTP_REFRESHED_AT_ENTRY | {selected_contract.symbol} | "
+                    f"chain_ltp=₹{_chain_ltp:.2f} → live_ltp=₹{_fresh_ltp:.2f}"
+                )
+        elif _book_mid > 0:
+            _mark = round(_book_mid, 2)
+        else:
+            _mark = _chain_ltp
+        if _mark <= 0:
+            logger.warning(
+                f"ALERT_PROCESS: NO_PRICE_AVAILABLE | {selected_contract.symbol} | "
+                f"bid=₹{live_bid:.2f} ask=₹{live_ask:.2f} ltp=₹{_fresh_ltp:.2f} — no book and no live/chain LTP"
+            )
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': 'No price available (no order book and no live/chain LTP)',
+                'stage': 'quote_reliability',
+                **contract_context,
+            }
+        selected_contract.ltp = _mark
+        _ltp_ref = _mark
         spread_is_synthetic = bool(
             _ltp_ref > 0 and live_bid > 0 and live_ask > 0
             and abs(live_bid - _ltp_ref * 0.98) < 0.01 and abs(live_ask - _ltp_ref * 1.02) < 0.01
@@ -2669,9 +2738,34 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # Lot cap: order lots = min(budget_lots, 10% of OI lots, 10% of volume lots), floored at 1.
         # Never reject for thin OI/volume — always enter at least 1 lot if budget allows.
         if lot_size > 0:
-            oi_max_lots  = max(1, int(live_oi     / lot_size * 0.10)) if live_oi     > 0 else None
-            vol_max_lots = max(1, int(live_volume  / lot_size * 0.10)) if live_volume > 0 else None
-            max_lots = min(x for x in [oi_max_lots, vol_max_lots] if x is not None) if (oi_max_lots or vol_max_lots) else None
+            if _liquidity_unconfirmed:
+                oi_max_lots = vol_max_lots = None  # bind for the LOT_CAP log below (real OI/vol couldn't be confirmed)
+                # 2026-08-17: MISSING data is NOT evidence of illiquidity. Forcing 1 lot here silently
+                # under-deployed the budget on perfectly liquid strikes. Default now: NO lot cap, size
+                # on budget — genuine illiquidity is already rejected upstream by the MIN_OI gate and
+                # the entry SPREAD gate (enforced). Set OPTIONS_UNCONFIRMED_LIQ_ONE_LOT=true to restore.
+                max_lots = 1 if os.getenv("OPTIONS_UNCONFIRMED_LIQ_ONE_LOT", "false").lower() == "true" else None
+            else:
+                _liq_pct = float(os.getenv("OPTIONS_LIQUIDITY_PARTICIPATION_PCT", "0.10"))
+                oi_max_lots  = max(1, int(live_oi     / lot_size * _liq_pct)) if live_oi     > 0 else None
+                vol_max_lots = max(1, int(live_volume  / lot_size * _liq_pct)) if live_volume > 0 else None
+                # CAP MODE (2026-08-06): OI = real market depth (total open contracts); intraday
+                # CUMULATIVE volume at entry is ~0 early-day / on quiet strikes and was strangling
+                # deep-OI WINNERS to 1 lot (COCHINSHIP 76k OI = 190 lots, pinned to 1 by ~0 volume,
+                # while high-volume LOSERS scaled freely). Default 'oi' (size on depth, not activity).
+                # 'min' = legacy OI&volume; 'max' = more generous of the two. MIN_OI gate still rejects
+                # truly illiquid strikes upstream. NOTE (LIVE): OI-sizing on a ~0-volume strike can
+                # slip badly on real fills — revisit before LIVE (L-list).
+                _cap_mode = os.getenv("OPTIONS_LIQUIDITY_CAP_MODE", "oi").lower()
+                _avail = [x for x in [oi_max_lots, vol_max_lots] if x is not None]
+                if not _avail:
+                    max_lots = None
+                elif _cap_mode == "oi":
+                    max_lots = oi_max_lots if oi_max_lots is not None else vol_max_lots
+                elif _cap_mode == "max":
+                    max_lots = max(_avail)
+                else:  # 'min' = legacy OI&volume intersection
+                    max_lots = min(_avail)
             if max_lots:
                 lot_cap_budget = max_lots * lot_size * pricing_premium
                 if lot_cap_budget < effective_budget:
@@ -2715,6 +2809,24 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     'stage': 'lot_sizing',
                     **contract_context,
                 }
+
+            # EQUAL-LOTS mode (2026-08-06): fixed N lots/trade instead of budget/liquidity-weighted
+            # sizing, so no trade is over/under-weighted by a liquidity accident (equal weight per
+            # signal). 4-day study: equal-1-lot beat uneven capping by +₹22K (losers were the ones
+            # over-weighted). Still capped by budget affordability AND the liquidity ceiling. 0 = off.
+            _fixed_lots = int(os.getenv("OPTIONS_FIXED_LOTS_PER_TRADE", "0"))
+            if _fixed_lots > 0:
+                _ceil = affordable_lots
+                if max_lots:
+                    _ceil = min(_ceil, max_lots)
+                _target = max(1, min(_fixed_lots, _ceil))
+                if _target != affordable_lots:
+                    logger.info(
+                        f"ALERT_PROCESS: FIXED_LOTS | contract={selected_contract.symbol} "
+                        f"| target={_fixed_lots} affordable={affordable_lots} liq_max={max_lots} → lots={_target}"
+                    )
+                quantity = _target * lot_size
+                affordable_lots = _target
 
             if neural_ml_signal and 'neural_ml_multiplier' in locals() and affordable_lots > 0:
                 original_quantity = quantity
@@ -2765,7 +2877,8 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"| reason={liquidity_metrics['spread_advisory_reason']}"
                 )
 
-            if liquidity_ok:
+            if liquidity_ok or _liquidity_unconfirmed:
+                # unconfirmed liquidity is already capped to 1 lot above — proceed, don't skip the trade
                 break
 
             is_oi_failure = liquidity_reason.startswith("Open interest") or " of OI " in liquidity_reason
@@ -3066,7 +3179,15 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 entry_slippage_meta['phantom_bid_rejected'] = True
                 entry_slippage_meta['applied'] = False
             else:
-                actual_entry_premium = _real_bid
+                # Cap the modeled SELL fill to a sane band below the mark: a limit SELL_THETA order
+                # fills near the mid, it doesn't dump into a phantom-low bid on a thin book
+                # (SUPREMEIND real bid 37.20 vs mark 49.2). Mirrors the exit cap. env OPTIONS_ENTRY_SLIPPAGE_MAX_PCT.
+                _ecap = float(os.getenv("OPTIONS_ENTRY_SLIPPAGE_MAX_PCT", "5.0")) / 100.0
+                if _entry_ideal_ltp > 0 and _real_bid < _entry_ideal_ltp * (1 - _ecap):
+                    actual_entry_premium = round(_entry_ideal_ltp * (1 - _ecap), 2)
+                    entry_slippage_meta['bid_capped'] = True
+                else:
+                    actual_entry_premium = _real_bid
                 entry_slippage_meta['applied'] = True
         elif (OptionsTradingConfig.TRADING_MODE != "LIVE"
                 and OptionsTradingConfig.PAPER_SLIPPAGE_MODELING
@@ -3087,7 +3208,21 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 entry_slippage_meta['phantom_ask_rejected'] = True
                 entry_slippage_meta['applied'] = False
             else:
-                actual_entry_premium = _real_ask
+                # SYMMETRY WITH THE EXIT CAP (2026-08-17): the ask is a QUOTE, not a traded price. An
+                # inflated/stale ask books a phantom cost basis exactly like a phantom bid books a
+                # phantom exit. Cap the modeled BUY fill to a sane band ABOVE the last real trade
+                # (LTP). env OPTIONS_ENTRY_ASK_MAX_PCT (default 1.0%).
+                _acap = float(os.getenv("OPTIONS_ENTRY_ASK_MAX_PCT", "1.0")) / 100.0
+                if _entry_ideal_ltp > 0 and _real_ask > _entry_ideal_ltp * (1 + _acap):
+                    actual_entry_premium = round(_entry_ideal_ltp * (1 + _acap), 2)
+                    entry_slippage_meta['ask_capped'] = True
+                    logger.warning(
+                        f"ENTRY_ASK_CAPPED: {selected_contract.symbol} | ask ₹{_real_ask:.2f} is "
+                        f"{(_real_ask / _entry_ideal_ltp - 1) * 100:.1f}% above ltp ₹{_entry_ideal_ltp:.2f} "
+                        f"— booking at ₹{actual_entry_premium:.2f}"
+                    )
+                else:
+                    actual_entry_premium = _real_ask
                 entry_slippage_meta['applied'] = True
         else:
             # STALE-LTP GUARD (PAPER): AngelOne's LTP is the last-traded price and goes stale on
@@ -3118,6 +3253,13 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     f"ENTRY_STALE_GUARD_SKIP | {selected_contract.symbol} | ltp=₹{actual_entry_premium:.2f} "
                     f"ask=₹{_real_ask:.2f} looks fabricated/stale — keeping real ltp as cost basis"
                 )
+            # FLAT-SLIPPAGE MODE (2026-08-17): book the REAL traded price plus a fixed adverse
+            # slippage %, instead of the far side of a quote that may never have traded.
+            _flat_e = float(os.getenv("OPTIONS_FLAT_SLIPPAGE_PCT", "0.3")) / 100.0
+            if actual_entry_premium and actual_entry_premium > 0:
+                actual_entry_premium = round(
+                    actual_entry_premium * ((1 - _flat_e) if entry_action == 'SELL' else (1 + _flat_e)), 2)
+                entry_slippage_meta['flat_slippage'] = True
             entry_slippage_meta['applied'] = False
         entry_slippage_meta['fill'] = round(float(actual_entry_premium), 2)
         entry_slippage_meta['slippage_pct'] = (

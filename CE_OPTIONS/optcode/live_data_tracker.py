@@ -803,7 +803,12 @@ class LiveDataTracker:
                 # peak_pct is the max premium excursion vs entry — how far this trade actually ran.
                 if peak_premium and entry_premium:
                     trade['peak_premium'] = round(peak_premium, 2)
-                    trade['peak_pct'] = round((peak_premium - entry_premium) / entry_premium * 100, 2)
+                    # ACTION-AWARE: a SHORT's peak PROFIT is at the LOWEST premium, a LONG's at the highest.
+                    if trade.get('action') == 'SELL':
+                        _lp = trade.get('lowest_premium', entry_premium) or entry_premium
+                        trade['peak_pct'] = round((entry_premium - _lp) / entry_premium * 100, 2)
+                    else:
+                        trade['peak_pct'] = round((peak_premium - entry_premium) / entry_premium * 100, 2)
 
                 # Preserve lowest_premium seen during trade lifetime
 

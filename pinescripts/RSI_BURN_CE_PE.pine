@@ -1,0 +1,170 @@
+//@version=6
+indicator(title="RSI Burn — CE (bot) v1", shorttitle="RSI Burn CE", overlay=false)
+
+// ---------------- Inputs ----------------
+rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
+rsiSourceInput   = input.source(close, "Source", group="RSI Settings")
+flameThreshold   = input.float(70, title="Flame Ignition Level (Overbought)", group="Flame Settings", tooltip="Flame gradient visually starts appearing once RSI crosses above this level")
+exitLevel        = input.float(65, title="Exit / Flame Fade Level", group="Flame Settings", tooltip="Signal fades when RSI drops back below this level")
+requireRisingRSI = input.bool(true, title="Require RSI Rising (momentum filter)", group="Flame Settings")
+cooldownBars     = input.int(5, minval=0, title="Cooldown Bars Between Signals", group="Flame Settings")
+alertWindow      = input.session("0915-1430", "Alert window (exchange time)", group="Bot",
+     tooltip="Must match the CE bots ENTRY_FILTER_MARKET_OPEN/CLOSE (currently 0915-1430). Alerts outside this are rejected bot-side anyway; gating here avoids the noise. NOTE: opens at 09:15 (true market open) so RSI_BURN is tested in the early window; AO_IGNITION stays gated at 0930 in its own script, so 09:15-09:30 is RSI_BURN-exclusive.")
+minGapBars       = input.int(10, "Min candles between ANY two alerts", minval=0, group="Bot",
+     tooltip="Mirrors the AO_IGNITION global bar gap so the two strategies are throttled identically for the A/B.")
+requireConfirmBar = input.bool(true, title="Delay 1 Bar - Confirm Flame Still Burning", group="Flame Settings", tooltip="Ignores single-bar RSI spikes: waits 1 bar after the cross and only signals if RSI is still above the ignition level")
+minRSIAtTrigger  = input.float(75, title="Minimum RSI Value at Trigger", group="Flame Settings", tooltip="Entry only fires if RSI reached this value on the ignition bar or the confirm bar - filters out weak crosses that barely touch 70")
+
+requireMACD = input.bool(true, title="Require MACD Positive (line > signal, above zero)", group="Confirmation Filters")
+macdFast    = input.int(12, title="MACD Fast Length", group="Confirmation Filters")
+macdSlow    = input.int(26, title="MACD Slow Length", group="Confirmation Filters")
+macdSignal  = input.int(9,  title="MACD Signal Length", group="Confirmation Filters")
+requireMACDImproving = input.bool(true, title="Require MACD Line Improving vs Previous Bar", group="Confirmation Filters")
+
+requireAO   = input.bool(true, title="Require AO Positive", group="Confirmation Filters")
+requireAOImproving = input.bool(true, title="Require AO Improving vs Previous Bar", group="Confirmation Filters")
+
+// ---------------- RSI Calculation ----------------
+change = ta.change(rsiSourceInput)
+up   = ta.rma(math.max(change, 0), rsiLengthInput)
+down = ta.rma(-math.min(change, 0), rsiLengthInput)
+rsi  = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))
+
+rsiRising = rsi > rsi[1]
+
+// ---------------- MACD Calculation ----------------
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+macdImproving = macdLine > macdLine[1]
+macdOK = requireMACD ? (macdLine > signalLine and macdLine > 0 and (requireMACDImproving ? macdImproving : true)) : true
+
+// ---------------- AO (Awesome Oscillator) Calculation ----------------
+ao = ta.sma(hl2, 5) - ta.sma(hl2, 34)
+aoImproving = ao > ao[1]
+aoOK = requireAO ? (ao > 0 and (requireAOImproving ? aoImproving : true)) : true
+
+// ---------------- CONTEXT for the bot payload (added for live use) ----------------
+// These do NOT gate the signal — they are carried in the alert JSON so RSI_BURN trades can be
+// scored with the SAME tooling as AO_IGNITION (tools/alert_trade_join.py, window_side_eval.py).
+vwapBandMult = input.float(1.25, "VWAP band width (x std-dev)", minval=0.25, step=0.05, group="Bot")
+vwapSlopeLook = input.int(20, "VWAP slope window (bars)", minval=1, group="Bot",
+     tooltip="20 bars on a 3-MIN chart = 60 min, matching AO_IGNITION v50. Set 60 on a 1-min chart.")
+[vwapV, vwapUpper, vwapLower] = ta.vwap(hlc3, timeframe.change("D"), vwapBandMult)
+[dmiP, dmiM, adxV] = ta.dmi(14, 14)
+volAvg   = ta.sma(volume, 20)
+volRatio = (na(volAvg) or volAvg == 0) ? na : volume / volAvg
+avgRange = ta.sma(high - low, 14)
+var float dayOpen = na
+if timeframe.change("D")
+    dayOpen := open
+// lookahead_ON + [1] is the documented previous-session idiom — see the AO_IGNITION v36 note.
+prevDayClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+// Per-session VWAP slope reference: vwap[N] bleeds into YESTERDAY on the first N bars of a day.
+var vwHist = array.new_float(0)
+if timeframe.change("D")
+    array.clear(vwHist)
+array.push(vwHist, vwapV)
+if array.size(vwHist) > vwapSlopeLook + 1
+    array.shift(vwHist)
+vwapRef = array.size(vwHist) > 1 ? array.get(vwHist, 0) : na
+aoDayScale = ta.highest(math.abs(ao), 30)
+aoDelta    = ao - ao[1]
+aoDeltaAvg = ta.sma(math.abs(ao - ao[1]), 30)
+
+// ---------------- Flame Ignition Logic ----------------
+crossUp   = ta.crossover(rsi, flameThreshold)
+crossDown = ta.crossunder(rsi, exitLevel)
+
+// 1-bar confirmation: ignore single-bar spikes by waiting to see the flame is still burning
+stillBurning = rsi > flameThreshold
+confirmOK = requireConfirmBar ? (crossUp[1] and stillBurning) : crossUp
+
+// RSI must have reached the minimum on the ignition bar OR the confirm bar (not both at once)
+rsiHighEnough = math.max(rsi, rsi[1]) >= minRSIAtTrigger
+
+momentumOK = (requireRisingRSI ? rsiRising : true) and macdOK and aoOK
+
+var int lastSignalBar = na
+barsSinceLast = na(lastSignalBar) ? 9999 : bar_index - lastSignalBar
+cooldownOK = barsSinceLast >= cooldownBars
+
+inWindow = not na(time(timeframe.period, alertWindow))
+var int lastAnyBar = na
+gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
+
+flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk
+if flameStart
+    lastSignalBar := bar_index
+    lastAnyBar    := bar_index
+
+flameFade = crossDown
+
+// ---------------- Plotting ----------------
+rsiPlot     = plot(rsi, "RSI", color=#7E57C2)
+midLinePlot = plot(50, color=na, display=display.none)
+upperBand   = hline(flameThreshold, "Flame Ignition Level", color=color.new(color.orange, 40))
+lowerBand   = hline(exitLevel, "Exit Level", color=color.new(color.gray, 60))
+hline(100, display=display.none)
+hline(0, display=display.none)
+
+// Flame gradient fill (same visual as the stock RSI script)
+fill(rsiPlot, midLinePlot, 100, flameThreshold,
+     top_color=color.new(color.orange, 0), bottom_color=color.new(color.orange, 100),
+     title="Flame Gradient")
+
+// Entry / exit markers
+plotshape(flameStart, title="CE Entry", style=shape.triangleup, location=location.belowbar,
+     color=color.lime, size=size.small, text="CE", textcolor=color.white)
+
+plotshape(flameFade, title="CE Exit / Fade", style=shape.triangledown, location=location.abovebar,
+     color=color.red, size=size.small, text="Exit", textcolor=color.white)
+
+bgcolor(flameStart ? color.new(color.lime, 80) : na, title="Ignition Highlight")
+
+// ---------------- Alerts: BOT-COMPATIBLE JSON ----------------
+// The original alertcondition() calls sent PROSE, which the webhook cannot parse, and
+// {{plot('Flame Ignition Level')}} does not resolve (that is an hline, not a plot).
+// alertcondition() can only emit a STATIC string, so it can never carry computed values —
+// it is replaced entirely by alert(), which is what AO_IGNITION uses.
+//
+// WHEN CREATING THE ALERT IN TRADINGVIEW: choose "Any alert() function call".
+// Do NOT pick a named condition — there are none any more, deliberately.
+//
+// entry_type = "RSI_BURN" so these trades stay SEPARABLE from AO_IGNITION in the trade record;
+// that separation is the whole point of running both. VERIFIED bot-side: entry_type is not
+// whitelisted, an unknown value falls through to the relaxed defaults (pcr_min_normal,
+// ENTRY_FILTER_RSI_MIN_CALL=54 — this strategy fires at RSI>=75 so it clears easily, and
+// ENTRY_FILTER_RSI_MAX_CALL is 100 so the overbought ceiling cannot block it either).
+// The payload mirrors AO_IGNITION field-for-field so tools/alert_trade_join.py and the
+// window/shadow evaluators score both strategies with no changes.
+fmt(x) => str.tostring(x, "#.##")
+vwZ          = (na(vwapLower) or vwapBandMult == 0) ? na : (close - vwapV) / ((vwapV - vwapLower) / vwapBandMult)
+dayChgPct    = na(prevDayClose) ? na : (close - prevDayClose) / prevDayClose * 100.0
+vwapSlopePct = (na(vwapRef) or vwapRef == 0) ? na : (vwapV - vwapRef) / vwapRef * 100.0
+premDistPct  = (na(vwapV) or vwapV == 0) ? na : (close - vwapV) / vwapV * 100.0
+aoRatio      = (na(aoDayScale) or aoDayScale == 0) ? na : ao / aoDayScale
+aoForce      = (na(aoDeltaAvg) or aoDeltaAvg == 0) ? na : aoDelta / aoDeltaAvg
+
+ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' +
+     ',"entry_type":"RSI_BURN","trigger":"rsi_flame","bars_since_cross":"0"' +
+     ',"price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL"' +
+     ',"ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(histLine) +
+     '","vwap":"' + fmt(vwapV) + '","vwap_upper":"' + fmt(vwapUpper) + '","vwap_lower":"' + fmt(vwapLower) +
+     '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
+     '","vwap_dist_pct":"' + fmt(premDistPct) + '","vwap_slope_bars":"' + str.tostring(vwapSlopeLook) +
+     '","day_change_pct":"' + fmt(dayChgPct) + '","prev_close":"' + fmt(prevDayClose) +
+     '","ao_ratio":"' + fmt(aoRatio) + '","ao_force":"' + fmt(aoForce) +
+     '","ao_day_scale":"' + fmt(aoDayScale) + '","ao_delta":"' + fmt(aoDelta) +
+     '","adx":"' + fmt(adxV) + '","adx_slope":"' + fmt(adxV - adxV[3]) +
+     '","rsi_slope":"' + fmt(rsi - rsi[3]) + '","macd_slope":"' + fmt(histLine - histLine[1]) +
+     '","vol_ratio":"' + fmt(volRatio) + '","atr_pct":"' + fmt(avgRange / close * 100) +
+     '","tv_setup_label":"RSI_BURN_CE","reentry_context_active":"false"}'
+
+if flameStart
+    alert(ceJson, alert.freq_once_per_bar_close)
+
+// EXIT alert is informational only — the bots run their own exit stack (TRIAL_SL / HARD_SL /
+// STALE / EARLY_PEAK_CUT) and do NOT act on inbound exit alerts. Left so the fade is visible
+// on the chart and in the alert log; it carries no tradeable payload.
+if flameFade
+    alert('{"symbol":"' + syminfo.ticker + '","event":"RSI_BURN_FADE","price":"' + fmt(close) +
+          '","rsi_value":"' + fmt(rsi) + '"}', alert.freq_once_per_bar_close)

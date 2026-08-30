@@ -105,9 +105,11 @@ class OptionsCapitalConfig:
     # BAD     → trade at CAP_PER_TRADE_BAD
     # Currently all are ₹30K (capital-constrained). To scale specific trend days:
     #   set OPTIONS_CAP_PER_TRADE_GOOD=60000 in .env when capital is available.
-    CAP_PER_TRADE_GOOD    = float(os.getenv("OPTIONS_CAP_PER_TRADE_GOOD",    "30000"))
-    CAP_PER_TRADE_BAD     = float(os.getenv("OPTIONS_CAP_PER_TRADE_BAD",     "30000"))
-    CAP_PER_TRADE_NEUTRAL = float(os.getenv("OPTIONS_CAP_PER_TRADE_NEUTRAL", "30000"))
+    # Default to the single OPTIONS_CAP_PER_TRADE knob (NOT hardcoded 30000) so the per-trade
+    # budget is raised in ONE place. Override a specific tier only if you want trend-aware sizing.
+    CAP_PER_TRADE_GOOD    = float(os.getenv("OPTIONS_CAP_PER_TRADE_GOOD",    str(CAP_PER_TRADE)))
+    CAP_PER_TRADE_BAD     = float(os.getenv("OPTIONS_CAP_PER_TRADE_BAD",     str(CAP_PER_TRADE)))
+    CAP_PER_TRADE_NEUTRAL = float(os.getenv("OPTIONS_CAP_PER_TRADE_NEUTRAL", str(CAP_PER_TRADE)))
     INDEX_CAP_PER_TRADE_GOOD = float(os.getenv("OPTIONS_INDEXES_CAP_PER_TRADE_GOOD", os.getenv("OPTIONS_NIFTY_CAP_PER_TRADE_GOOD", "0")))
     INDEX_CAP_PER_TRADE_BAD = float(os.getenv("OPTIONS_INDEXES_CAP_PER_TRADE_BAD", os.getenv("OPTIONS_NIFTY_CAP_PER_TRADE_BAD", "0")))
     INDEX_CAP_PER_TRADE_NEUTRAL = float(os.getenv("OPTIONS_INDEXES_CAP_PER_TRADE_NEUTRAL", os.getenv("OPTIONS_NIFTY_CAP_PER_TRADE_NEUTRAL", "0")))
@@ -704,6 +706,68 @@ class OptionsTradingConfig:
     # funds gate uses (strike-notional × this rate) as a conservative margin proxy for SELL entries
     # (broker RMS is the ultimate backstop). Tune via OPTIONS_SELL_MARGIN_RATE. Unused in BUY/PAPER.
     SELL_MARGIN_RATE = float(os.getenv("OPTIONS_SELL_MARGIN_RATE", "0.20"))
+    # I4 (2026-08-04): SELL_THETA peak-based profit-lock TRIAL_SL. SHADOW by default
+    # (ENABLED=false → logs what it WOULD lock, does NOT close) until validated over days 4-5,
+    # then flip OPTIONS_TRIAL_SL_ENABLED=true. Arm once profit>=ARM%, exit when profit gives back
+    # GAP pts from peak (never turns a >=ARM% winner into a loser). Provisional arm10/gap8.
+    TRIAL_SL_ENABLED = os.getenv("OPTIONS_TRIAL_SL_ENABLED", "false").lower() == "true"
+    TRIAL_SL_ARM_PCT = float(os.getenv("OPTIONS_TRIAL_SL_ARM_PCT", "10.0"))
+    TRIAL_SL_GAP_PCT = float(os.getenv("OPTIONS_TRIAL_SL_GAP_PCT", "8.0"))
+    # 2026-08-06: fixed-point GAP surrenders ~72% of peak (median) because SELL peaks are small —
+    # a 5pt gap on a 6-10% peak locks ~1%. Switch to PROPORTIONAL: floor = peak * KEEP_FRAC.
+    # KEEP_FRAC>0 activates it (GAP ignored); 0 keeps legacy fixed-gap. Sim (204 paths, 4d):
+    # keep60/arm4 = +9% ₹ AND WR 81%→90% vs current arm6/gap5. Still only keeps ~32% of peak
+    # (rest is structural — fleeting spikes reverse faster than the monitor polls).
+    TRIAL_SL_KEEP_FRAC = float(os.getenv("OPTIONS_TRIAL_SL_KEEP_FRAC", "0.0"))
+    # 2026-08-08 (Option B): coarse BROKER-side profit ratchet for SELL_THETA shorts. As a short's
+    # PEAK profit crosses each tier, the resting broker BUY-stop is ratcheted DOWN to lock that tier's
+    # profit — so a winner survives a bot stall/crash (broker-enforced, not software-only). Kept LOOSER
+    # than the software TRIAL (KEEP_FRAC) so software takes profit first; the broker floor is the stall
+    # backstop. Format "peak%:lock%,...", ratchet-DOWN only, ~1 modify per tier crossed. "" = disabled.
+    BROKER_RATCHET_LADDER = os.getenv("OPTIONS_BROKER_RATCHET_LADDER", "4:0,10:5,15:8,20:12,30:20")
+
+    @classmethod
+    def broker_ratchet_tiers(cls):
+        """Parse BROKER_RATCHET_LADDER → sorted [(peak_pct, lock_pct), ...] ascending by peak.
+        Cached against the raw string. Empty/invalid → [] (ratchet disabled). See Option B (2026-08-08)."""
+        cached = getattr(cls, '_ratchet_tiers_cache', None)
+        raw = cls.BROKER_RATCHET_LADDER or ""
+        if cached is not None and cached[0] == raw:
+            return cached[1]
+        tiers = []
+        for part in raw.split(","):
+            part = part.strip()
+            if ":" not in part:
+                continue
+            try:
+                p, l = part.split(":", 1)
+                tiers.append((float(p), float(l)))
+            except Exception:
+                continue
+        tiers.sort(key=lambda t: t[0])
+        cls._ratchet_tiers_cache = (raw, tiers)
+        return tiers
+
+    @classmethod
+    def buy_ratchet_floor_pct(cls, peak_gain_pct: float) -> float:
+        """BUY profit-lock floor = peak × KEEP_FRAC once peak >= MIN_PEAK (else 0.0). Peak-anchored
+        (uses highest_premium), monotonic, never lowered. Constant keep-fraction of every peak — no
+        tier cliffs (the old ladder kept only ~40% of peak between tiers)."""
+        try:
+            if peak_gain_pct < cls.BUY_RATCHET_MIN_PEAK:
+                return 0.0
+            prop = peak_gain_pct * cls.BUY_RATCHET_KEEP_FRAC          # proportional (small peaks)
+            capd = peak_gain_pct - cls.BUY_RATCHET_MAX_GIVEBACK       # absolute cap (big runners)
+            return round(max(prop, capd), 2)
+        except Exception:
+            return 0.0
+
+    # I5 (2026-08-05): SELL_THETA STALE_CONSOLIDATION. If a short hasn't ARMED the trail
+    # (peak profit < TRIAL_SL_ARM_PCT) after STALE_MINUTES, it's not moving → cut it. Sim on 155
+    # paths: cut@30min = +₹8K vs baseline (winners arm by then; the rest is dead weight; 15-20min
+    # LOSES — too early, kills slow-bloomers). SELL_THETA only.
+    STALE_ENABLED = os.getenv("OPTIONS_STALE_ENABLED", "false").lower() == "true"
+    STALE_MINUTES = float(os.getenv("OPTIONS_STALE_MINUTES", "30"))
 
     # ── STALE-QUOTE GUARD (2026-07-28) ──────────────────────────────────────────
     # LTP is last-TRADED price; on an illiquid option with no trades it freezes at the last print
@@ -751,6 +815,11 @@ class OptionsTradingConfig:
     # With the +1% buffer this means the trail effectively arms at ~4% peak (was ~6%/11%).
     # Lowering the arm does NOT cap upside — the peak-minus-gap trail keeps trailing up.
     TRIAL_SL_BASE_ACTIVATION_PCT = float(os.getenv("OPTIONS_TRIAL_SL_BASE_ACTIVATION_PCT", "3.0"))
+    # FORCE-ARM (2026-08-24): when > 0 this OVERRIDES the whole activation calculation
+    # (dynamic market_threshold / SCALP / BASE) so the trail arms at exactly this gain.
+    # market_detector returns 5.0 or 10.0 with no env hook, so capping via BASE alone could
+    # not pin the arm point. Set to 0 to restore the dynamic behaviour.
+    TRIAL_SL_FORCE_ARM_PCT = float(os.getenv("OPTIONS_TRIAL_SL_FORCE_ARM_PCT", "0"))
 
     # PROGRESSIVE TRAILING GAP (2026-07-08, mirrored from CE): the trail gap WIDENS as the trade
     # proves itself, instead of a single fixed gap. Regime-change option trades are fat-tailed —
@@ -765,6 +834,19 @@ class OptionsTradingConfig:
     TRIAL_GAP_T1_PEAK = float(os.getenv("OPTIONS_TRIAL_GAP_T1_PEAK", "12.0"))
     TRIAL_GAP_T2_PEAK = float(os.getenv("OPTIONS_TRIAL_GAP_T2_PEAK", "25.0"))
     TRIAL_GAP_T3_PEAK = float(os.getenv("OPTIONS_TRIAL_GAP_T3_PEAK", "60.0"))
+
+    # 2026-08-13: BUY profit-lock RATCHET. PEAK-anchored (highest_premium), monotonic, NOT clamped to
+    # current. v2 (same day): proportional KEEP-FRACTION replaces the coarse tier ladder — the ladder's
+    # between-tier gaps kept only ~40% of peak (AMBER peak 11.6% locked only the 8-tier +5%; SRF 14.5%
+    # only +8%). Now floor = peak × KEEP_FRAC once peak >= MIN_PEAK, so every peak keeps a constant
+    # fraction, no cliffs. keep 0.65: peak 6%→+3.9%, 8%→+5.2%, 11.6%→+7.5%, 14.5%→+9.4%.
+    BUY_RATCHET_KEEP_FRAC = float(os.getenv("OPTIONS_BUY_RATCHET_KEEP_FRAC", "0.65"))
+    BUY_RATCHET_MIN_PEAK  = float(os.getenv("OPTIONS_BUY_RATCHET_MIN_PEAK", "3.0"))
+    # 2026-08-17: ABSOLUTE give-back cap. A flat keep-fraction surrenders a CONSTANT 35% of the peak,
+    # which is fine at +5% (1.8 pts) but brutal at +30% (10.7 pts) — OBEROIRLTY 1840CE peaked +30.55%,
+    # locked only +19.86% and exited +18.3%. Floor is now the BETTER of the proportional keep and
+    # (peak - MAX_GIVEBACK), so small peaks stay proportional while big runners stop donating points.
+    BUY_RATCHET_MAX_GIVEBACK = float(os.getenv("OPTIONS_BUY_RATCHET_MAX_GIVEBACK", "6.0"))
 
     # PROFIT FLOOR (breakeven protection):
     # Once a trade has been green >= TRIGGER%, move the hard SL up to the LOCK% floor and never

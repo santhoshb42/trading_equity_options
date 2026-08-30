@@ -17,7 +17,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from .optconfig import DATA_DIR, OptionsCapitalConfig
+from .optconfig import DATA_DIR, OptionsCapitalConfig, OptionsTradingConfig
 
 # =============================================================================
 # Table Formatters
@@ -375,9 +375,13 @@ No closed trades.
             lowest_prem = trade.get('lowest_premium')
             if lowest_prem is None:
                 lowest_prem = min(entry_prem, exit_prem)
-            # Peak reached as % of entry — how far this trade ran before exiting (for tuning the
-            # progressive TRIAL_SL gap). Computed from tracked high so it works for every trade.
-            peak_pct = ((highest_prem - entry_prem) / entry_prem * 100) if entry_prem else 0.0
+            # Peak PROFIT reached as % of entry (for tuning the TRIAL_SL gap). ACTION-AWARE: a SHORT
+            # profits as premium FALLS, so its profit-peak is the LOWEST premium; a LONG's is the
+            # highest. (Fixes shorts showing Peak% < PnL% when premium barely rose but fell to profit.)
+            if trade.get('action') == 'SELL':
+                peak_pct = ((entry_prem - lowest_prem) / entry_prem * 100) if entry_prem else 0.0
+            else:
+                peak_pct = ((highest_prem - entry_prem) / entry_prem * 100) if entry_prem else 0.0
             qty = trade.get('quantity', 0)
             pnl = trade.get('pnl', 0)  # NET (charges already deducted)
             charges = trade.get('charges', 0)
@@ -431,8 +435,8 @@ No closed trades.
         # === SECTION 2: ONGOING TRADES ===
         csv_lines.append("")
         csv_lines.append("=== ONGOING TRADES (Live) ===")
-        csv_lines.append("Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Curr     | High     | Low      | Qty    | UnPnL    | EstChrg  | PnL%  | Dur")
-        csv_lines.append("----+------------+--------------------------+-----------+-------+----------+----------+----------+----------+--------+----------+----------+-------+-------")
+        csv_lines.append("Sts | Underlying | Symbol                   | AlrtPx    | Time  | Entry    | Curr     | High     | Peak%  | Low      | Qty    | UnPnL    | EstChrg  | PnL%  | Dur   | Trail")
+        csv_lines.append("----+------------+--------------------------+-----------+-------+----------+----------+----------+--------+----------+--------+----------+----------+-------+-------+----------")
         
         # Sort ongoing by entry time (oldest first)
         ongoing_sorted = sorted(ongoing_trades, key=lambda x: x.get('entry_time', ''))
@@ -451,6 +455,14 @@ No closed trades.
             lowest_prem = trade.get('lowest_premium')
             if lowest_prem is None:
                 lowest_prem = min(entry_prem, current_prem)
+            # Peak PROFIT % so far — action-aware (a SHORT's profit-peak is the LOWEST premium).
+            peak_pct = (((entry_prem - lowest_prem) if trade.get('action') == 'SELL' else (highest_prem - entry_prem)) / entry_prem * 100) if entry_prem else 0.0
+            # TRIAL_SL status: armed once peak profit >= ARM%; then the floor locks at (peak - GAP)%.
+            _tarm = OptionsTradingConfig.TRIAL_SL_ARM_PCT; _tgap = OptionsTradingConfig.TRIAL_SL_GAP_PCT
+            if OptionsTradingConfig.TRIAL_SL_ENABLED and trade.get('action') == 'SELL' and peak_pct >= _tarm:
+                trail_status = f"YES@{peak_pct - _tgap:.1f}%"   # exits if profit falls to this floor
+            else:
+                trail_status = "NO"
             qty = trade.get('quantity', 0)
             unrealized_pnl = trade.get('unrealized_pnl', 0)
             pnl_pct = (unrealized_pnl / (entry_prem * qty) * 100) if (entry_prem * qty) > 0 else 0
@@ -485,7 +497,7 @@ No closed trades.
             option_symbol = trade.get('symbol', 'N/A')
             
             # Format with fixed widths matching header
-            line = f"OPN | {underlying:<10} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5}"
+            line = f"OPN | {underlying:<10} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {trail_status:>9}"
             csv_lines.append(line)
         
         return "\n".join(csv_lines)

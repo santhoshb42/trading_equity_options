@@ -1,0 +1,798 @@
+//@version=5
+// ============================================================================
+// AO Ignition — CE / PE  (zero-cross + pullback, multi-factor confirmed)  v19
+// ----------------------------------------------------------------------------
+// WHY: the VWAP-band break is a LATE signal — by the time price closes 2 SD above VWAP the move is
+// already extended, so we buy the FADE. The AO zero-line cross is the IGNITION of a new leg (the
+// start, not the exhaustion). AO = SMA(hl2,5) − SMA(hl2,34).
+//
+// DESIGN RULE: prefer DIRECTIONAL (rising/falling) and ADAPTIVE (relative to the symbol's own recent
+// range) checks. Avoid fixed levels/cutoffs — a big runner opens +2% and keeps going, so a %-from-open
+// cap or an "RSI > 50" gate kills exactly the best trades.
+//
+// MECHANISM — ARM → FOLLOW-THROUGH → FIRE (v7). Requiring every gate on the instant cross bar starved
+// to ZERO signals (confirmations mature at different times, and AO ≈ 0 at the cross). So: ARM on the
+// trigger, wait up to armWindow bars for AO to EXPAND + confirmations to align, FIRE once, then consume
+// the arm. DISARM if AO flips back across zero or the window elapses.
+//
+// TRIGGERS
+//   • Zero-cross ignition (CE & PE)
+//   • Pullback-continuation (CE only; PE = zero-cross only): AO stays on its side of zero, dips a real
+//     >=3-bar retracement, then resumes — catches legs that never return AO to zero.
+//
+// GATE STACK (each an independent toggle; ALL enabled ones must hold)
+//   AO accelerating · AO expand vs LOCAL range · AO expand vs DAY-scale range (kills flat consolidation)
+//   MACD histogram rising/falling · RSI TREND rising/falling (not a level) · volume expansion
+//   VWAP ZONE (CE above / PE below) · VWAP SLOPE (CE OFF — it lags up-reversals; PE ON, falling)
+//   price EMA slope (anti-flat) · bar-range expanding (anti-flat)
+//   DAY BIAS: CE only on a GREEN symbol / PE only on a RED one (vs prev close) — one side per symbol
+//   Pullback-only vetoes: ADX strictly rising (v19) + AO retains a fraction of THIS leg's peak (v19)
+//
+// v19 ANTI-FADE: the pullback trigger could not distinguish a pullback-in-trend from the FADE after the
+// peak — both are "AO falls N bars then ticks up", and a leg that peaked at AO 150 can decay to 55 and
+// still clear the day-scale bar (BOSCHLTD 12:00 CE fired with AO fading, RSI off 80, ADX stagnant).
+// Fixed by (a) leg-peak RETENTION and (b) ADX strictly rising (was '>=', which passed a stagnant ADX).
+//
+// v20 DEBUG MODE (input "DEBUG: label every RAW AO trigger…", default OFF): on any raw zero-cross or
+// pullback-resume that produced NO alert, prints the exact gate names that blocked it plus the live
+// numbers (AO vs local/day expand thresholds, vol ×avg, range ×avg). Use this instead of inferring a
+// missed move from the chart — it answers "why didn't this fire?" directly.
+//
+// v21/v22 WERE A MISTAKE — FULLY REVERTED IN v23. A 23-session x 32-symbol replay optimised for
+// average forward-return and alert count, and on that basis three gates were loosened. All three
+// re-opened problems that had ALREADY been fixed, and are now restored:
+//   • useDayScaleExpand OFF -> back ON. Turning it off put PE back into FLAT CONSOLIDATION — on the
+//     very KAYNES chart the gate was created for (PE fired at AO -1.87/-1.44 against a ~-20 day scale).
+//   • useDayBias OFF -> back ON. Turning it off put CE back into the PE ZONE — SBIN printed a "CE
+//     pullback" while the stock fell all session. The day-bias is what keeps CE off red symbols.
+//   • armWindow 0 -> back to 4. It cut PE from 15.4 to 1.3 alerts/day; the justification was also a
+//     measurement error (arm0 admits only violent one-bar AO gaps = a different, rarer population,
+//     so SELECTION was mistaken for TIMING).
+// LESSON (do not repeat): average forward-return is NOT the only objective. "No CE on a falling
+// symbol" and "no PE in a flat zone" are STRUCTURAL constraints — a config that improves mean return
+// while violating them is worse, not better. Any future study must treat them as hard constraints.
+//
+// v23 PE SIMPLIFICATION (kept): PE = the +ve->-ve zero-cross with EVERYTHING FALLING —
+//   AO falling · MACD hist falling · RSI falling · VWAP falling · price-EMA falling · below VWAP · red
+//   on the day · plus the local + day-scale AO expansion (real momentum, not a flat wiggle).
+// PE no longer requires VOLUME or RANGE expansion (useVolPE / useRangePE default OFF): breakdowns
+// GRIND rather than spike, and those two gates blocked ~40% / ~21% of all PE zero-crosses. CE keeps
+// both, since up-moves genuinely are impulsive. This is the one change the data and the structure agree on.
+//
+// PE REGIME NOTE: across those 23 sessions no PE config produced a positive expectancy (best +0.016%,
+// medians negative). That matches the earlier 20-day PUT study. Treat PE as unproven in an up-drift
+// market even though the alerting logic is now clean.
+//
+// KNOWN LEAK (unfixed, deliberate): RSI/price-EMA/MACD trend checks are TWO-POINT comparisons
+// (x > x[N]), so a single uptick inside an overall decline can pass. Tightening all of them at once
+// risks re-introducing the over-filtering that lost good alerts in v15-v16 — measure before changing.
+// See AO_IGNITION_CE_PE_REVIEW.md for full rationale, version history and open questions.
+//
+// v29/v30 SIMPLIFICATION (user's recipe, then MEASURED on 672 real option trades):
+//   CE = AO -ve->+ve cross · MACD hist ALREADY >0 AND rising · RSI rising · volume expanding · above VWAP
+//   PE = AO +ve->-ve cross · MACD hist <0 AND falling · RSI falling · VWAP falling · below VWAP
+//        · below VWAP_LOWER · day <= -0.5% · price-EMA falling · red on the day
+// What the measurement changed vs the literal spec (113 CE / 133 PE real trades, flat = peak <1%):
+//   • CE ret5 >= +0.25% REMOVED (v29) — required price to have already moved = the opposite of an ignition.
+//   • CE dropped price-EMA slope, range expansion and DAY BIAS: all three are SUBSUMED by hist>0 +
+//     above-VWAP. Day bias made CE strictly WORSE on top of the new stack (flat 36%->41%, peak
+//     +5.37->+4.09, -8% of winners). Result: 29 -> 39 alerts, flat 31%->33%, winners kept 39%->51%.
+//   • CE VWAP-RISING stays OFF — measured, it raises flat 33%->36% and removes 6% of WINNERS. Session
+//     VWAP is cumulative from 09:15 so it keeps falling INTO a real reversal (the HAVELLS 12:15 veto).
+//   • PE the strict inverse LOST on all four metrics (18 vs 22 alerts, flat 44% vs 36%, peak +3.37 vs
+//     +4.21, winners 30% vs 42%), so PE KEEPS below-VWAP_LOWER + day<=-0.5%. Those two do work that
+//     volume cannot: volume 1.5x alone reaches only 44% flat and costs 57% of PE alerts.
+//   • PE hist<0 added for symmetry but is a MEASURED NO-OP (identical 42/55%/+0.00% with and without) —
+//     at a +ve->-ve AO cross the histogram is already negative every time. Not a filter.
+// v31 OVER-FILTERING FIX — found by replaying the full gate stack over 20 sessions x 46 symbols
+// (6720 CE / 6768 PE raw AO zero-crosses) instead of scoring gates on already-filtered trades:
+//   • PE was firing 1.55/day across 46 symbols = ~1 alert per symbol per MONTH. Cause: the 2-SD VWAP
+//     band admits only 2.2% of bars BY CONSTRUCTION. It alone cut 735 -> 79 survivors. Fixed:
+//     band 2.0 -> 1.25 SD, day-fall 0.5% -> 0.3%. Same 36% flat / +4.21% peak, 12.4 alerts/day (8x).
+//   • CE volume 1.5x -> 1.3x: strictly better (23.6 vs 21.2 alerts/day, 28% vs 30% flat, 59% vs 46%
+//     winners retained). Volume was the single biggest CE cut (only 22.4% of crosses passed at 1.5x).
+// METHOD LESSON: a gate's AUC on trades that already passed the live filters says NOTHING about how
+// many raw signals it admits. ALWAYS report a new gate's base rate on the RAW cross population next
+// to its quality score — the 2-SD band scored well and was still nearly a total mute.
+//
+// v35 REVERTS THE v30 CE-DAY-BIAS REMOVAL. v30 claimed hist>0 AND close>vwap made the day bias
+// redundant. MEASURED FALSE: 32% of v34 CE alerts fired on symbols red vs prev close, 42% failed the
+// strict bias. A mid-day BOUNCE inside a down day satisfies both conditions easily (TRENT 2026-08-17).
+// This is the SECOND time an averages-based study has been allowed to override the structural rule —
+// the first was v21. THE RULE WINS: "no CE on a falling symbol" is a hard constraint, and the price
+// (23.6 -> 13.8 alerts/day, flat 28%->33%, winners 59%->45%) is paid deliberately.
+// STRUCTURAL CONSTRAINTS: "no CE on a falling symbol" = the DAY BIAS (not hist>0/vwap, which do not
+// imply it); "no PE in a flat zone" = day-scale AO + the band.
+//
+// overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
+// ============================================================================
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v54 [3-min, bar-0]", overlay=true, max_labels_count=500)
+
+// ─────────── AO (the trigger) ───────────
+aoFast = input.int(5,  "AO fast SMA", group="AO")
+aoSlow = input.int(34, "AO slow SMA", group="AO")
+requireAoAccel = input.bool(true, "AO must be accelerating on the cross (ao vs prior bar)", group="AO",
+     tooltip="On top of the zero-cross, require AO to still be moving in the new direction (rising for CE / falling for PE) — drops 1-bar zero-hug blips.")
+armWindow = input.int(4, "Follow-through window after cross (bars)", minval=0, group="AO",
+     tooltip="ARM on the trigger, then wait up to this many bars for AO to EXPAND + confirmations to align. Do NOT set 0: with aoExpand ON, AO is ~0 at the cross so almost nothing qualifies (v21 tried 0 and cut PE from 15.4 to 1.3 alerts/day). 4 is the tested default.")
+entryTiming = input.string("first bar", "Entry timing", options=["first bar","follow-through"], group="AO",
+     tooltip="first bar (default) = fire on the FIRST bar of the AO zero-cross. At the cross AO is ~0, so the LEVEL tests (aoExpand/dayExpand) cannot be satisfied yet — they are replaced by the CROSS-FORCE test below, which measures how hard AO is moving and IS valid on bar 1. follow-through = the old behaviour (arm, wait up to armWindow bars for AO to grow), which entered on the 3rd-4th bar.")
+useCrossForce = input.bool(true, "   CE: require CROSS FORCE (AO jump vs its typical jump)", group="AO",
+     tooltip="Quality test that works AT the cross: the bar's AO change must exceed crossForceFrac x the average |AO change| over crossForceLook bars. A real ignition crosses zero HARD; a flat consolidation drifts across it. Adaptive and relative — replaces the level tests, so the flat-zone rejection (KAYNES) is preserved without waiting for AO to grow.")
+useCrossForcePE = input.bool(true, "   PE: require CROSS FORCE (back ON in v51 — REQUIRED for bar-0)", group="AO",
+     tooltip="OFF for PE (v41), at the user's call: cross force was too brutal on the short side. MEASURED — it was the single biggest PE cut after the band: dropping it takes PE from 12.7 to 23.9 alerts/day with the band still on, and to 62.4/day with the band off as well. RATIONALE: an up-move ignites impulsively so a hard AO step is a fair CE demand, but a breakdown GRINDS — insisting the zero-cross bar itself be violent selects the flush, not the trend. Kept ON for CE where it measures well. NO QUALITY EVIDENCE either way for PE: the live bot never traded the population this admits.")
+crossForceFrac = input.float(1.5, "      AO jump ≥ this × avg |AO jump| (both sides)", minval=0.0, step=0.1, group="AO")
+crossForceLook = input.int(30, "      avg |AO jump| lookback (day-scale)", minval=1, group="AO",
+     tooltip="v50: 30 bars on a 3-MIN chart = 90 min, the same clock window the 90-bar value covered on the 1-min chart it was tuned on. This is a NORMALISATION reference (the denominator the AO jump is measured against), so it must stay time-equivalent or the force threshold changes character. If you move back to a 1-min chart set this to 90.")
+peArmBars = input.int(0, "   PE: bars allowed for AO to EXPAND after the cross", minval=0, maxval=20, group="AO",
+     tooltip="v42. PE no longer fires ON the zero-cross. With PE cross-force off (v41) there was NOTHING left testing signal quality at the cross bar, and 39% of PE alerts became DEAD WIGGLES — AO crossed zero in flat chop and never reached even -0.25x its day-scale (ITC 2026-08-17: three PE alerts at AO -0.01 against a ~1.3 day range, during the dead afternoon AFTER the real fall). PE now ARMS on the cross and fires on the first bar within this window where AO has genuinely EXPANDED (<= -0.35x its local AND day-scale range). WINDOW LENGTH MEASURED over 7116 PE crosses: 61% of crosses NEVER expand (dead wiggles, correctly dropped); of the 39% that DO, the median takes 4 bars but the tail is long. Capture rate by window: 4 bars=51%, 6=63%, 8=74%, 10=82%, 12=88%. v42 shipped 4 and silently discarded HALF the real breakdowns (ADANIENSOL 2026-08-17 11:29: crossed, then ground down for 30+ minutes; AO expanded well after the 4-bar arm expired). Default is now 8 = 74% capture, 24.8 alerts/day, still 0% wiggles. Longer windows catch more but enter later into the leg. Set 0 to force cross-bar-only firing.")
+crossGraceBars = input.int(0, "      CE GRACE: keep testing for N bars after the cross", minval=0, maxval=4, group="AO",
+     tooltip="v38. AT a zero-cross AO is BY DEFINITION near zero, so a leg that CRAWLS across (0.00 -> 0.01) produces a tiny step and fails cross-force even when a real move is starting one bar later. INOXWIND 2026-08-17 12:52: every CE gate passed except cross force (0.01 vs need 0.02) and the stock then ran +6.05%. With grace=N the arm survives N bars past the cross and the force test is retried each bar. Alert volume MEASURED over 20 sessions: grace=1 takes CE 31.4 -> 40.6/day (+29%) and PE 12.4 -> 17.9/day (+44%). Set 0 to restore the old cross-bar-only behaviour.")
+crossGraceMode = input.string("per-bar force", "      GRACE test", options=["per-bar force","cumulative from cross"], group="AO",
+     tooltip="per-bar force (default, CONSERVATIVE) = re-test the SINGLE-BAR AO step on each grace bar; the move must still arrive in one decisive bar, just not necessarily the cross bar itself. cumulative from cross = require the TOTAL AO displacement since the cross to clear the same bar, so three small steps can add up. Cumulative is more principled but much looser: it takes CE to 54.2/day (+72%) and PE to 23.4/day (+88%) at grace=1. WARNING: neither mode has a measurable QUALITY sample — fewer than 12 real option trades matched any grace variant, so only the alert COUNTS above are evidence.")
+useAoSwing = input.bool(true, "Ignore SMALL spikes: AO must EXPAND ≥ a fraction of its recent range", group="AO",
+     tooltip="FOLLOW-THROUGH (post-cross): within the window AO must grow to at least aoExpandFrac × its recent |AO| range — a real shift expands, a spike doesn't. Measured AFTER the cross, so unlike the old pre-cross swing gate it no longer rejects the ignition itself (AO is ~0 at the cross).")
+aoExpandFrac = input.float(0.35, "   AO expand ≥ this × recent AO range", minval=0.0, step=0.05, group="AO")
+aoRangeLook = input.int(10, "   AO range reference (bars)", minval=1, group="AO",
+     tooltip="v50: 10 bars on 3-MIN = 30 min, matching the 30-bar window tuned on 1-min. Normalisation reference for the AO-expansion test. On a 1-min chart set this back to 30.")
+useAoPullback = input.bool(false, "CE: also enter AO PULLBACK-continuation (OFF in v54)", group="AO",
+     tooltip="OFF from v54, MEASURED on 180 matched CE trades over 3 sessions (08-25..27). Pullback: 40 trades, gross -Rs4,185, charges Rs3,650, NET -Rs7,836 = -Rs196/trade. Zero-cross: 140 trades, gross +Rs10,520, NET -Rs2,175 = -Rs16/trade. Removing pullback improves the CE book by +Rs7,836. NOTE THE SHAPE: pullback has the HIGHER win rate (50% vs 35%) and higher median peak (2.4% vs 1.2%) yet loses 12x more per trade — it wins small and often, loses large occasionally, and its GROSS is negative before charges. THE DUPLICATE THEORY WAS WRONG: only 22% of pullbacks followed an earlier zero-cross alert on the same symbol+day; 78% were unique signals. They are unique precisely BECAUSE the ignition path rejected those legs — the pullback is the one trigger exempt from cross-force, so it acts as a bypass around the quality gate. COST OF TURNING IT OFF: 32 of 87 unique pullbacks fired before 10:00, i.e. legs that began before the 09:30 window opened and can never produce an ignition alert. Those are genuinely lost. On this evidence they are not worth keeping. CAVEAT: 40 trades / 3 sessions.")
+usePePullback = input.bool(false, "PE: also enter AO pullback (default OFF — PE = zero-cross only)", group="AO",
+     tooltip="PE pullback-continuation was noisy/unreliable — PE sticks to the +ve→−ve zero-cross with falling MACD/VWAP/RSI. Left as a toggle only for experimentation.")
+pbMinFallBars = input.int(3, "   Pullback: min AO-falling bars before the resume", minval=1, group="AO",
+     tooltip="The pullback (yellow) must last at least this many bars — a 1-2 bar AO wiggle isn't a real pullback. Kills the small brief-pullback noise (IDEA's late CE flurry).")
+pbSignifFrac = input.float(0.35, "   Pullback: AO ≥ this × DAY-scale AO range", minval=0.0, step=0.05, group="AO",
+     tooltip="The continuation must happen while the trend still has momentum: AO must still be >= this × its DAY-scale range. Once AO collapses to near-zero (trend spent), pullbacks are noise (IDEA late AO 0.02 vs a ~0.4 day scale → rejected). Adaptive, no fixed level.")
+pbDayLook = input.int(30, "   Pullback: AO day-scale reference (bars)", minval=1, group="AO",
+     tooltip="v50: 30 bars on 3-MIN = 90 min, matching the 90-bar window tuned on 1-min. On a 1-min chart set this back to 90.")
+// EXHAUSTION veto (v18): ADX-based, NOT RSI. In a healthy trend RSI makes LOWER highs while price makes
+// HIGHER highs — RSI cooling on a pullback is the normal continuation setup, so an RSI-overbought veto
+// kills the GOOD pullbacks. ADX measures trend STRENGTH: allow pullbacks while ADX is rising/flat (trend
+// intact); block only when ADX is FALLING (trend losing steam = real exhaustion). No level — pure slope.
+usePbExhaust = input.bool(true, "Pullback: block if trend strength FADING (ADX falling)", group="AO",
+     tooltip="Allow pullbacks only while trend strength is still BUILDING (ADX strictly > ADX N bars ago). v19: was '>=' which let a STAGNANT/topping ADX through (BOSCHLTD 12:00 CE fired as ADX flat-lined off its peak). RSI cools on every healthy pullback (lower RSI highs vs higher price highs), so RSI is the WRONG exhaustion tool — ADX (trend strength) is right. Pure slope, no level.")
+adxExhaustLen = input.int(14, "   ADX length", minval=1, group="AO")
+adxExhaustLook = input.int(3, "   ADX-slope lookback (block if ADX <= ADX this many bars ago)", minval=1, group="AO")
+// ANTI-FADE (v19): the pullback trigger cannot tell a PULLBACK-IN-TREND from the FADE AFTER THE PEAK —
+// both are "AO falls N bars, then ticks up". The discriminator is how much of THIS LEG's momentum is
+// left: a healthy pullback gives back a little; a post-peak fade has given back most of it. Measured
+// against the leg's own AO peak (since the last zero-cross), NOT the day range — a leg that peaked at
+// AO 150 can decay to 55 and still clear the day-scale bar, which is how BOSCHLTD 12:00 leaked through.
+usePbLegRetain = input.bool(true, "Pullback: AO must RETAIN a fraction of THIS leg's peak (anti-fade)", group="AO",
+     tooltip="A continuation resumes toward a NEW AO high; a fade makes LOWER highs. Require AO >= frac × the highest AO reached since this leg began (last zero-cross). BOSCHLTD 12:00: leg peak ~150, AO faded to ~45 = 30% retained → rejected. A real pullback (150 -> 120 = 80%) passes. Leg-relative and adaptive — no fixed level.")
+pbLegRetainFrac = input.float(0.8, "   AO ≥ this × this leg's AO peak", minval=0.0, maxval=1.0, step=0.05, group="AO")
+usePbNewHigh = input.bool(true, "Pullback: AO must make a NEW HIGH for this leg (v53)", group="AO",
+     tooltip="v53, user's spec: 'the trigger should happen only if AO value is higher since its shift from -ve to +ve'. The resume bar's AO must EXCEED the highest AO reached since this leg began at the zero-cross — i.e. the pullback must be FULLY recovered, not merely retained. This converts the pullback from a 'resume' into a 'breakout continuation': latest entry, highest conviction, fewest alerts. SUBSUMES pbLegRetainFrac (0.80): a new high is trivially >= 80% of the prior peak, so that gate can no longer bind while this is ON. IMPLEMENTATION NOTE: compared against ceLegPeak[1] (the peak as of the PREVIOUS bar), because ceLegPeak is updated with the current bar's AO before the gates run — comparing against ceLegPeak would be trivially true on every new high. CE only; the PE pullback is off by default (usePePullback=false).")
+useDayScaleExpand = input.bool(true, "Kill FLAT consolidation: AO must also expand ≥ frac of DAY-scale range", group="AO",
+     tooltip="A flat consolidation AFTER the day's move has tiny AO relative to the day, yet the local 30-bar range is small enough that it passes the normal expand check. This also requires AO to reach >= pbSignifFrac × its DAY-scale range (the same reference the pullback uses). KAYNES flat PE (AO −1.87 vs a ~20 day scale) → rejected; a genuine 2nd leg (AO ~−8) passes.")
+
+// ─────────── MACD confirmation ───────────
+useMacd  = input.bool(true, "Confirm: MACD aligned", group="MACD")
+macdFast = input.int(12, "   MACD fast", group="MACD")
+macdSlow = input.int(26, "   MACD slow", group="MACD")
+macdSig  = input.int(9,  "   MACD signal", group="MACD")
+macdMode = input.string("Hist rising", "   MACD test", options=["Hist rising","Line vs Signal","Histogram > 0"], group="MACD",
+     tooltip="Hist rising (default) = MACD histogram is RISING for CE / falling for PE — pure direction, no level, so it passes at the ignition when the histogram is still negative-but-turning. Line vs Signal / Histogram>0 are level-based alternatives.")
+
+// ─────────── RSI confirmation (rising for CE / falling for PE) ───────────
+useRsi    = input.bool(true, "Confirm: RSI TREND (rising CE / falling PE)", group="RSI",
+     tooltip="At the IGNITION the move hasn't happened yet, so RSI is still low/mid — checking an absolute level (e.g. >50) rejects the early entry. Check the TREND (RSI rising/falling) instead.")
+rsiLen    = input.int(14, "   RSI length", group="RSI")
+rsiSlopeBars = input.int(3, "   RSI slope lookback (bars)", minval=1, group="RSI")
+useRsiLevel = input.bool(false, "   also require RSI past a level (optional, default OFF)", group="RSI")
+rsiMid    = input.float(50, "   RSI level (only if the above is ON)", minval=1, step=1, group="RSI")
+
+// ─────────── Volume confirmation ───────────
+useVol  = input.bool(false, "Confirm: volume expansion (CE) — OFF in v37", group="Volume",
+     tooltip="OFF from v37 at the user's call, and the data backs the reasoning: volume expansion is NOT a natural property of the AO-shift bar. MEASURED over 20 sessions — the MEDIAN CE cross bar carries only 1.11x its 20-bar average volume, so a 1.3x requirement sits above the typical bar and blocked 56% of otherwise-qualifying CE signals (it was the #1 sole blocker, 565 occasions). THE TRADE-OFF IS REAL, not free: OFF gives 31.4 alerts/day vs 13.8, and retains 54% of winners vs 45%, but the FLAT rate rises 33% -> 44% and the median peak drops +5.19% -> +3.82%. DO NOT use an intermediate value: 1.15x (15.2/day, 43% flat) and 1.0x (16.9/day, 46% flat) are both DOMINATED by OFF — fewer alerts for the same flat rate. This gate is effectively binary: 1.3x or nothing.")
+volMult = input.float(1.3, "   Volume ≥ this × SMA", minval=1.0, step=0.05, group="Volume",
+     tooltip="1.3x (v31), was 1.5x. Measured, 1.3x STRICTLY DOMINATES 1.5x on the CE stack: more alerts (23.6 vs 21.2/day), LOWER flat rate (28% vs 30%), and 13 points more winners retained (59% vs 46%) at the same median peak. Do NOT switch to plain volume-RISING: it looks good on flat rate (25%) but retains only 17% of the winners.")
+volLen  = input.int(20, "   Volume SMA length", minval=1, group="Volume")
+useVolPE = input.bool(false, "   PE: also require volume expansion (default OFF)", group="Volume",
+     tooltip="OFF for PE: breakdowns GRIND, they do not spike — measured, the volume gate blocked 40% of all PE zero-crosses. CE keeps it (up-moves are impulsive). PE relies on the falling-alignment instead.")
+
+// ─────────── VWAP-slope confirmation (up for CE / down for PE) ───────────
+useVwapCE = input.bool(false, "CE confirm: VWAP RISING (default OFF — lags up-reversals)", group="VWAP slope",
+     tooltip="OFF for CE, now MEASURED (v30) not just anecdotal: on 113 real CE trades, adding VWAP-rising to the v30 stack RAISED the flat rate 33%->36% and removed 6% of the WINNERS for only 3 fewer alerts. Mechanism: session VWAP is cumulative from 09:15, so after a weak morning it keeps falling for 30-60min INTO a genuine reversal — it vetoes exactly the best entries (HAVELLS 12:15 rip). It is a lagging day-direction proxy, not a momentum check.")
+useVwapPE = input.bool(true, "PE confirm: VWAP FALLING (default ON)", group="VWAP slope",
+     tooltip="ON for PE: PE only fires on losing-from-open symbols, whose VWAP is typically falling — so requiring VWAP falling is a clean PE confirmation (the +ve→−ve + falling MACD/VWAP/RSI recipe). It rarely blocks because the day-bias already restricts PE to down-day names.")
+vwapSlopeLook = input.int(20, "   VWAP slope window (bars)", minval=1, group="VWAP slope",
+     tooltip="60 bars (v40), was 15. TWO DEFECTS FIXED. (1) MAGNITUDE COLLAPSE: session VWAP is CUMULATIVE, so by midday each new bar is one of ~300 already averaged in and VWAP becomes almost immovable — the median 15-bar VWAP move falls from 58 bps at the open to 1.1-1.5 bps after 11:00, i.e. 0.012%. At that size the test measures rounding noise, and it read 'falling' on 53-56% of ALL bars at every hour of the day — a coin flip. Measured, 1.8% of all bars had the 60-bar VWAP clearly falling while the 15-bar read flat or UP (ABB 2026-07-21 11:30: 60-bar -6.3 bps, 15-bar +0.62 bps). 60 bars measures the slope your EYE reads on the chart. (2) SESSION BLEED: vwap[15] on a bar before 09:30 reached into YESTERDAY's session, where VWAP is a different price level entirely — meaningless on 4% of bars. Now the reference comes from a per-session array that clears daily, so it can never cross a session and it degrades gracefully to the session start when fewer than N bars are available. COST: PE 12.45 -> 11.10 alerts/day. NOTE this gate is nearly redundant anyway — turning it fully OFF only reaches 13.35/day, i.e. it blocks just 7% of PE crosses, because below-VWAP + below-band + day<=-0.3% + EMA-falling already select falling stocks.")
+// ── MEASURED GATES (2026-08-17), from 672 REAL option trades over 6 days matched to candles.
+// Scored against ACTUAL option outcomes (peak >= 1%) rather than underlying forward return, which
+// only correlates 0.23 with option P&L and had previously led us the wrong way on PE.
+//   PE: good entries are FALLING HARD and EXTENDED DOWN — below VWAP_LOWER (AUC 0.694), red on the
+//       day (AUC 0.732, good median -0.83%), falling over the last 5 bars (AUC 0.793), near the day
+//       low (0.709). "below band AND day <= -0.5%" cuts flat PE from 75% -> 52% while keeping 70%
+//       of the winners.
+//   CE: recent momentum is what matters - ret5 >= +0.25% cuts flat CE from 55% -> 39% and lifts
+//       median peak to +4.36%. (The upper band alone only reached 54% flat, so CE uses momentum.)
+vwapBandMult = input.float(1.25, "   VWAP band width (x std-dev) for the PE zone", minval=0.25, step=0.05, group="VWAP slope",
+     tooltip="1.25 SD (v31), was 2.0. THE 2.0 SETTING WAS AN OVER-FILTERING BUG: a 2-SD band admits only ~2.2% of bars BY CONSTRUCTION, so it cut PE to 1.55 alerts/day across 46 symbols (~1 per symbol per MONTH — effectively no PE alerts). It was chosen from an AUC measured on trades that had ALREADY passed the live filters, without ever checking its base rate on the raw cross population. Swept over 20 sessions x 6768 raw PE crosses: 1.25 SD gives IDENTICAL quality to 2.0 (36% flat, +4.21% median peak) with 7x the alerts (12.4 vs 1.8/day) and 11 points more winners retained. Below 1.0 SD quality collapses (44-53% flat), so the band does real work — the width was simply wrong.")
+usePeBandZone = input.bool(true, "   PE: require close BELOW VWAP_LOWER (back ON in v51)", group="VWAP slope",
+     tooltip="OFF from v41. USER'S REASONING: 1.25 SD below VWAP is the REBOUND zone — demanding price be that extended means entering right where mean-reversion bites, which is the 'PE enters at the fade' complaint. THE THEORY COULD NOT BE TESTED: of 406 real PE trades only 32 had a closed exit AND matched a candle, and 25 of those sat below z -1.75 because the live bot was running the 2.0 SD band — it never took a SINGLE trade in the -0.5 to -1.25 region the theory is about. Comparing what was never traded is the exact selection trap that produced the 2-SD bug. WEAK COUNTER-EVIDENCE: those 25 deep entries returned a median +2.71% with only 7% losers, which leans against the rebound story, but n=25 from one config. Turning this OFF is what GENERATES the missing data: 49% of the resulting alerts land in the -0.5 to -1.25 band that has never been sampled. With the mid-VWAP gate still on, PE now means literally 'below VWAP and falling'. Alert volume 12.7 -> 62.4/day across 46 symbols (5x).")
+useCeBandZone = input.bool(false, "   CE: require close ABOVE VWAP_UPPER (OFF in v53)", group="VWAP slope",
+     tooltip="v51, user's spec. MIRROR of the PE VWAP_LOWER gate. CE now needs price ABOVE the upper band, not merely above the mid-VWAP. MEASURED over 3 sessions x 339 CE ignition alerts: above-VWAP is 100% (the mid gate never blocks anything once hist>0 is required), while above-VWAP_UPPER admits 51%. Combined with bar-0-only firing it leaves 42% of today's CE alerts (~47/day across 46 symbols). This is the CE half of 'fire on the first candle with both confirmations'.")
+usePeDayFall = input.bool(true, "   PE: require the stock DOWN by a minimum % on the day", group="VWAP slope",
+     tooltip="Magnitude, not just direction: good PE entries were a median -0.83% on the day vs -0.35% for flat ones (AUC 0.732). Paired with the band gate this halves the flat rate.")
+peDayFallPct = input.float(0.3, "      PE: min day fall %", minval=0.0, step=0.1, group="VWAP slope",
+     tooltip="0.3% (v31), was 0.5%. Paired with the 1.25 SD band this is better on ALL THREE metrics than 0.5%: 12.4 vs 10.7 alerts/day, 36% vs 38% flat, 49% vs 43% winners retained.")
+useCeMomentum = input.bool(false, "   CE: require recent 5-bar move in the trade's direction (default OFF)", group="VWAP slope",
+     tooltip="DEFAULT OFF (v29). It CONTRADICTS the ignition premise: demanding price has ALREADY risen 0.25% before entry means entering AFTER the move starts, which is the late/chasing entry this whole script exists to avoid. It is also a hardcoded % cutoff, against the design rule. FOR THE RECORD it did measure well (AUC 0.657, flat 55%->39%, median peak +4.36% on 115 real CE trades) — but that is a small sample with a post-hoc threshold, and the conceptual conflict outweighs it. Turning it ON leaves CE at ~36% flat vs ~44% with MACD-positive alone.")
+ceRet5MinPct = input.float(0.25, "      CE: min 5-bar rise %", minval=0.0, step=0.05, group="VWAP slope")
+useCeMacdPos = input.bool(true, "   CE: require MACD histogram already POSITIVE (not just rising)", group="VWAP slope",
+     tooltip="Measured on 115 real CE trades: hist>0 AND rising cut flat from 56% to 44%; COMBINED with the 5-bar move it reaches 36% flat and a +4.86% median peak (best of every variant tried). Note: adding an 'above VWAP' condition on top changed NOTHING (identical 70/44%/+3.82%) — by the time the histogram is positive and rising, price is already above VWAP, so that check is redundant.")
+usePeMacdNeg = input.bool(true, "   PE: require MACD histogram already NEGATIVE (mirror of the CE gate)", group="VWAP slope",
+     tooltip="Mirror of the CE hist>0 gate. MEASURED A NO-OP on 133 real PE trades: identical results with and without it (42 trades / 55% flat / +0.00% peak) — at a +ve->-ve AO cross the histogram is ALREADY negative in every observed case. Kept ON for symmetry and because it costs nothing, not because it filters.")
+useVwapZone = input.bool(true, "Zone: CE only ABOVE VWAP, PE only BELOW VWAP", group="VWAP slope",
+     tooltip="POSITION gate (not slope): a CE must sit in the BULLISH zone (price above VWAP), a PE in the BEARISH zone (below VWAP). Stops a CE appearing in the PE zone. Faster than the slope check — price reclaims VWAP quickly in a real rip, so genuine reversals still qualify once they cross back over.")
+
+// ─────────── Price TREND / anti-flat (no ADX level — just check the PRICE is actually moving the
+//             trade's way: RISING for CE eliminates FLAT and DOWN; FALLING for PE eliminates FLAT
+//             and UP. A fast EMA's slope — pure direction, no cutoff) ───────────
+useCePriceTrend = input.bool(false, "CE anti-flat: price RISING (default OFF in v30)", group="Price trend",
+     tooltip="OFF for CE (v30). Measured on 113 real CE trades: with the hist>0 + above-VWAP + RSI-rising + volume stack in place, this gate removed 10 alerts and 12% of the WINNERS while moving flat% only 33%->31%. It is subsumed — a stock with a positive rising MACD histogram trading above VWAP already has a rising EMA.")
+usePePriceTrend = input.bool(true, "PE anti-flat: price FALLING (default ON)", group="Price trend",
+     tooltip="No ADX, no level. Just the PRICE direction: a fast EMA must be RISING for CE (kills FLAT and DOWN entries) / FALLING for PE (kills FLAT and UP). This is the 'trend change or rise' check — the ignition must have price actually moving its way, not sitting flat.")
+priceEmaLen = input.int(9, "   Price EMA length", minval=1, group="Price trend")
+priceSlopeBars = input.int(5, "   EMA slope lookback (bars)", minval=1, group="Price trend",
+     tooltip="EMA now vs this many bars ago. Longer = a flat/chop reads as 'not rising' more reliably (raise if flat entries still leak); shorter = more responsive.")
+useRangeExp = input.bool(false, "CE anti-flat: range EXPANDING (default OFF in v30)", group="Price trend",
+     tooltip="Complements the slope: a flat entry = tiny bars. Require the bar's range to exceed its recent average — relative (× avg), not a fixed number.")
+rangeExpLen = input.int(14, "   Range avg length", minval=1, group="Price trend")
+rangeExpMult = input.float(1.0, "   Bar range ≥ this × avg range", minval=0.1, step=0.1, group="Price trend")
+useRangePE = input.bool(false, "   PE: also require range expansion (default OFF)", group="Price trend",
+     tooltip="OFF for PE, same reason as volume: a grinding breakdown has normal-sized bars. The AO/MACD/RSI/VWAP/EMA falling-alignment is what qualifies a PE.")
+
+// ─────────── Day-direction bias (a symbol gets ONE side, not both) ───────────
+useCeDayBias = input.bool(true, "CE day bias: only on a WINNING symbol (RESTORED in v35)", group="Day bias",
+     tooltip="ON. v30 turned this OFF on the claim that hist>0 AND close>vwap cannot both be true on a falling symbol. THAT CLAIM IS FALSE and was measured so: with it off, 32% of CE alerts fired on symbols RED vs prev close and 42% failed the strict bias (TRENT 2026-08-17, red -1.07%, fired two CE alerts on a mid-day bounce). A bounce inside a down day produces a positive rising histogram ABOVE the session VWAP quite easily. RESTORED as a HARD STRUCTURAL CONSTRAINT per the v21 lesson at the top of this file: no CE on a falling symbol, regardless of what the averages say. It does cost: 23.6 -> 13.8 alerts/day, flat 28%->33%, winners retained 59%->45%. Paying it deliberately. Loosening biasRef to 'prev close' recovers to 15.8/day if that is too tight.")
+usePeDayBias = input.bool(true, "PE day bias: only on a LOSING symbol (default ON)", group="Day bias",
+     tooltip="Direction only, NO magnitude cap (a +2% opener still qualifies for CE). CE only when the symbol is UP vs the reference, PE only when DOWN. Stops CE + PE both firing on the same name AND keeps each side on the right kind of symbol.")
+biasRef = input.string("both (strict)", "   Winning/losing measured vs", options=["both (strict)","prev close","day open"], group="Day bias",
+     tooltip="both (strict) = the symbol must agree on BOTH references: CE needs close > prev close AND > day open; PE needs close < prev close AND < day open. When the two DISAGREE the symbol is AMBIGUOUS (a gap-down that is recovering, or a gap-up that is fading) and gets NEITHER side. This resolves two complaints that were otherwise contradictory: TMPV (red vs prev close but above its open) must not get a CE, and BOSCHLTD (below prev close but recovering above its open) must not get a PE. The single-reference modes keep the old behaviour.")
+
+// ─────────── PE MOM_CONTINUATION (v44) — a SEPARATE, separately-labelled PE setup ───────────
+// This is NOT the ignition. The zero-cross setup tries to catch the TURN; this one JOINS an already
+// established downtrend on a retrace. Different premise, different gates, different alert label.
+//   AO already below zero · AO retraced UP for N bars · AO resuming DOWN · trend still has momentum
+//   · ADX still building · AO retained most of this leg's trough · price under VWAP_LOWER
+//   · the stock FELL in its opening 15 minutes and is still below that level
+// MEASURED over 20 sessions x 46 symbols: 7.65 alerts/day, 35% without follow-through.
+// The OPENED-DOWN filter is the one that earns its keep (13.10 -> 7.65 alerts/day AND better
+// follow-through 38% -> 35%). The band and ADX gates did NOT measurably improve follow-through
+// (34-35% either way) — they are kept because they are structurally sound and were asked for, but
+// do not assume they are load-bearing.
+// NOTE: deliberately NO "MACD falling / RSI falling" requirement. Those are IGNITION confirmations.
+// On a pullback the oscillators are BOUNCING by definition — that is what a pullback IS — so
+// demanding they fall would reject exactly the healthy continuations (same reasoning as the CE
+// pullback, which is likewise exempt from cross force).
+usePeMomCont = input.bool(true, "PE MOM_CONTINUATION: join an established downtrend on a pullback", group="PE MOM_CONT",
+     tooltip="Fires a SEPARATELY LABELLED alert (entry_type AO_MOMCONT, tv_setup_label AO_MOMCONT_PE) so it can be routed and evaluated apart from the zero-cross PE. Shares the PE cooldown and the global bar-gap so it cannot double up on the same name.")
+pmcFallBars = input.int(3, "   pullback length: AO rose ≥ this many bars", minval=1, group="PE MOM_CONT")
+pmcRetain = input.float(0.8, "   AO must retain ≥ this × this leg's TROUGH", minval=0.0, maxval=1.0, step=0.05, group="PE MOM_CONT",
+     tooltip="Anti-fade, mirroring the CE pullback: a continuation resumes toward a NEW AO low; a spent trend makes higher lows. Loosening to 0.6 doubles alerts (7.65 -> 15.30/day) with no follow-through gain (34% vs 35%).")
+pmcNeedBand = input.bool(true, "   require close BELOW VWAP_LOWER", group="PE MOM_CONT",
+     tooltip="On a pullback price retraces UP toward VWAP, so still being under the lower band means the bounce was WEAK and the trend is intact. MEASURED: removing it gives 9.50 vs 7.65 alerts/day at 34% vs 35% no-follow-through — i.e. it costs alerts and does not measurably improve quality. Kept on structural grounds, not evidence.")
+pmcNeedAdx = input.bool(true, "   require ADX still RISING", group="PE MOM_CONT",
+     tooltip="Trend strength must still be building. MEASURED: no follow-through improvement (35% either way); costs 9.25 -> 7.65 alerts/day.")
+pmcNeedOpenDown = input.bool(true, "   require the stock FELL in its opening 15 min (and is still below)", group="PE MOM_CONT",
+     tooltip="THE GATE THAT EARNS ITS KEEP. Compares the first in-window bar (09:30 by default) against the day OPEN, and requires price to still be below that 09:30 level. MEASURED: 13.10 -> 7.65 alerts/day AND follow-through improves 38% -> 35%. This is what makes the setup 'stocks already down from 09:15' rather than any pullback anywhere.")
+
+// ─────────── Logic / session ───────────
+cooldownMin = input.int(30, "Cooldown minutes (per side)", minval=1, group="Logic")
+useCooldown = input.bool(true, "Enforce cooldown", group="Logic")
+minGapBars  = input.int(10, "Min candles between ANY two alerts", minval=0, group="Logic")
+alertWindow = input.session("0930-1430", "Alert window (exchange time)", group="Logic")
+showLabels  = input.bool(true, "Show labels", group="Visuals")
+labelSize   = input.string("small", "Label size", options=["tiny","small","normal","large"], group="Visuals")
+dbgData   = input.bool(true, "INSPECTOR: publish every gate + number to the DATA WINDOW", group="Debug",
+     tooltip="ON by default and free — nothing is drawn on the chart. Open the Data Window (right-hand panel, or Ctrl+Alt+D / Cmd+Opt+D) and move the cursor over ANY bar: every gate shows 1 (pass) / 0 (fail) / -1 (gate disabled), and every raw number behind it is listed. This is the answer to 'why did/didn't this bar fire?' for any bar in history.")
+dbgTable  = input.bool(true, "INSPECTOR: on-chart TABLE (state of the LAST bar)", group="Debug",
+     tooltip="Draws a live pass/fail table in the top-right of the chart for the MOST RECENT bar. Needs no panel and no hovering — this is the one that is visible immediately. For HISTORICAL bars use the hover markers or the Data Window, because a Pine table can only ever show the last bar.")
+dbgHover  = input.bool(true, "INSPECTOR: hover-tooltip marker on recent bars", group="Debug",
+     tooltip="OFF from v45. IT WAS EATING YOUR ENTRY LABELS. Pine keeps only the last max_labels_count (500) labels and SILENTLY DELETES older ones. With the full-session scope this draws ~375 markers for the most recent day, leaving ~125 slots for every CE/PE/MOM_CONT entry label in the whole loaded history — and because entry labels are created BEFORE the hover marker on each bar, they are the OLDER ones and get evicted first. Result: no CE/PE labels on any day except the most recent. Switch this ON only while actively inspecting, and switch it back OFF to see your entry labels again. The DATA WINDOW gives the same per-bar readout with NO label cost and covers all history — prefer it.")
+dbgHoverScope = input.string("today (full session)", "   hover markers: coverage", options=["today (full session)","last N bars"], group="Debug",
+     tooltip="v39. 'today (full session)' marks EVERY bar of the most recent trading day, so the whole 09:15-15:30 session is inspectable no matter where the last bar sits. The old 'last N bars' default of 200 only reached back to about 11:55 from a 15:15 last bar. LABEL BUDGET: Pine caps a script at 500 labels TOTAL, shared between hover markers, entry labels and the debugWhyNot labels. A full 1-min session is ~375 bars, leaving ~125 slots — plenty for one symbol, but if you ALSO switch debugWhyNot on, Pine will silently drop the OLDEST labels. The Data Window has no such limit and covers all history.")
+dbgHoverBars = input.int(125, "      ...or how many recent bars", minval=10, maxval=480, group="Debug")
+debugWhyNot = input.bool(false, "DEBUG: label every RAW AO trigger with the gates that BLOCKED it", group="Debug",
+     tooltip="Turn ON to stop guessing why a move produced no alert. On every raw AO zero-cross / pullback-resume that did NOT fire, prints the exact gate names that were false on that bar, plus the live numbers (AO vs the expand thresholds, vol ×avg, range ×avg). Turn OFF for normal use.")
+
+// ─────────── Indicators ───────────
+ao = ta.sma(hl2, aoFast) - ta.sma(hl2, aoSlow)
+[macdLine, sigLine, hist] = ta.macd(close, macdFast, macdSlow, macdSig)
+rsi = ta.rsi(close, rsiLen)
+vwapNewDay = timeframe.change("D")
+[vwap, vwapUpper, vwapLower] = ta.vwap(hlc3, vwapNewDay, vwapBandMult)
+volAvg = ta.sma(volume, volLen)
+volRatio = (na(volAvg) or volAvg == 0) ? na : volume / volAvg
+priceEma = ta.ema(close, priceEmaLen)
+[pbDiP, pbDiM, pbAdxV] = ta.dmi(adxExhaustLen, adxExhaustLen)   // trend strength for the pullback exhaustion veto
+var float dayOpen = na
+if timeframe.change("D")
+    dayOpen := open
+// PREVIOUS DAILY CLOSE — must be lookahead_ON with the [1] offset. THIS WAS A BUG until v36:
+// with lookahead_OFF, request.security returns the last COMPLETED daily bar (i.e. yesterday), so
+// close[1] relative to THAT is the day BEFORE yesterday — the offset is applied twice. Measured on
+// GODREJPROP 2026-08-17: script read prevClose 2028.0 (two sessions back) while the true previous
+// close was 1990.0, so a stock UP +3.22% reported day -0.68%, the CE day bias BLOCKED it, and the
+// PE day-fall gate PASSED it. lookahead_ON is NOT lookahead bias here: bar [1] has already closed,
+// which is the documented idiom for previous-session values.
+prevDayClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+
+// ─────────── Trigger: AO zero-cross (the ignition) ───────────
+ceCross = ta.crossover(ao, 0)     // −ve → +ve
+peCross = ta.crossunder(ao, 0)    // +ve → −ve
+aoAccelCE = not requireAoAccel or ao > ao[1]
+aoAccelPE = not requireAoAccel or ao < ao[1]
+aoRange   = ta.highest(math.abs(ao), aoRangeLook)
+fireAtCross  = entryTiming == "first bar"
+effArmWindowCE = fireAtCross ? crossGraceBars : armWindow   // v38: was hard 0 — see crossGraceBars
+effArmWindowPE = fireAtCross ? peArmBars      : armWindow   // v42: PE waits for AO to EXPAND
+// CROSS FORCE — valid on the cross bar itself (unlike the level tests). A genuine ignition crosses
+// zero with a big AO step; a flat consolidation oozes across it with tiny steps.
+aoDelta    = ao - ao[1]
+aoDeltaAvg = ta.sma(math.abs(ao - ao[1]), crossForceLook)
+// NOTE: crossForceCE/PE are defined AFTER the arm block (v38) because with a grace window the test
+// depends on how many bars have elapsed since the cross and on the AO level the cross started from.
+
+// ARM on the cross, FIRE within the follow-through window once AO EXPANDS. The big swing materializes
+// AFTER the cross (CUMMINSIND's +50 hump grew after its zero-cross), so measuring expansion post-cross
+// captures the real shift instead of rejecting it, and it stops requiring everything on one instant bar.
+// Pullback-continuation: AO stays on its side of zero, dips (yellow), then resumes (green) — no fresh
+// zero-cross. ao[1] was a local trough (CE) / peak (PE) and AO has turned back the trade's way.
+// Pullback QUALITY: a real retracement (AO fell >= pbMinFallBars) resuming while the trend still has
+// momentum (AO still >= pbSignifFrac of its DAY-scale range) — kills small/late near-zero wiggles.
+aoDayScale = ta.highest(math.abs(ao), pbDayLook)
+pbSignifCE = na(aoDayScale) or aoDayScale == 0 or ao >=  pbSignifFrac * aoDayScale
+pbSignifPE = na(aoDayScale) or aoDayScale == 0 or ao <= -pbSignifFrac * aoDayScale
+ceResumeRaw = useAoPullback and ao > 0 and ao > ao[1] and ta.falling(ao, pbMinFallBars)[1] and pbSignifCE
+peResumeRaw = usePePullback and ao < 0 and ao < ao[1] and ta.rising(ao,  pbMinFallBars)[1] and pbSignifPE
+// EXHAUSTION veto (ADX): trend strength must still be BUILDING. v19: strictly '>' — '>=' let a stagnant
+// / topping ADX through, which is exactly the state at a post-peak fade. Direction-agnostic.
+pbAdxOK = not usePbExhaust or na(pbAdxV) or pbAdxV > pbAdxV[adxExhaustLook]
+// ANTI-FADE: track THIS leg's AO extreme (resets when AO crosses zero = new leg) and require the
+// pullback to have retained a real fraction of it. A fade has given most of the leg's momentum back.
+var float ceLegPeak   = 0.0
+var float peLegTrough = 0.0
+ceLegPeak   := ao > 0 ? math.max(nz(ceLegPeak), ao)   : 0.0
+peLegTrough := ao < 0 ? math.min(nz(peLegTrough), ao) : 0.0
+pbLegCE = not usePbLegRetain or ceLegPeak   <= 0 or ao >= pbLegRetainFrac * ceLegPeak
+pbLegPE = not usePbLegRetain or peLegTrough >= 0 or ao <= pbLegRetainFrac * peLegTrough
+// v53 NEW-HIGH gate. ceLegPeak is updated with THIS bar's AO above, so the prior peak is
+// ceLegPeak[1]. A leg that has just crossed zero has ceLegPeak[1] == 0, in which case any
+// positive AO is a new high and the gate passes (it must not block the first leg bar).
+pbNewHighCE = not usePbNewHigh or na(ceLegPeak[1]) or ceLegPeak[1] <= 0 or ao > ceLegPeak[1]
+ceResume = ceResumeRaw and pbAdxOK and pbLegCE and pbNewHighCE
+peResume = peResumeRaw and pbAdxOK and pbLegPE
+// ── PE MOM_CONTINUATION trigger (v44). Mirror of the CE pullback, on the short side.
+// px0930 = close of the FIRST bar inside the alert window, captured per day. Tied to alertWindow so
+// it follows if the window is changed rather than hard-coding 09:30.
+var float px0930 = na
+if timeframe.change("D")
+    px0930 := na
+pmcInWin = not na(time(timeframe.period, alertWindow))
+if pmcInWin and na(px0930)
+    px0930 := close
+pmcOpenDown = not pmcNeedOpenDown or (not na(px0930) and not na(dayOpen) and px0930 < dayOpen and close < px0930)
+pmcBandOK   = not pmcNeedBand or (not na(vwapLower) and close < vwapLower)
+pmcAdxOK    = not pmcNeedAdx or (not na(pbAdxV) and not na(pbAdxV[adxExhaustLook]) and pbAdxV > pbAdxV[adxExhaustLook])
+pmcLegOK    = peLegTrough >= 0 or ao <= pmcRetain * peLegTrough
+pmcRaw = usePeMomCont and ao < 0 and ao < ao[1] and ta.rising(ao, pmcFallBars)[1] and pbSignifPE
+pmcOK  = pmcRaw and pmcAdxOK and pmcBandOK and pmcOpenDown and pmcLegOK
+ceTrigger = ceCross or ceResume
+peTrigger = peCross or peResume
+var int ceArm = na
+var int peArm = na
+var string ceArmType = na    // "zero-cross" or "pullback" — carried to the entry label
+var string peArmType = na
+var float ceCrossBase = na   // AO on the bar BEFORE the cross (baseline for cumulative grace)
+var float peCrossBase = na
+if ceTrigger
+    ceArm := bar_index
+    ceArmType := ceCross ? "zero-cross" : "pullback"
+    ceCrossBase := ao[1]
+if peTrigger
+    peArm := bar_index
+    peArmType := peCross ? "zero-cross" : "pullback"
+    peCrossBase := ao[1]
+if not na(ceArm) and (ao <= 0 or (bar_index - ceArm) > effArmWindowCE)   // AO flipped back, or window elapsed
+    ceArm := na
+if not na(peArm) and (ao >= 0 or (bar_index - peArm) > effArmWindowPE)
+    peArm := na
+ceArmed = not na(ceArm)
+peArmed = not na(peArm)
+// CROSS FORCE, grace-aware (v38). "per-bar force" retests the single-bar step on every grace bar;
+// "cumulative from cross" measures total AO displacement since the bar before the cross.
+graceCumul = crossGraceMode == "cumulative from cross"
+ceForceVal = (graceCumul and ceArmed and not na(ceCrossBase)) ? ao - ceCrossBase : aoDelta
+peForceVal = (graceCumul and peArmed and not na(peCrossBase)) ? ao - peCrossBase : aoDelta
+crossForceCE = not useCrossForce or na(aoDeltaAvg) or aoDeltaAvg == 0 or ceForceVal >=  crossForceFrac * aoDeltaAvg
+crossForcePE = not useCrossForcePE or na(aoDeltaAvg) or aoDeltaAvg == 0 or peForceVal <= -crossForceFrac * aoDeltaAvg
+ceAge = ceArmed ? bar_index - ceArm : na    // 0 = fired on the cross bar itself
+peAge = peArmed ? bar_index - peArm : na
+// Follow-through: AO has grown to a real fraction of its recent range (a spike never does)
+aoExpandCE = not useAoSwing or na(aoRange) or aoRange == 0 or ao >=  aoExpandFrac * aoRange
+aoExpandPE = not useAoSwing or na(aoRange) or aoRange == 0 or ao <= -aoExpandFrac * aoRange
+// Anti-flat-consolidation: AO must ALSO be significant vs the DAY-scale range (kills post-move flats)
+dayExpandCE = not useDayScaleExpand or na(aoDayScale) or aoDayScale == 0 or ao >=  pbSignifFrac * aoDayScale
+dayExpandPE = not useDayScaleExpand or na(aoDayScale) or aoDayScale == 0 or ao <= -pbSignifFrac * aoDayScale
+
+// ─────────── Confirmations ───────────
+macdBull = macdMode == "Histogram > 0" ? hist > 0 : macdMode == "Hist rising" ? hist > hist[1] : macdLine > sigLine
+macdBear = macdMode == "Histogram > 0" ? hist < 0 : macdMode == "Hist rising" ? hist < hist[1] : macdLine < sigLine
+macdBullOK = not useMacd or macdBull
+macdBearOK = not useMacd or macdBear
+
+rsiBullOK = not useRsi or (rsi > rsi[rsiSlopeBars] and (not useRsiLevel or rsi >= rsiMid))   // rising (level optional)
+rsiBearOK = not useRsi or (rsi < rsi[rsiSlopeBars] and (not useRsiLevel or rsi <= rsiMid))   // falling (level optional)
+
+volOKce = not useVol   or na(volAvg) or volume >= volAvg * volMult
+volOKpe = not useVolPE or na(volAvg) or volume >= volAvg * volMult
+
+// VWAP SLOPE REFERENCE (v40) — held in a per-session array instead of vwap[N].
+// vwap[N] silently reaches into YESTERDAY's session on the first N bars of a day, and yesterday's
+// VWAP is a completely different price level. The array clears on each new day, so the reference can
+// never cross a session boundary; when fewer than N bars exist it falls back to the session's first
+// VWAP, which degrades gracefully instead of lying.
+var vwHist = array.new_float(0)
+if timeframe.change("D")
+    array.clear(vwHist)
+array.push(vwHist, vwap)
+if array.size(vwHist) > vwapSlopeLook + 1
+    array.shift(vwHist)
+vwapRef   = array.size(vwHist) > 1 ? array.get(vwHist, 0) : na
+vwapSlope = na(vwapRef) ? na : vwap - vwapRef
+// Pure direction — VWAP now vs the reference (no cutoff). CE off (lags up-reversals); PE on.
+vwapUpOK = not useVwapCE or (not na(vwapRef) and vwap > vwapRef)
+vwapDnOK = not useVwapPE or (not na(vwapRef) and vwap < vwapRef)
+// Zone (position) — CE only in the bullish zone (above VWAP), PE only in the bearish zone (below)
+vwapZoneCE = not useVwapZone or close > vwap
+vwapZonePE = not useVwapZone or close < vwap
+// MEASURED gates — PE needs to be EXTENDED DOWN and materially red; CE needs recent upward momentum.
+ceBandOK  = not useCeBandZone or (not na(vwapUpper) and close > vwapUpper)   // v51: CE mirror of the PE band
+peBandOK  = not usePeBandZone or (not na(vwapLower) and close < vwapLower)
+peFallOK  = not usePeDayFall or na(prevDayClose) or (prevDayClose - close) / prevDayClose * 100.0 >= peDayFallPct
+ceMomOK   = not useCeMomentum or (close - close[5]) / close[5] * 100.0 >= ceRet5MinPct
+ceMacdOK  = not useCeMacdPos or (not na(hist) and hist > 0)   // POSITIVE, on top of the rising test in macdBullOK
+peMacdOK  = not usePeMacdNeg or (not na(hist) and hist < 0)   // NEGATIVE mirror (measured no-op — see tooltip)
+
+// Price TREND (anti-flat) — the price must actually be moving the trade's way, not flat/wrong-way
+priceUpOK = not useCePriceTrend or priceEma > priceEma[priceSlopeBars]   // rising → not flat, not down
+priceDnOK = not usePePriceTrend or priceEma < priceEma[priceSlopeBars]   // falling → not flat, not up
+avgRange = ta.sma(high - low, rangeExpLen)
+rangeOKce = not useRangeExp or na(avgRange) or (high - low) >= avgRange * rangeExpMult
+rangeOKpe = not useRangePE  or na(avgRange) or (high - low) >= avgRange * rangeExpMult
+
+// Day-direction bias — CE only on a WINNING symbol, PE only on a LOSING one, vs the chosen reference
+// (prev close = green/red like the watchlist; day open = up/down from today's open)
+// Day bias — "both (strict)" needs prev-close AND day-open to AGREE, so an ambiguous symbol
+// (gap-down recovering / gap-up fading) gets neither side. Single-reference modes preserved.
+biasUpPrev = na(prevDayClose) or close > prevDayClose
+biasDnPrev = na(prevDayClose) or close < prevDayClose
+biasUpOpen = na(dayOpen)      or close > dayOpen
+biasDnOpen = na(dayOpen)      or close < dayOpen
+dayUpOK = not useCeDayBias or (biasRef == "prev close" ? biasUpPrev : biasRef == "day open" ? biasUpOpen : (biasUpPrev and biasUpOpen))
+dayDnOK = not usePeDayBias or (biasRef == "prev close" ? biasDnPrev : biasRef == "day open" ? biasDnOpen : (biasDnPrev and biasDnOpen))
+
+// QUALITY, per trigger type. crossForce asks "did AO cross zero HARD" — that is a ZERO-CROSS test.
+// A pullback-continuation is a gentle resumption, so it FAILS crossForce by nature: measured, only
+// 7.1% of CE pullback triggers passed it vs 37.8% of zero-crosses, i.e. v24 silently killed 93% of
+// the CE pullback entries. The pullback already carries its OWN quality gates (>=3-bar AO fall,
+// >=0.35x day-scale, ADX strictly rising, >=0.80 leg-peak retention), so it is exempt here.
+ceIsPullback = ceArmType == "pullback"
+peIsPullback = peArmType == "pullback"
+// v42 BUG FIX. crossForceXX evaluates to TRUE when its toggle is OFF ("not useCrossForce or ..."),
+// so `fireAtCross ? (pullback or crossForceXX) : ...` collapsed to TRUE the moment the force test was
+// disabled — and aoExpand/dayExpand were only ever wired into the follow-through branch. Turning PE
+// cross-force off in v41 therefore removed the LAST anti-flat gate on the PE trigger and 39% of PE
+// alerts became dead wiggles (ITC 2026-08-17). A DISABLED force test must fall back to the EXPANSION
+// test, never to "no gate". This is the third time the documented "no PE in a flat zone" structural
+// constraint has been broken; it is now impossible to disable both gates at once by accident.
+ceQualCross = useCrossForce   ? crossForceCE : (aoExpandCE and dayExpandCE)
+peQualCross = useCrossForcePE ? crossForcePE : (aoExpandPE and dayExpandPE)
+qualCE = fireAtCross ? (ceIsPullback or ceQualCross) : (aoExpandCE and dayExpandCE)
+qualPE = fireAtCross ? (peIsPullback or peQualCross) : (aoExpandPE and dayExpandPE)
+ceRaw = ceArmed and aoAccelCE and qualCE and macdBullOK and rsiBullOK and volOKce and vwapUpOK and vwapZoneCE and ceBandOK and ceMomOK and ceMacdOK and priceUpOK and rangeOKce and dayUpOK
+peRaw = peArmed and aoAccelPE and qualPE and macdBearOK and rsiBearOK and volOKpe and vwapDnOK and vwapZonePE and peMacdOK and peBandOK and peFallOK and priceDnOK and rangeOKpe and dayDnOK
+
+// ─────────── Cooldown + gap + window ───────────
+cdMs = cooldownMin * 60 * 1000
+var int lastCE     = na
+var int lastPE     = na
+var int lastAnyBar = na
+gapOk    = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
+inWindow = not na(time(timeframe.period, alertWindow))
+
+ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and inWindow
+peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow
+
+if ceReady
+    lastCE     := time
+    lastAnyBar := bar_index
+    ceArm      := na    // consume the arm — fire once per ignition episode
+if peReady
+    lastPE     := time
+    lastAnyBar := bar_index
+    peArm      := na
+// MOM_CONT shares the PE cooldown and the global bar-gap so it cannot stack on the zero-cross PE
+pmcReady = pmcOK and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow
+if pmcReady
+    lastPE     := time
+    lastAnyBar := bar_index
+
+// ── inspector helpers (bools -> ints; plot() cannot take a bool)
+b2i_ceCross  = ceCross     ? 1.0 : 0.0
+b2i_peCross  = peCross     ? 1.0 : 0.0
+b2i_ceResRaw = ceResumeRaw ? 1.0 : 0.0
+b2i_ceRes    = ceResume    ? 1.0 : 0.0
+b2i_ceArmed  = ceArmed     ? 1.0 : 0.0
+b2i_peArmed  = peArmed     ? 1.0 : 0.0
+b2i_ceRaw    = ceRaw       ? 1.0 : 0.0
+b2i_peRaw    = peRaw       ? 1.0 : 0.0
+b2i_ceReady  = ceReady     ? 1.0 : 0.0
+b2i_peReady  = peReady     ? 1.0 : 0.0
+b2i_gapOk    = gapOk       ? 1.0 : 0.0
+b2i_inWin    = inWindow    ? 1.0 : 0.0
+
+// Derived values used by BOTH the alert payload and the inspector — must be defined before either.
+vwSd      = (na(vwapLower) or vwapBandMult == 0) ? na : (vwap - vwapLower) / vwapBandMult
+vwZ       = (na(vwSd) or vwSd == 0) ? na : (close - vwap) / vwSd      // +ve = above VWAP, in std-devs
+dayChgPct = na(prevDayClose) ? na : (close - prevDayClose) / prevDayClose * 100.0
+cfNeedCE  = na(aoDeltaAvg) ? na :  crossForceFrac * aoDeltaAvg        // AO jump required at a cross
+legRetPct = ceLegPeak > 0 ? ao / ceLegPeak * 100.0 : na
+// NORMALISED payload metrics (v49). Absolute values are useless when pooling across symbols — a
+// VWAP slope of 2.0 means nothing without knowing whether the stock trades at 50 or 5000. Every
+// field below is a RATIO or a PERCENT so trades from different symbols compare directly.
+vwapSlopePct = (na(vwapRef) or vwapRef == 0) ? na : (vwap - vwapRef) / vwapRef * 100.0
+aoRatio      = (na(aoDayScale) or aoDayScale == 0) ? na : ao / aoDayScale        // -1..+1 vs the day
+aoForce      = (na(aoDeltaAvg) or aoDeltaAvg == 0) ? na : aoDelta / aoDeltaAvg   // cross-force multiple
+premDistPct  = (na(vwap) or vwap == 0) ? na : (close - vwap) / vwap * 100.0      // % away from VWAP
+
+// ─────────── Bot-compatible alert JSON (confidence/score = 90) ───────────
+fmt(x) => str.tostring(x, "#.##")
+// PAYLOAD (v48). entry_type stays "AO_IGNITION" so the bot's entry filter keeps accepting it —
+// the TRIGGER is carried separately in "trigger" and baked into tv_setup_label, which the bot
+// definitely persists into entry_context. Until now a zero-cross fire and a pullback fire were
+// indistinguishable in the trade record: 33% of CE alerts are pullbacks (|AO|>1.0) and there was
+// no way to score them apart. VWAP/upper/lower and the live gate values ride along so entry-zone
+// analysis no longer needs the underlying candles re-fetched afterwards.
+ceTrig = ceIsPullback ? "pullback" : "zero-cross"
+peTrig = peIsPullback ? "pullback" : "zero-cross"
+common = '","vwap":"' + fmt(vwap) + '","vwap_upper":"' + fmt(vwapUpper) + '","vwap_lower":"' + fmt(vwapLower) +
+         '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
+         '","vwap_dist_pct":"' + fmt(premDistPct) + '","vwap_slope_bars":"' + str.tostring(vwapSlopeLook) +
+         '","day_change_pct":"' + fmt(dayChgPct) + '","prev_close":"' + fmt(prevDayClose) +
+         '","ao_ratio":"' + fmt(aoRatio) + '","ao_force":"' + fmt(aoForce) +
+         '","ao_day_scale":"' + fmt(aoDayScale) + '","ao_delta":"' + fmt(aoDelta) +
+         '","adx":"' + fmt(pbAdxV) + '","adx_slope":"' + fmt(pbAdxV - pbAdxV[adxExhaustLook]) +
+         '","rsi_slope":"' + fmt(rsi - rsi[rsiSlopeBars]) + '","macd_slope":"' + fmt(hist - hist[1]) +
+         '","vol_ratio":"' + fmt(volRatio) + '","atr_pct":"' + fmt(avgRange / close * 100) + '"'
+ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE","entry_type":"AO_IGNITION","trigger":"' + ceTrig + '","bars_since_cross":"' + str.tostring(nz(ceAge)) + '","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + common + ',"tv_setup_label":"AO_IGNITION_CE_' + (ceIsPullback ? "PB" : "ZC") + '","reentry_context_active":"false"}'
+peJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"AO_IGNITION","trigger":"' + peTrig + '","bars_since_cross":"' + str.tostring(nz(peAge)) + '","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + common + ',"tv_setup_label":"AO_IGNITION_PE_' + (peIsPullback ? "PB" : "ZC") + '","reentry_context_active":"false"}'
+if ceReady
+    alert(ceJson, alert.freq_once_per_bar_close)
+if peReady
+    alert(peJson, alert.freq_once_per_bar_close)
+pmcJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"AO_MOMCONT","trigger":"momcont","bars_since_cross":"0","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + common + ',"tv_setup_label":"AO_MOMCONT_PE","reentry_context_active":"false"}'
+if pmcReady
+    alert(pmcJson, alert.freq_once_per_bar_close)
+
+// v52: the three alertcondition() calls were REMOVED. Pine counts each alertcondition
+// against the 64-PLOT LIMIT, and v51's new "CE 8b · close > VWAP_UPPER" inspector plot took the
+// script to 65 -> "Runtime error: RE10140 ... too many plots (65)". A script in runtime error is
+// NOT offered in the alert-condition dropdown at all, which is why AO Ignition vanished from it.
+// They were also actively harmful: alertcondition() can only send a STATIC string, so its payload
+// carried 10 fields vs the 34 that alert() sends. Selecting "CE Signal" instead of "Any alert()
+// function call" would have silently dropped macd_slope, rsi_value, ao_force, vwap_upper/lower,
+// vwap_z, bars_since_cross, trigger and day_change_pct — every field the entry analysis uses.
+// USE "Any alert() function call" WHEN CREATING THE ALERT. That is the only correct option now.
+
+// ─────────── Visuals ───────────
+plot(vwap, "VWAP", color=color.new(color.blue, 0), linewidth=1)
+// PLOT THE BANDS THIS SCRIPT ACTUALLY GATES ON. Without this you end up comparing against some OTHER
+// indicator's bands: a stock VWAP Session drawn at 1.0 SD has a visibly higher lower band than this
+// script's 1.25 SD one, so a bar can look "below VWAP_LOWER" on the chart and still fail peBandOK
+// (SUNPHARMA 13:10: below the 1.0 SD band at 1902.6, above this script's 1.25 SD band at 1900.66).
+showBands = input.bool(true, "Show THIS script's VWAP bands (the level the PE gate uses)", group="Visuals")
+plot(showBands ? vwapLower : na, "VWAP_LOWER — the PE gate level", color=color.new(color.red, 25), linewidth=1)
+plot(showBands ? vwapUpper : na, "VWAP_UPPER (not gated — CE uses the mid)", color=color.new(color.teal, 55), linewidth=1, display=display.pane)
+lblSz = labelSize == "tiny" ? size.tiny : labelSize == "normal" ? size.normal : labelSize == "large" ? size.large : size.small
+volTxt(r) => na(r) ? "?" : str.tostring(r, "#.#") + "x vol"
+// PERMANENT ENTRY MARKERS (v46). These are plotshapes, NOT labels — Pine's 500-label cap does not
+// apply to them, so a CE/PE marker can never be evicted by the debug/hover labels the way the text
+// labels were. The text labels below carry the detail; these guarantee you always SEE the entry.
+plotshape(ceReady,  "CE entry",       style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0),  size=size.small)
+plotshape(peReady,  "PE entry",       style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0),    size=size.small)
+plotshape(pmcReady, "PE MOM_CONT entry", style=shape.xcross,    location=location.abovebar, color=color.new(color.orange, 0), size=size.small)
+
+// Entry labels tagged with the TRIGGER TYPE (zero-cross vs pullback) — replaces the dot/triangle markers
+if showLabels and ceReady
+    label.new(bar_index, low,  "CE " + ceArmType + (nz(ceAge) > 0 ? " +" + str.tostring(ceAge) : "") + "\n" + fmt(close) + "\nAO " + fmt(ao) + "\nRSI " + fmt(rsi) + "\n" + volTxt(volRatio), yloc=yloc.belowbar, style=label.style_label_up,
+         color=color.new(color.green, 0), textcolor=color.white, size=lblSz)
+if showLabels and peReady
+    label.new(bar_index, high, "PE " + peArmType + (nz(peAge) > 0 ? " +" + str.tostring(peAge) : "") + "\n" + fmt(close) + "\nAO " + fmt(ao) + "\nRSI " + fmt(rsi) + "\n" + volTxt(volRatio), yloc=yloc.abovebar, style=label.style_label_down,
+         color=color.new(color.red, 0), textcolor=color.white, size=lblSz)
+
+if showLabels and pmcReady
+    label.new(bar_index, high, "PE MOM_CONT\n" + fmt(close) + "\nAO " + fmt(ao) + "\nRSI " + fmt(rsi) + "\n" + volTxt(volRatio), yloc=yloc.abovebar, style=label.style_label_down,
+         color=color.new(color.orange, 0), textcolor=color.white, size=lblSz)
+
+// ═══════════════════ PER-BAR INSPECTOR ═══════════════════
+// Answers "what did every filter say on THIS bar?" for any bar, not just ones that triggered.
+// Derived values are recomputed here so the readout is self-contained.
+// 1 = pass · 0 = FAIL · -1 = gate switched OFF (so it is not participating)
+// NOTE: `display=` must be a compile-time constant, so it is always display.data_window and the
+// dbgData toggle blanks the VALUE (na) instead of the destination.
+g3(enabled, ok) => not enabled ? -1.0 : (ok ? 1.0 : 0.0)
+
+// ── state / triggers
+plot(dbgData ? b2i_ceCross  : na, "01 · trig CE zero-cross",  display=display.data_window)
+plot(dbgData ? b2i_peCross  : na, "02 · trig PE zero-cross",  display=display.data_window)
+plot(dbgData ? b2i_ceResRaw : na, "03 · trig CE pullback RAW", display=display.data_window)
+plot(dbgData ? b2i_ceRes    : na, "04 · trig CE pullback (vetoes applied)", display=display.data_window)
+plot(dbgData ? b2i_ceArmed  : na, "05 · CE armed",            display=display.data_window)
+plot(dbgData ? ceAge : na, "05b · CE bars since cross (0 = cross bar)", display=display.data_window)
+plot(dbgData ? peAge : na, "06b · PE bars since cross (0 = cross bar)", display=display.data_window)
+plot(dbgData ? b2i_peArmed  : na, "06 · PE armed",            display=display.data_window)
+plot(dbgData ? b2i_ceRaw    : na, "07 · CE all gates pass",   display=display.data_window)
+plot(dbgData ? b2i_peRaw    : na, "08 · PE all gates pass",   display=display.data_window)
+plot(dbgData ? b2i_ceReady  : na, "09 · CE ALERT FIRED",      display=display.data_window)
+plot(dbgData ? b2i_peReady  : na, "10 · PE ALERT FIRED",      display=display.data_window)
+plot(dbgData ? b2i_gapOk    : na, "11 · gap ok (>=minGapBars)", display=display.data_window)
+plot(dbgData ? b2i_inWin    : na, "12 · inside alert window", display=display.data_window)
+
+// ── CE gates
+plot(dbgData ? g3(requireAoAccel, aoAccelCE) : na,   "CE 1 · AO accelerating",   display=display.data_window)
+plot(dbgData ? g3(useCrossForce,  crossForceCE) : na,"CE 2 · cross FORCE",       display=display.data_window)
+plot(dbgData ? (qualCE ? 1.0 : 0.0) : na, "CE 2b · QUALITY (force OR expansion)", display=display.data_window)
+plot(dbgData ? g3(useMacd,        macdBullOK) : na,  "CE 3 · MACD hist rising",  display=display.data_window)
+plot(dbgData ? g3(useCeMacdPos,   ceMacdOK) : na,    "CE 4 · MACD hist > 0",     display=display.data_window)
+plot(dbgData ? g3(useRsi,         rsiBullOK) : na,   "CE 5 · RSI rising",        display=display.data_window)
+plot(dbgData ? g3(useVol,         volOKce) : na,     "CE 6 · volume expansion",  display=display.data_window)
+plot(dbgData ? g3(useVwapZone,    vwapZoneCE) : na,  "CE 7 · close > VWAP",      display=display.data_window)
+plot(dbgData ? g3(useVwapCE,      vwapUpOK) : na,    "CE 8 · VWAP rising",       display=display.data_window)
+plot(dbgData ? g3(useCeBandZone,  ceBandOK) : na,    "CE 8b · close > VWAP_UPPER", display=display.data_window)
+plot(dbgData ? g3(useCeMomentum,  ceMomOK) : na,     "CE 9 · 5-bar move",        display=display.data_window)
+plot(dbgData ? g3(useCePriceTrend,priceUpOK) : na,   "CE 10 · price EMA rising", display=display.data_window)
+plot(dbgData ? g3(useRangeExp,    rangeOKce) : na,   "CE 11 · range expanding",  display=display.data_window)
+plot(dbgData ? g3(useCeDayBias,   dayUpOK) : na,     "CE 12 · day bias winning", display=display.data_window)
+
+// ── PE gates
+plot(dbgData ? g3(requireAoAccel, aoAccelPE) : na,   "PE 1 · AO accelerating dn", display=display.data_window)
+plot(dbgData ? g3(useCrossForcePE, crossForcePE) : na,"PE 2 · cross FORCE",       display=display.data_window)
+plot(dbgData ? (qualPE ? 1.0 : 0.0) : na, "PE 2b · QUALITY (force OR expansion)", display=display.data_window)
+plot(dbgData ? g3(useMacd,        macdBearOK) : na,  "PE 3 · MACD hist falling",  display=display.data_window)
+plot(dbgData ? g3(usePeMacdNeg,   peMacdOK) : na,    "PE 4 · MACD hist < 0",      display=display.data_window)
+plot(dbgData ? g3(useRsi,         rsiBearOK) : na,   "PE 5 · RSI falling",        display=display.data_window)
+plot(dbgData ? g3(useVolPE,       volOKpe) : na,     "PE 6 · volume expansion",   display=display.data_window)
+plot(dbgData ? g3(useVwapZone,    vwapZonePE) : na,  "PE 7 · close < VWAP",       display=display.data_window)
+plot(dbgData ? g3(useVwapPE,      vwapDnOK) : na,    "PE 8 · VWAP falling",       display=display.data_window)
+plot(dbgData ? g3(usePeBandZone,  peBandOK) : na,    "PE 9 · close < VWAP_LOWER", display=display.data_window)
+plot(dbgData ? g3(usePeDayFall,   peFallOK) : na,    "PE 10 · day fall >= min%",  display=display.data_window)
+plot(dbgData ? g3(usePePriceTrend,priceDnOK) : na,   "PE 11 · price EMA falling", display=display.data_window)
+plot(dbgData ? g3(useRangePE,     rangeOKpe) : na,   "PE 12 · range expanding",   display=display.data_window)
+plot(dbgData ? g3(usePeDayBias,   dayDnOK) : na,     "PE 13 · day bias losing",   display=display.data_window)
+plot(dbgData ? (pmcRaw ? 1.0 : 0.0) : na, "MC 1 · MOM_CONT raw trigger", display=display.data_window)
+plot(dbgData ? (pmcReady ? 1.0 : 0.0) : na, "MC 2 · MOM_CONT ALERT FIRED", display=display.data_window)
+
+// ── raw numbers behind the gates
+plot(dbgData ? ao          : na, "n01 · AO",                       display=display.data_window)
+plot(dbgData ? aoDelta     : na, "n02 · AO change this bar",       display=display.data_window)
+plot(dbgData ? cfNeedCE    : na, "n03 · AO change NEEDED (force)", display=display.data_window)
+plot(dbgData ? aoDayScale  : na, "n04 · AO day-scale range",       display=display.data_window)
+plot(dbgData ? hist        : na, "n07 · MACD hist",                display=display.data_window)
+plot(dbgData ? rsi         : na, "n09 · RSI",                      display=display.data_window)
+plot(dbgData ? vwZ         : na, "n13 · close vs VWAP (std-devs)", display=display.data_window)
+plot(dbgData ? vwapSlope : na, "n15 · VWAP slope (same-session ref)", display=display.data_window)
+plot(dbgData ? dayChgPct   : na, "n16 · day change %",             display=display.data_window)
+plot(dbgData ? prevDayClose : na, "n16b · PREV DAY CLOSE (sanity-check vs your watchlist)", display=display.data_window)
+plot(dbgData ? pbAdxV      : na, "n18 · ADX",                      display=display.data_window)
+plot(dbgData ? (na(pbAdxV[adxExhaustLook]) ? na : pbAdxV - pbAdxV[adxExhaustLook]) : na, "n19 · ADX change", display=display.data_window)
+
+// ── hover markers: tooltip = full readout for that bar
+mk(enabled, ok) => not enabled ? "–  (off)" : (ok ? "PASS" : "FAIL")
+// Scope for the hover markers. UTC-day comparison is safe for NSE: the 09:15-15:30 IST session maps
+// to 03:45-10:00 UTC, so a session never straddles a UTC midnight.
+sameSessionAsLast = math.floor(time / 86400000) == math.floor(last_bar_time / 86400000)
+hoverHere = dbgHoverScope == "today (full session)" ? sameSessionAsLast : (bar_index > last_bar_index - dbgHoverBars)
+if dbgHover and hoverHere
+    _ce = "── CE ──\n" +
+      "AO accelerating      " + mk(requireAoAccel, aoAccelCE) + "\n" +
+      "QUALITY " + (useCrossForce ? "(cross force)" : "(AO expansion)") + "  " + (qualCE ? "PASS" : "FAIL") +
+          "   (step " + fmt(aoDelta) + " vs " + fmt(cfNeedCE) + ")\n" +
+      "MACD hist rising     " + mk(useMacd, macdBullOK) + "   (" + fmt(hist) + ", chg " + fmt(hist - hist[1]) + ")\n" +
+      "MACD hist > 0        " + mk(useCeMacdPos, ceMacdOK) + "\n" +
+      "RSI rising           " + mk(useRsi, rsiBullOK) + "   (" + fmt(rsi) + ", chg " + fmt(rsi - rsi[rsiSlopeBars]) + ")\n" +
+      "volume expansion     " + mk(useVol, volOKce) + "   (" + fmt(volRatio) + "x, need " + fmt(volMult) + "x)\n" +
+      "close > VWAP         " + mk(useVwapZone, vwapZoneCE) + "   (z " + fmt(vwZ) + ")\n" +
+      "VWAP rising          " + mk(useVwapCE, vwapUpOK) + "\n" +
+      "5-bar move           " + mk(useCeMomentum, ceMomOK) + "\n" +
+      "price EMA rising     " + mk(useCePriceTrend, priceUpOK) + "\n" +
+      "range expanding      " + mk(useRangeExp, rangeOKce) + "\n" +
+      "day bias winning     " + mk(useCeDayBias, dayUpOK) + "   (day " + fmt(dayChgPct) + "%)\n" +
+      "pullback NEW HIGH    " + mk(usePbNewHigh, pbNewHighCE) + "   (AO " + fmt(ao) + " vs leg peak " + fmt(ceLegPeak[1]) + ")\n" +
+      "ARMED " + (ceArmed ? "yes (" + ceArmType + " +" + str.tostring(nz(ceAge)) + ")" : "no") + "   ALL GATES " + (ceRaw ? "PASS" : "no") + "   FIRED " + (ceReady ? "YES" : "no")
+    _pe = "\n\n── PE ──\n" +
+      "AO accelerating dn   " + mk(requireAoAccel, aoAccelPE) + "\n" +
+      "QUALITY " + (useCrossForcePE ? "(cross force)" : "(AO expansion)") + "  " + (qualPE ? "PASS" : "FAIL") +
+          "\n   AO " + fmt(ao) + "  need <= " + fmt(-aoExpandFrac * aoRange) + " local / " + fmt(-pbSignifFrac * aoDayScale) + " day\n" +
+      "MACD hist falling    " + mk(useMacd, macdBearOK) + "\n" +
+      "MACD hist < 0        " + mk(usePeMacdNeg, peMacdOK) + "\n" +
+      "RSI falling          " + mk(useRsi, rsiBearOK) + "\n" +
+      "volume expansion     " + mk(useVolPE, volOKpe) + "\n" +
+      "close < VWAP         " + mk(useVwapZone, vwapZonePE) + "\n" +
+      "VWAP falling         " + mk(useVwapPE, vwapDnOK) + "   (" + fmt(vwapSlope) + " over " + str.tostring(vwapSlopeLook) + " bars)\n" +
+      "close < VWAP_LOWER   " + mk(usePeBandZone, peBandOK) + "   (z " + fmt(vwZ) + ", need <= -" + fmt(vwapBandMult) + ")\n" +
+      "day fall >= min      " + mk(usePeDayFall, peFallOK) + "   (day " + fmt(dayChgPct) + "%, need <= -" + fmt(peDayFallPct) + "%)\n" +
+      "price EMA falling    " + mk(usePePriceTrend, priceDnOK) + "\n" +
+      "range expanding      " + mk(useRangePE, rangeOKpe) + "\n" +
+      "day bias losing      " + mk(usePeDayBias, dayDnOK) + "\n" +
+      "── MOM_CONT ──  trigger " + (pmcRaw ? "yes" : "no") + "   FIRED " + (pmcReady ? "YES" : "no") + "\n" +
+      "  opened-down " + mk(pmcNeedOpenDown, pmcOpenDown) + "   band " + mk(pmcNeedBand, pmcBandOK) +
+          "   ADX " + mk(pmcNeedAdx, pmcAdxOK) + "   leg-retain " + (pmcLegOK ? "PASS" : "FAIL") + "\n" +
+      "ARMED " + (peArmed ? "yes (" + peArmType + " +" + str.tostring(nz(peAge)) + ")" : "no") + "   ALL GATES " + (peRaw ? "PASS" : "no") + "   FIRED " + (peReady ? "YES" : "no")
+    _hd = "bar " + str.format_time(time, "yyyy-MM-dd HH:mm", syminfo.timezone) + "   close " + fmt(close) + "   AO " + fmt(ao) +
+          "\nprev close " + fmt(prevDayClose) + "   day " + fmt(dayChgPct) + "%   (check this against your watchlist)\n\n"
+    label.new(bar_index, close, "", yloc=yloc.price, style=label.style_circle,
+         color=color.new(ceReady ? color.green : peReady ? color.red : color.gray, 55),
+         size=size.tiny, tooltip=_hd + _ce + _pe)
+
+// ── on-chart table: the LAST bar's full gate state, no panel needed.
+// A Pine table can only render the most recent bar — for history use the hover markers / Data Window.
+cellCol(enabled, ok) => not enabled ? color.new(color.gray, 40) : (ok ? color.new(color.green, 25) : color.new(color.red, 20))
+cellTxt(enabled, ok) => not enabled ? "off" : (ok ? "PASS" : "FAIL")
+var table dbgT = table.new(position.top_right, 4, 16, border_width=1, frame_width=1, frame_color=color.new(color.gray,50))
+// declared at GLOBAL scope — Pine does not allow a function declaration inside an if block
+r(row, cn, ce_en, ce_ok, pn, pe_en, pe_ok) =>
+    table.cell(dbgT, 0, row, cn, text_size=size.tiny, text_color=color.white, text_halign=text.align_left, bgcolor=color.new(color.black,70))
+    table.cell(dbgT, 1, row, cellTxt(ce_en,ce_ok), text_size=size.tiny, text_color=color.white, bgcolor=cellCol(ce_en,ce_ok))
+    table.cell(dbgT, 2, row, pn, text_size=size.tiny, text_color=color.white, text_halign=text.align_left, bgcolor=color.new(color.black,70))
+    table.cell(dbgT, 3, row, cellTxt(pe_en,pe_ok), text_size=size.tiny, text_color=color.white, bgcolor=cellCol(pe_en,pe_ok))
+
+if dbgTable and barstate.islast
+    table.cell(dbgT, 0, 0, "CE gate", text_size=size.tiny, text_color=color.lime, bgcolor=color.new(color.black,40))
+    table.cell(dbgT, 1, 0, fmt(close),   text_size=size.tiny, text_color=color.lime, bgcolor=color.new(color.black,40))
+    table.cell(dbgT, 2, 0, "PE gate", text_size=size.tiny, text_color=color.red,  bgcolor=color.new(color.black,40))
+    table.cell(dbgT, 3, 0, "AO " + fmt(ao), text_size=size.tiny, text_color=color.red, bgcolor=color.new(color.black,40))
+    r(1,  "AO accel",                requireAoAccel,  aoAccelCE,    "AO accel dn",             requireAoAccel,  aoAccelPE)
+    r(2,  "QUALITY " + fmt(aoDelta) + "/" + fmt(cfNeedCE), true, qualCE, "QUALITY AO " + fmt(ao), true, qualPE)
+    r(3,  "MACD rising",             useMacd,         macdBullOK,   "MACD falling",            useMacd,         macdBearOK)
+    r(4,  "MACD hist>0 " + fmt(hist),useCeMacdPos,    ceMacdOK,     "MACD hist<0",             usePeMacdNeg,    peMacdOK)
+    r(5,  "RSI rising " + fmt(rsi),  useRsi,          rsiBullOK,    "RSI falling",             useRsi,          rsiBearOK)
+    r(6,  "vol " + fmt(volRatio) + "/" + fmt(volMult),useVol, volOKce, "vol",                  useVolPE,        volOKpe)
+    r(7,  "close>VWAP z" + fmt(vwZ), useVwapZone,     vwapZoneCE,   "close<VWAP",              useVwapZone,     vwapZonePE)
+    r(8,  "VWAP rising",             useVwapCE,       vwapUpOK,     "VWAP falling",            useVwapPE,       vwapDnOK)
+    r(9,  "5-bar move",              useCeMomentum,   ceMomOK,      "z<-" + fmt(vwapBandMult), usePeBandZone,   peBandOK)
+    r(10, "day " + fmt(dayChgPct) + "% pc" + fmt(prevDayClose), useCePriceTrend, priceUpOK, "day " + fmt(dayChgPct) + "%", usePeDayFall, peFallOK)
+    r(11, "range exp",               useRangeExp,     rangeOKce,    "EMA falling",             usePePriceTrend, priceDnOK)
+    r(12, "day bias",                useCeDayBias,    dayUpOK,      "day bias",                usePeDayBias,    dayDnOK)
+    r(13, "ARMED " + (ceArmed ? ceArmType : "-"), true, ceArmed,    "ARMED " + (peArmed ? peArmType : "-"), true, peArmed)
+    r(14, "ALL GATES",               true,            ceRaw,        "ALL GATES",               true,            peRaw)
+    r(15, "gap/window",              true,            gapOk and inWindow, "FIRED",             true,            ceReady or peReady)
+
+// ─────────── DEBUG: why didn't this trigger fire? ───────────
+// Prints the gates that were FALSE on every raw AO trigger that produced no alert, with live numbers,
+// so a missed move is diagnosed from the chart instead of inferred. Off by default.
+rngRatio = (na(avgRange) or avgRange == 0) ? na : (high - low) / avgRange
+numTxt(v) => na(v) ? "?" : str.tostring(v, "#.#")
+if debugWhyNot and (ceCross or ceResumeRaw) and not ceReady
+    _r = (qualCE ? "" : (fireAtCross ? "crossFORCE " : "aoExpand/dayExpand ")) + (macdBullOK ? "" : "MACD ") +
+         (rsiBullOK ? "" : "RSI ") + (volOKce ? "" : "VOL ") + (vwapUpOK ? "" : "vwapSlope ") +
+         (vwapZoneCE ? "" : "vwapZONE ") + (ceBandOK ? "" : "ceBAND ") + (ceMomOK ? "" : "ceMOM ") + (ceMacdOK ? "" : "ceMACD+ ") + (priceUpOK ? "" : "priceEMA ") + (rangeOKce ? "" : "RANGE ") +
+         (dayUpOK ? "" : "dayBIAS ") + (ceResumeRaw and not ceResume ? (pbNewHighCE ? "pbVETO " : "pbNEWHIGH ") : "") +
+         (not inWindow ? "window " : "") + (not gapOk ? "gap " : "")
+    label.new(bar_index, high, "CE blocked: " + (_r == "" ? "(armed, waiting)" : _r) +
+         "\nAO " + fmt(ao) + " | need " + numTxt(aoExpandFrac * aoRange) + " loc / " + numTxt(pbSignifFrac * aoDayScale) + " day" +
+         "\nvol " + numTxt(volRatio) + "x (need " + numTxt(volMult) + ") | rng " + numTxt(rngRatio) + "x",
+         yloc=yloc.abovebar, style=label.style_label_down, color=color.new(color.gray, 25), textcolor=color.white, size=size.tiny)
+if debugWhyNot and (peCross or peResumeRaw) and not peReady
+    _r = (qualPE ? "" : (fireAtCross ? "crossFORCE " : "aoExpand/dayExpand ")) + (macdBearOK ? "" : "MACD ") +
+         (rsiBearOK ? "" : "RSI ") + (volOKpe ? "" : "VOL ") + (vwapDnOK ? "" : "vwapSlope ") +
+         (vwapZonePE ? "" : "vwapZONE ") + (peMacdOK ? "" : "peMACD- ") + (peBandOK ? "" : "peBAND ") + (peFallOK ? "" : "peDAYFALL ") + (priceDnOK ? "" : "priceEMA ") + (rangeOKpe ? "" : "RANGE ") +
+         (dayDnOK ? "" : "dayBIAS ") + (peResumeRaw and not peResume ? "pbVETO " : "") +
+         (not inWindow ? "window " : "") + (not gapOk ? "gap " : "")
+    label.new(bar_index, low, "PE blocked: " + (_r == "" ? "(armed, waiting)" : _r) +
+         "\nAO " + fmt(ao) + " | need -" + numTxt(aoExpandFrac * aoRange) + " loc / -" + numTxt(pbSignifFrac * aoDayScale) + " day" +
+         "\nvol " + numTxt(volRatio) + "x (need " + numTxt(volMult) + ") | rng " + numTxt(rngRatio) + "x",
+         yloc=yloc.belowbar, style=label.style_label_up, color=color.new(color.gray, 25), textcolor=color.white, size=size.tiny)

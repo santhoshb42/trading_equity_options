@@ -1,0 +1,136 @@
+//@version=5
+// ============================================================================
+// Index Momentum-Shift — CE / PE  (fade the HUGE swing reversal)  v2
+// ----------------------------------------------------------------------------
+// Indices CHOP. Breakouts (BOS) enter on continuation → always late → they fade. The money on a
+// choppy index is the SWING REVERSAL: fade the extreme when momentum rolls over. This engine
+// fires at the exact momentum shift, but ONLY on HUGE swings (not the small chop wiggles).
+//
+// PE (fade a TOP):    a big rally tagged the UPPER VWAP band AND AO rolls over from a large
+//                     positive peak AND RSI was overbought  → momentum shifting DOWN, ride it.
+// CE (fade a BOTTOM): a big drop tagged the LOWER VWAP band AND AO turns up from a large negative
+//                     trough AND RSI was oversold           → momentum shifting UP, ride it.
+//
+// "HUGE, not small spikes" — THREE size gates, all must pass:
+//   1. SWING amplitude: the leg into the extreme ≥ minSwingPct of price (NIFTY 09:30 ≈0.33% ✓;
+//      the 12:15–14:00 chop wiggles ≈0.1% ✗).
+//   2. AO peak/trough magnitude ≥ a fraction of the recent AO range (the ±40 swings, not ±10).
+//   3. Band tag + RSI extreme — genuinely stretched, not mid-range.
+// This is the OPPOSITE of the stock Pine (stocks trend → we buy breakouts; the index swings →
+// we fade extremes). Optional ADX ceiling skips genuine trend days where fading gets run over.
+// overlay=true. SAME bot-compatible JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot.
+// ============================================================================
+indicator("Index Momentum-Shift — CE/PE (reversal) v2", overlay=true, max_labels_count=500)
+
+// ─────────── Inputs ───────────
+// Momentum (AO)
+aoFast   = input.int(5,  "AO fast SMA", group="Momentum (AO)")
+aoSlow   = input.int(34, "AO slow SMA", group="Momentum (AO)")
+aoMagFrac = input.float(0.50, "AO peak/trough ≥ this × recent AO range", minval=0.0, step=0.05, group="Momentum (AO)",
+     tooltip="The AO extreme being reversed must be a real fraction of the recent AO range — the ±40 swings, not the ±10 chop wiggles.")
+aoMagLen  = input.int(60, "   AO range lookback (bars)", minval=1, group="Momentum (AO)")
+
+// HUGE swing gate (the key requirement)
+minSwingPct = input.float(0.25, "HUGE swing: leg into extreme ≥ this % of price", minval=0.0, step=0.05, group="Huge swing",
+     tooltip="The swing amplitude (highest−lowest over the window) must be at least this %% of price. Raise to demand bigger swings / fewer signals. NIFTY 09:30 ≈0.33%; chop ≈0.1%.")
+swingLook   = input.int(20, "   Swing window (bars)", minval=1, group="Huge swing")
+
+// Stretch (location of the reversal)
+bandMult   = input.float(2.0, "VWAP band width (× std-dev)", minval=0.5, step=0.1, group="Stretch")
+stretchLook = input.int(3, "   Band tag / RSI extreme must be within this many bars", minval=1, group="Stretch")
+useRsi   = input.bool(true, "Require RSI extreme (OB for PE / OS for CE)", group="Stretch")
+rsiLen   = input.int(14, "   RSI length", minval=1, group="Stretch")
+rsiOB    = input.float(70, "   RSI overbought (PE)", minval=50, step=1, group="Stretch")
+rsiOS    = input.float(30, "   RSI oversold (CE)",   maxval=50, step=1, group="Stretch")
+
+// Trend guard (optional — don't fade a genuine trend day)
+useAdxCeil = input.bool(false, "Skip fades when ADX above ceiling (trend day)", group="Trend guard")
+adxCeil  = input.float(35, "   ADX ceiling", minval=0, step=1, group="Trend guard")
+adxLen   = input.int(14, "   ADX / DI length", minval=1, group="Trend guard")
+
+// Logic / session
+cooldownMin = input.int(15, "Cooldown minutes (per side)", minval=1, group="Logic")
+useCooldown = input.bool(true, "Enforce cooldown", group="Logic")
+minGapBars  = input.int(10, "Min candles between ANY two alerts", minval=0, group="Logic")
+alertWindow = input.session("0930-1430", "Alert window (exchange time)", group="Logic")
+showLabels  = input.bool(true, "Show labels", group="Visuals")
+labelSize   = input.string("small", "Label size", options=["tiny","small","normal","large"], group="Visuals")
+
+// ─────────── Indicators ───────────
+ao = ta.sma(hl2, aoFast) - ta.sma(hl2, aoSlow)
+newDay = timeframe.change("D")
+[vwap, vUp, vLo] = ta.vwap(hlc3, newDay, bandMult)
+rsi = ta.rsi(close, rsiLen)
+[diP, diM, adxV] = ta.dmi(adxLen, adxLen)
+
+// ─────────── The momentum shift: AO local peak / trough (confirmed 1 bar later) ───────────
+aoRollDown = ao < ao[1] and ao[1] >= ao[2]     // AO made a local MAX at [1], now falling → shift DOWN
+aoRollUp   = ao > ao[1] and ao[1] <= ao[2]     // AO made a local MIN at [1], now rising  → shift UP
+
+// AO magnitude — the extreme must be large, not a wiggle
+aoAbsRange = ta.highest(math.abs(ao), aoMagLen)
+bigPeak    = na(aoAbsRange) or aoAbsRange == 0 or ao[1] >=  aoAbsRange * aoMagFrac
+bigTrough  = na(aoAbsRange) or aoAbsRange == 0 or ao[1] <= -aoAbsRange * aoMagFrac
+
+// ─────────── HUGE swing gate — the leg into the extreme must be big ───────────
+swingHi  = ta.highest(high, swingLook)
+swingLo  = ta.lowest(low,  swingLook)
+swingPct = (swingHi - swingLo) / close * 100.0
+hugeSwing = swingPct >= minSwingPct
+
+// ─────────── Stretch — tagged the band + RSI extreme, recently ───────────
+tagUp = ta.barssince(high >= vUp) <= stretchLook
+tagDn = ta.barssince(low  <= vLo) <= stretchLook
+obOK  = not useRsi or ta.highest(rsi, stretchLook + 1) >= rsiOB
+osOK  = not useRsi or ta.lowest(rsi,  stretchLook + 1) <= rsiOS
+
+// ─────────── Trend guard ───────────
+adxOK = not useAdxCeil or na(adxV) or adxV <= adxCeil
+
+// ─────────── Reversal signals ───────────
+peRaw = aoRollDown and bigPeak   and hugeSwing and tagUp and obOK and adxOK
+ceRaw = aoRollUp   and bigTrough and hugeSwing and tagDn and osOK and adxOK
+
+// ─────────── Cooldown + gap + window ───────────
+cdMs = cooldownMin * 60 * 1000
+var int lastCE     = na
+var int lastPE     = na
+var int lastAnyBar = na
+gapOk    = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
+inWindow = not na(time(timeframe.period, alertWindow))
+
+ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and inWindow
+peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow
+
+if ceReady
+    lastCE     := time
+    lastAnyBar := bar_index
+if peReady
+    lastPE     := time
+    lastAnyBar := bar_index
+
+// ─────────── Bot-compatible alert JSON (confidence/score = 90) ───────────
+fmt(x) => str.tostring(x, "#.##")
+ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE","entry_type":"INDEX_MOM_SHIFT","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","tv_setup_label":"INDEX_MOM_CE","reentry_context_active":"false"}'
+peJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"INDEX_MOM_SHIFT","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","tv_setup_label":"INDEX_MOM_PE","reentry_context_active":"false"}'
+if ceReady
+    alert(ceJson, alert.freq_once_per_bar_close)
+if peReady
+    alert(peJson, alert.freq_once_per_bar_close)
+alertcondition(ceReady, "CE Signal", '{"symbol":"{{ticker}}","action":"BUY","option_side":"CE","entry_type":"INDEX_MOM_SHIFT","price":"{{close}}","score":"90","confidence":"90","market_trend":"NEUTRAL","tv_setup_label":"INDEX_MOM_CE","reentry_context_active":"false"}')
+alertcondition(peReady, "PE Signal", '{"symbol":"{{ticker}}","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"INDEX_MOM_SHIFT","price":"{{close}}","score":"90","confidence":"90","market_trend":"NEUTRAL","tv_setup_label":"INDEX_MOM_PE","reentry_context_active":"false"}')
+
+// ─────────── Visuals ───────────
+plot(vwap, "VWAP",       color=color.new(color.blue,  0), linewidth=1)
+plot(vUp,  "VWAP Upper", color=color.new(color.green, 40))
+plot(vLo,  "VWAP Lower", color=color.new(color.red,   40))
+
+lblSz = labelSize == "tiny" ? size.tiny : labelSize == "normal" ? size.normal : labelSize == "large" ? size.large : size.small
+if showLabels and ceReady
+    label.new(bar_index, low,  "CE rev\n" + fmt(close) + "\nAO " + fmt(ao) + "\nswing " + fmt(swingPct) + "%", yloc=yloc.belowbar, style=label.style_label_up,
+         color=color.new(color.green, 0), textcolor=color.white, size=lblSz)
+if showLabels and peReady
+    label.new(bar_index, high, "PE rev\n" + fmt(close) + "\nAO " + fmt(ao) + "\nswing " + fmt(swingPct) + "%", yloc=yloc.abovebar, style=label.style_label_down,
+         color=color.new(color.red, 0), textcolor=color.white, size=lblSz)
+plotshape(ceReady, "CE", shape.triangleup,   location.belowbar, color.new(color.green, 0), text="CE", textcolor=color.white, size=size.small)
+plotshape(peReady, "PE", shape.triangledown, location.abovebar, color.new(color.red,   0), text="PE", textcolor=color.white, size=size.small)

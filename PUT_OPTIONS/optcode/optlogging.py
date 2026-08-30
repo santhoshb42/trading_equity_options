@@ -42,14 +42,21 @@ class OptionsLogger:
     
     def __init__(self):
         self.logger = logging.getLogger('optbot')
-        self.logger.setLevel(logging.DEBUG)
-        
+        # 2026-08-08: honor LOG_LEVEL env (default INFO). File level was hardcoded DEBUG and ignored
+        # the env — at a 2s monitor × N positions that flooded optbot.log with per-tick writes (disk
+        # I/O load). INFO keeps decisions/orders/exits; structured events.jsonl (log_event) is
+        # level-INDEPENDENT so full strategy/failure telemetry is retained regardless. Use DEBUG only
+        # when actively debugging.
+        import os as _os
+        _lvl = getattr(logging, _os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+        self.logger.setLevel(_lvl)
+
         # Remove existing handlers
         self.logger.handlers.clear()
-        
-        # File handler - all logs
+
+        # File handler - honors LOG_LEVEL (was hardcoded DEBUG)
         file_handler = logging.FileHandler(LOG_FILE)
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(_lvl)
         file_formatter = logging.Formatter(
             '%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'

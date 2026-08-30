@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
 from .optlogging import logger, log_event
-from .optconfig import SentimentConfig, MLConfig, DATA_DIR
+from .optconfig import SentimentConfig, MLConfig, DATA_DIR, BOT_MODE
 
 # =============================================================================
 # VALIDATOR 0: PREMIUM FILTER (Minimum Entry Premium Check)
@@ -202,17 +202,20 @@ class MarketStructureValidator:
             logger.debug(f"MarketStructureValidator: PCR not available for validation")
             return True, "PCR data not available - skipping validation"
         
-        # Use adaptive PCR validation (applies to CE/BUY trades since we're CE-only)
-        pcr_acceptable, pcr_reason = self._is_pcr_acceptable(
-            pcr,
-            dte,
-            trend_strength,
-            volume_spike,
-            entry_type,
-        )
-        
-        if not pcr_acceptable:
-            return False, pcr_reason
+        # PCR gate — toggle via ENTRY_FILTER_PCR_ENABLED (default true). Disabled for SELL_THETA:
+        # low PCR = super-bullish (heavy call demand) which is EXACTLY the setup a sold PUT wants, so
+        # the BUY-oriented 0.20-1.15 band wrongly rejected the best movers (MAZDOCK 0.13, BDL 0.17).
+        # The OI-buildup check below still runs — only the PCR range is skipped.
+        if os.getenv("ENTRY_FILTER_PCR_ENABLED", "true").lower() == "true":
+            pcr_acceptable, pcr_reason = self._is_pcr_acceptable(
+                pcr,
+                dte,
+                trend_strength,
+                volume_spike,
+                entry_type,
+            )
+            if not pcr_acceptable:
+                return False, pcr_reason
         
         # Check OI buildup if required and available
         if self.require_oi_buildup and oi_buildup:
@@ -395,10 +398,14 @@ class MomentumValidator:
                     )
                 return False, f"CE entry: RSI {rsi_15m:.1f} < momentum threshold {rsi_min_call} (need strong uptrend)"
         
-        # For SELL signal - need extreme positive momentum (overbought)
+        # For SELL signal (PE/PUT) — breakdown puts, not "short the overbought top"
         elif action == 'SELL':
-            if rsi_15m < self.rsi_overbought:
-                return False, f"PE entry: RSI {rsi_15m:.1f} < overbought threshold {self.rsi_overbought}"
+            # 2026-08-13: REMOVED the overbought-required gate (RSI >= 70) that rejected breakdown puts
+            # wholesale ("rejecting the winning team"). Only reject a put when the stock is genuinely
+            # bullish (RSI above the ceiling). (CE bot rejects PE at the validator; kept mirrored.)
+            rsi_bullish_ceil = float(os.getenv("ENTRY_FILTER_RSI_BULLISH_CEIL_PUT", "70"))
+            if rsi_15m > rsi_bullish_ceil:
+                return False, f"PE entry: RSI {rsi_15m:.1f} > {rsi_bullish_ceil} — stock in bullish zone, put blocked"
         
         # MACD confirmation (if available and enabled)
         # The Pine scripts already encode improving MACD histogram in the alert.
@@ -903,6 +910,112 @@ class SymbolReputationValidator:
         return True, f"{symbol} status={status} — unknown, allowing"
 
 
+class SameDayLossValidator:
+    """
+    Hard gate: refuse to re-enter an underlying that has already closed at a loss today.
+
+    Evidence (AO-era 2026-08-17..19, 723 closed trades, booked P&L):
+        prior losses on that symbol today   n     win%    net/trade
+        0                                  557     50%      -Rs26
+        1                                   34     41%     -Rs267
+        2                                   93     31%     -Rs613
+    Blocking from the first loss removed 166 trades worth -Rs73,902 and lifted the
+    3-day book from -Rs70,313 to -Rs444 — better on every individual day.
+
+    Reads the shared ledger written by every bot's OptionPositionMonitor._record_same_day_loss,
+    so a loss booked by CE-ITM also blocks CE-OTM and both PUT bots on that symbol.
+    Fails OPEN: if the ledger is missing or unreadable, entries are allowed.
+    """
+
+    CACHE_TTL_SEC = 20
+
+    def __init__(self):
+        self.name = "SameDayLossValidator"
+        self.enabled = os.getenv("ENTRY_FILTER_BLOCK_SAMEDAY_LOSS", "True").lower() == "true"
+        # any  = same underlying, any side, any bot (measured best)
+        # side = same underlying and same CE/PE side
+        # bot  = same underlying, only this bot's own losses
+        self.scope = os.getenv("ENTRY_FILTER_SAMEDAY_LOSS_SCOPE", "any").strip().lower()
+        self.min_losses = int(os.getenv("ENTRY_FILTER_SAMEDAY_LOSS_MIN", "1"))
+        self._ledger_dir = Path(__file__).resolve().parents[2] / "live_pnl"
+        self._cache: Dict[str, List[Dict]] = {}
+        self._cache_ts: Optional[datetime] = None
+        self._cache_day: Optional[str] = None
+        logger.info(
+            f"{self.name}: Initialized | enabled={self.enabled} | "
+            f"scope={self.scope} | min_losses={self.min_losses} | dir={self._ledger_dir}"
+        )
+
+    def _load(self) -> Dict[str, List[Dict]]:
+        """Return {underlying: [loss_rows]} for today, cached briefly."""
+        now = datetime.now()
+        today = now.date().isoformat()
+        if (
+            self._cache_ts
+            and self._cache_day == today
+            and (now - self._cache_ts).total_seconds() < self.CACHE_TTL_SEC
+        ):
+            return self._cache
+
+        losses: Dict[str, List[Dict]] = {}
+        try:
+            path = self._ledger_dir / f"same_day_losses_{today}.jsonl"
+            if path.exists():
+                with open(path, encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except Exception:
+                            continue  # tolerate a torn final line from a concurrent append
+                        u = str(row.get('underlying') or '').strip().upper()
+                        if u:
+                            losses.setdefault(u, []).append(row)
+        except Exception as e:
+            logger.warning(f"{self.name}: ledger read failed ({e}) — allowing entries")
+            return self._cache or {}
+
+        self._cache = losses
+        self._cache_ts = now
+        self._cache_day = today
+        return losses
+
+    def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
+        if not self.enabled:
+            return True, "Same-day loss block disabled"
+
+        underlying = str(signal.get('symbol') or '').strip().upper()
+        if not underlying:
+            return True, "No symbol — skipping same-day loss check"
+
+        rows = list(self._load().get(underlying, []))
+
+        if self.scope == 'side':
+            want = str(
+                signal.get('option_type') or signal.get('contract_type') or ''
+            ).strip().upper()
+            if want:
+                rows = [r for r in rows if str(r.get('side') or '').upper() == want]
+        elif self.scope == 'bot':
+            me = f"{Path(__file__).resolve().parents[1].name}:{BOT_MODE}"
+            rows = [r for r in rows if str(r.get('bot') or '') == me]
+
+        if len(rows) < self.min_losses:
+            return True, (
+                f"{underlying} — {len(rows)} prior loss(es) today, "
+                f"limit {self.min_losses} (scope={self.scope})"
+            )
+
+        total = sum(float(r.get('pnl') or 0.0) for r in rows)
+        bots = ','.join(sorted({str(r.get('bot') or '?') for r in rows}))
+        return False, (
+            f"{underlying} already lost today: {len(rows)} trade(s), "
+            f"Rs {total:,.0f} [{bots}] | scope={self.scope} — re-entry blocked"
+        )
+
+
 # =============================================================================
 # COMPREHENSIVE ENTRY FILTER (Combines All Validators)
 # =============================================================================
@@ -920,6 +1033,7 @@ class ComprehensiveEntryFilter:
 
         # HARD GATE: runs before all other validators (not part of N/M voting)
         self.reputation_validator = SymbolReputationValidator()
+        self.same_day_loss_validator = SameDayLossValidator()
 
         # Initialize all validators
         self.validators = {
@@ -1059,6 +1173,23 @@ class ComprehensiveEntryFilter:
 
         if 'PROBE_ALLOWED' in rep_reason:
             logger.info(f"{self.name}: 🔬 PROBE_TRADE | {symbol} | {rep_reason}")
+
+        # ---------------------------------------------------------------
+        # HARD GATE 0b: Same-day loss re-entry block
+        # A symbol that already closed at a loss today wins 41% (1 prior loss)
+        # or 31% (2+) versus a 50% base rate — reject outright.
+        # ---------------------------------------------------------------
+        sdl_ok, sdl_reason = self.same_day_loss_validator.validate(signal, market_data)
+        if not sdl_ok:
+            reason_key = 'SymbolBlocked_SameDayLoss'
+            self.rejected_by_reason[reason_key] = self.rejected_by_reason.get(reason_key, 0) + 1
+            logger.warning(f"{self.name}: ❌ HARD_GATE_REJECTED | {symbol} | {sdl_reason}")
+            self._log_rejection(signal, market_data, sdl_reason, filter_name='SAME_DAY_LOSS')
+            pass_rate = (self.passed / self.total_alerts * 100) if self.total_alerts > 0 else 0
+            logger.info(f"{self.name}: STATS | Total: {self.total_alerts} | Passed: {self.passed} | Rate: {pass_rate:.1f}%")
+            return False, sdl_reason, {
+                'same_day_loss': {'valid': False, 'reason': sdl_reason}
+            }
 
         # ---------------------------------------------------------------
         # OPTIONAL GATE: Market Trend Filter (GOOD/NEUTRAL/BAD)

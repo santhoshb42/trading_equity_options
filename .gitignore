@@ -20,6 +20,14 @@ venv/
 .env.before
 # Keep .env.template (safe reference, no real keys)
 !.env.template
+# Backups of .env — these carry LIVE broker credentials. Never commit.
+.env.bak*
+.env.*.bak
+.env.*.bak.*
+*/.env.bak*
+**/.env.bak*
+**/tools/.env.bak*
+
 
 # =============================================================================
 # Runtime data directories — live trading state, not source
