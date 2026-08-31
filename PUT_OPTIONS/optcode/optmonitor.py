@@ -960,6 +960,13 @@ class OptionPositionMonitor:
         self._early_peak_cut_enabled = os.getenv("OPTIONS_EARLY_PEAK_CUT_ENABLED", "False").lower() == "true"
         self._early_peak_cut_minutes = float(os.getenv("OPTIONS_EARLY_PEAK_CUT_MINUTES", "3"))
         self._early_peak_cut_peak_pct = float(os.getenv("OPTIONS_EARLY_PEAK_CUT_PEAK_PCT", "1.0"))
+        # Also cut a trade that is UNDERWATER at the checkpoint even if it once peaked
+        # above _peak_pct. Rationale (user, 2026-08-31): rebounds from here are rare --
+        # only 9% of such trades recovered to a gross profit over the last 10 sessions.
+        self._early_peak_cut_negative_enabled = os.getenv(
+            "OPTIONS_EARLY_PEAK_CUT_NEGATIVE_ENABLED", "True").lower() == "true"
+        self._early_peak_cut_negative_pct = float(
+            os.getenv("OPTIONS_EARLY_PEAK_CUT_NEGATIVE_PCT", "0.0"))
         logger.info(
             f"EARLY_PEAK_CUT: enabled={self._early_peak_cut_enabled} | "
             f"minutes={self._early_peak_cut_minutes} | peak_pct={self._early_peak_cut_peak_pct}"
@@ -3814,19 +3821,30 @@ class OptionPositionMonitor:
             # 2 min went on to 22-28% peaks). Three minutes is where they separate.
             # Off by default; enable per-bot via OPTIONS_EARLY_PEAK_CUT_ENABLED.
             if self._early_peak_cut_enabled and not position.trial_sl_enabled:
-                if (hold_time_min >= self._early_peak_cut_minutes
-                        and peak_profit_pct * 100 < self._early_peak_cut_peak_pct):
+                _peak_pct_v = peak_profit_pct * 100
+                _cur_pct_v = current_pnl_pct * 100
+                _due = hold_time_min >= self._early_peak_cut_minutes
+                # BRANCH A (original): never got going -- peak stayed under the floor.
+                _flat = _peak_pct_v < self._early_peak_cut_peak_pct
+                # BRANCH B (2026-08-31): peaked fine but is UNDERWATER now. Tagged separately in
+                # the exit reason so the two branches stay measurable against each other.
+                _underwater = (self._early_peak_cut_negative_enabled
+                               and _peak_pct_v >= self._early_peak_cut_peak_pct
+                               and _cur_pct_v < self._early_peak_cut_negative_pct)
+                if _due and (_flat or _underwater):
+                    _why = "FLAT" if _flat else "NEGATIVE"
                     logger.warning(
-                        f"EARLY_PEAK_CUT_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
-                        f"Peak: +{peak_profit_pct*100:.2f}% < {self._early_peak_cut_peak_pct:.1f}% | "
-                        f"Current: {current_pnl_pct*100:.2f}% | trail never armed"
+                        f"EARLY_PEAK_CUT_TRIGGERED[{_why}]: {symbol} | Hold: {hold_time_min:.1f}min | "
+                        f"Peak: +{_peak_pct_v:.2f}% (floor {self._early_peak_cut_peak_pct:.1f}%) | "
+                        f"Current: {_cur_pct_v:.2f}% | trail never armed"
                     )
-                    pnl = self.close_position(
-                        symbol,
-                        position.current_premium,
-                        f"EARLY_PEAK_CUT (Peak +{peak_profit_pct*100:.1f}% < "
-                        f"{self._early_peak_cut_peak_pct:.1f}% at {hold_time_min:.0f}min)"
-                    )
+                    if _flat:
+                        _reason = (f"EARLY_PEAK_CUT (Peak +{_peak_pct_v:.1f}% < "
+                                   f"{self._early_peak_cut_peak_pct:.1f}% at {hold_time_min:.0f}min)")
+                    else:
+                        _reason = (f"EARLY_PEAK_CUT_NEG (Peak +{_peak_pct_v:.1f}% but "
+                                   f"{_cur_pct_v:.1f}% at {hold_time_min:.0f}min)")
+                    pnl = self.close_position(symbol, position.current_premium, _reason)
                     if pnl:
                         closed.append(pnl)
                     continue
