@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v2 ENTRY-ONLY", shorttitle="RSI Burn CE v2", overlay=false)
+indicator(title="RSI Burn — CE (bot) v3 DAYOPEN", shorttitle="RSI Burn CE v3", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -10,6 +10,8 @@ requireRisingRSI = input.bool(true, title="Require RSI Rising (momentum filter)"
 cooldownBars     = input.int(5, minval=0, title="Cooldown Bars Between Signals", group="Flame Settings")
 alertWindow      = input.session("0915-1430", "Alert window (exchange time)", group="Bot",
      tooltip="Must match the CE bots ENTRY_FILTER_MARKET_OPEN/CLOSE (currently 0915-1430). Alerts outside this are rejected bot-side anyway; gating here avoids the noise. NOTE: opens at 09:15 (true market open) so RSI_BURN is tested in the early window; AO_IGNITION stays gated at 0930 in its own script, so 09:15-09:30 is RSI_BURN-exclusive.")
+useDayOpenGate   = input.bool(true, "Fire only ABOVE the day open", group="Bot",
+     tooltip="Blocks CE entries on a symbol trading below its own opening price. AO_IGNITION has carried an equivalent day-bias gate (prev close AND day open) since v35; RSI_BURN had none, so the two were not compared on equal terms.")
 minGapBars       = input.int(10, "Min candles between ANY two alerts", minval=0, group="Bot",
      tooltip="Mirrors the AO_IGNITION global bar gap so the two strategies are throttled identically for the A/B.")
 requireConfirmBar = input.bool(true, title="Delay 1 Bar - Confirm Flame Still Burning", group="Flame Settings", tooltip="Ignores single-bar RSI spikes: waits 1 bar after the cross and only signals if RSI is still above the ignition level")
@@ -88,10 +90,13 @@ barsSinceLast = na(lastSignalBar) ? 9999 : bar_index - lastSignalBar
 cooldownOK = barsSinceLast >= cooldownBars
 
 inWindow = not na(time(timeframe.period, alertWindow))
+// Day-open gate: only take a CE when the symbol is above its own opening price.
+// na(dayOpen) fails OPEN (never block on missing data) -- same convention as AO_IGNITION.
+dayOpenOK = not useDayOpenGate or na(dayOpen) or close > dayOpen
 var int lastAnyBar = na
 gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 
-flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk
+flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK
 if flameStart
     lastSignalBar := bar_index
     lastAnyBar    := bar_index
@@ -152,6 +157,7 @@ ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' 
      '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
      '","vwap_dist_pct":"' + fmt(premDistPct) + '","vwap_slope_bars":"' + str.tostring(vwapSlopeLook) +
      '","day_change_pct":"' + fmt(dayChgPct) + '","prev_close":"' + fmt(prevDayClose) +
+     '","day_open":"' + fmt(dayOpen) +
      '","ao_ratio":"' + fmt(aoRatio) + '","ao_force":"' + fmt(aoForce) +
      '","ao_day_scale":"' + fmt(aoDayScale) + '","ao_delta":"' + fmt(aoDelta) +
      '","adx":"' + fmt(adxV) + '","adx_slope":"' + fmt(adxV - adxV[3]) +
