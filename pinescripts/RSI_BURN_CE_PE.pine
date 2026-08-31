@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v1", shorttitle="RSI Burn CE", overlay=false)
+indicator(title="RSI Burn — CE (bot) v2 ENTRY-ONLY", shorttitle="RSI Burn CE v2", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
