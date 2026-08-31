@@ -23,6 +23,10 @@ for name,bd in BOTS:
             except: continue
             a=r.get("alert") or {}
             if not a.get("symbol"): continue
+            # Only ENTRY alerts may be joined. Non-entry payloads (e.g. RSI_BURN_FADE,
+            # which carries no action/entry_type) would otherwise win the nearest-preceding
+            # match and label the trade entry_type=None, corrupting the AO-vs-RSI_BURN split.
+            if not a.get("action") or not a.get("entry_type"): continue
             try: ts=datetime.datetime.fromisoformat(r["timestamp"])
             except: continue
             alerts[(name,a["symbol"])].append((ts,a))

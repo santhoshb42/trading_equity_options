@@ -162,9 +162,11 @@ ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' 
 if flameStart
     alert(ceJson, alert.freq_once_per_bar_close)
 
-// EXIT alert is informational only — the bots run their own exit stack (TRIAL_SL / HARD_SL /
-// STALE / EARLY_PEAK_CUT) and do NOT act on inbound exit alerts. Left so the fade is visible
-// on the chart and in the alert log; it carries no tradeable payload.
-if flameFade
-    alert('{"symbol":"' + syminfo.ticker + '","event":"RSI_BURN_FADE","price":"' + fmt(close) +
-          '","rsi_value":"' + fmt(rsi) + '"}', alert.freq_once_per_bar_close)
+// EXIT / FADE: chart marker ONLY -- deliberately NO alert().
+// An alert() here fired a payload with no "action" field, which the webhook cannot classify:
+// every fade was queued, run through signal validation and REJECTED as "Invalid symbol or
+// action" -- 88 of 90 rejections on 2026-08-31, ~86 junk alerts per CE bot per session.
+// The bots run their own exit stack (TRIAL_SL / HARD_SL / STALE / EARLY_PEAK_CUT) and never
+// act on an inbound exit alert, so this alert had no consumer. The flameFade plotshape above
+// already marks the fade on the chart, so nothing visual is lost.
+// DO NOT re-add an alert() here without an "action" + "option_side" field.
