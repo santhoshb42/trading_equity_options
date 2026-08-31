@@ -89,12 +89,48 @@ signal.signal(signal.SIGINT, _signal_handler)
 
 
 def _authenticate_broker():
+    """Authenticate, and do NOT return until the session is actually usable.
+
+    The old version called authenticate() once and ignored its return value.
+    authenticate() returns False when AngelOne rate-limits the login -- which it does
+    reliably, because all four bots plus this daemon restart within the same ~60s window.
+    The daemon then ran unauthenticated and, because re-auth was on a 3600s timer started
+    at boot, it stayed broken until exactly boot+1h. Observed 08-25, 08-27 and 08-31:
+    210 "Not authenticated for Nifty 50" per session, 09:15 -> 09:50, i.e. the entire
+    first 35 minutes of trading had NO regime data.
+    """
     from dotenv import load_dotenv
     load_dotenv(CE_DIR / "tools" / ".env")
     os.environ.setdefault("BOT_MODE", "OTM")
     from optcode.angelone_options import AngelOneOptionsBroker
+
+    # Stagger against the bots' own startup logins to avoid the rate limit in the first place.
+    _jitter = float(os.getenv("REGIME_AUTH_START_DELAY_SECONDS", "25"))
+    if _jitter > 0:
+        logger.info(f"Staggering broker login by {_jitter:.0f}s to avoid the bot startup rate limit")
+        time.sleep(_jitter)
+
     broker = AngelOneOptionsBroker()
-    broker.authenticate()
+    _max_wait = float(os.getenv("REGIME_AUTH_MAX_WAIT_SECONDS", "900"))
+    _deadline = time.time() + _max_wait
+    _attempt = 0
+    while not _stop_event:
+        _attempt += 1
+        try:
+            if broker.authenticate(is_retry=_attempt > 1):
+                logger.info(f"Broker authenticated (data-only use) | attempt={_attempt}")
+                return broker
+        except Exception as e:
+            logger.warning(f"Broker auth raised on attempt {_attempt}: {e}")
+        if time.time() >= _deadline:
+            logger.error(
+                f"Broker auth still failing after {_max_wait:.0f}s ({_attempt} attempts) -- "
+                "continuing; the main loop re-checks the session before every fetch"
+            )
+            return broker
+        _backoff = min(2 ** min(_attempt, 5), 32)
+        logger.warning(f"Broker auth attempt {_attempt} FAILED (rate limit?) -- retrying in {_backoff}s")
+        time.sleep(_backoff)
     return broker
 
 
@@ -201,7 +237,6 @@ def main():
     logger.info(f"Market regime daemon starting | poll={POLL_SECONDS}s window={WINDOW_MINUTES}m "
                 f"threshold={EFFICIENCY_THRESHOLD}%")
     broker = _authenticate_broker()
-    logger.info("Broker authenticated (data-only use)")
 
     last_candle_ts = None
     last_auth = time.time()
@@ -212,8 +247,15 @@ def main():
                 time.sleep(60)
                 continue
 
+            # Re-check the session before EVERY fetch. ensure_authenticated() is cheap when the
+            # session is valid and self-heals with backoff when it is not -- this is what stops a
+            # rate-limited login from silently costing the first 35 minutes of the session.
+            if not broker.ensure_authenticated():
+                logger.warning("REGIME: session not usable yet - retrying next poll")
+                time.sleep(POLL_SECONDS)
+                continue
             if time.time() - last_auth > 3600:
-                broker.authenticate()
+                broker.authenticate(is_retry=True)
                 last_auth = time.time()
 
             candles = broker.get_historical_data("Nifty 50", "ONE_MINUTE", days_back=3, force_refresh=True)
