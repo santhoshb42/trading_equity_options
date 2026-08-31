@@ -929,6 +929,14 @@ class OptionPosition:
             'sector_participation': self.sector_data.get('sector_participation') if self.sector_data is not None else None,
             'sector_bullish': self.sector_data.get('sector_bullish') if self.sector_data is not None else None,
             'sector_check': sector_check,
+            # PERSISTED so a position that survives a bot restart keeps the strategy that
+            # opened it. Without this, _load_positions rebuilds the position with an EMPTY
+            # entry_context, and the closed-trade record (and the live_pnl Strategy column)
+            # loses entry_type forever. Cost 3 trades on 2026-08-31 across two restarts.
+            'entry_context': self.entry_context,
+            'market_trend': self.market_trend,
+            'trend_strength': self.trend_strength,
+            'sector_data': self.sector_data,
         }
 
 # =============================================================================
@@ -5623,7 +5631,14 @@ class OptionPositionMonitor:
                     entry_premium=pos_data['entry_premium'],
                     entry_time=entry_time,
                     order_id=pos_data.get('order_id', ''),
-                    underlying_alert_price=pos_data.get('underlying_alert_price')
+                    underlying_alert_price=pos_data.get('underlying_alert_price'),
+                    # RESTORE the entry-side context. Omitting these rebuilt every restarted
+                    # position with an empty entry_context, so its closed-trade record lost
+                    # entry_type (blank Strategy column) and the sector/regime fields with it.
+                    entry_context=pos_data.get('entry_context'),
+                    sector_data=pos_data.get('sector_data'),
+                    market_trend=pos_data.get('market_trend'),
+                    trend_strength=pos_data.get('trend_strength'),
                 )
                 position.current_premium = pos_data.get('current_premium', pos_data['entry_premium'])
                 position.current_greeks = pos_data.get('current_greeks', {})
