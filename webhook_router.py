@@ -44,8 +44,12 @@ CE_ITM_BOT_URL = os.getenv("CE_ITM_BOT_URL", "http://127.0.0.1:8080/webhook/opti
 PE_BOT_URL = os.getenv("PE_BOT_URL", "http://127.0.0.1:8082/webhook/put_options")
 PE_ITM_BOT_URL = os.getenv("PE_ITM_BOT_URL", "http://127.0.0.1:8083/webhook/put_options")  # ITM PE bot on 8083
 IST = ZoneInfo("Asia/Kolkata")
-ALERT_START_HOUR_IST = 9
-ALERT_START_MINUTE_IST = 30
+# Router-level alert cutoff. Deliberately PERMISSIVE: every bot enforces its OWN
+# ENTRY_FILTER_MARKET_OPEN (CE=0915 for the RSI_BURN early-window test, PE=0930), so the
+# router must never be the narrower gate -- it silently starves those windows upstream of
+# any bot-side config. Hardcoded 09:30 here dropped 5 real RSI_BURN entries on 2026-08-31.
+ALERT_START_HOUR_IST = int(os.getenv("ROUTER_ALERT_START_HOUR_IST", "9"))
+ALERT_START_MINUTE_IST = int(os.getenv("ROUTER_ALERT_START_MINUTE_IST", "15"))
 
 # Track stats
 STATS = {
@@ -234,7 +238,7 @@ def normalize_payload_for_target(payload: Dict[str, Any], alert_type: str) -> Di
 
 
 def is_before_alert_window(now_ist: datetime | None = None) -> bool:
-    """Return True when current IST time is before the allowed 09:30 alert window."""
+    """Return True when current IST time is before the configured alert window start."""
     if now_ist is None:
         now_ist = datetime.now(IST)
 
@@ -322,12 +326,12 @@ def handle_webhook():
         if is_before_alert_window(current_ist):
             STATS["alerts_ignored_pre_930"] += batch_size
             logger.warning(
-                "Ignoring alert before 09:30 IST | "
+                f"Ignoring alert before {ALERT_START_HOUR_IST:02d}:{ALERT_START_MINUTE_IST:02d} IST | "
                 f"symbol={symbol} | batch_size={batch_size} | alert_source={alert_source} | current_ist={current_ist.isoformat()}"
             )
             return jsonify({
                 "status": "ignored",
-                "message": "Alerts are ignored before 09:30 AM IST",
+                "message": f"Alerts are ignored before {ALERT_START_HOUR_IST:02d}:{ALERT_START_MINUTE_IST:02d} IST",
                 "batch_size": batch_size,
                 "current_ist": current_ist.isoformat()
             }), 202
