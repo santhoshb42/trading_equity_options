@@ -437,12 +437,29 @@ def create_options_api_app():
                 logger.warning("WEBHOOK: Empty request body")
                 return jsonify({'error': 'Empty request body'}), 400
             
-            # 🔧 NEW: Log raw webhook data from TradingView at source
-            log_alert(alert=data, status='received', details={'source': 'tradingview'})
-            
             # Extract alert(s)
             alerts = data if isinstance(data, list) else [data]
-            logger.info(f"WEBHOOK: Received {len(alerts)} alert(s) | raw_data={json.dumps(data)[:200]}")
+
+            # NON-ENTRY PAYLOAD GUARD (2026-08-31)
+            # TradingView exit/fade markers (e.g. RSI_BURN_FADE) carry no "action" field, so
+            # they can never become an order. They were being queued, run through signal
+            # validation and rejected as "Invalid symbol or action" -- ~80/hour of pure noise
+            # that also made up ~79% of alerts.jsonl and corrupted the strategy A/B.
+            # Drop them at the door, BEFORE log_alert, so telemetry stays clean.
+            # An alert must have both a symbol and an action to be actionable.
+            _entry = [a for a in alerts if isinstance(a, dict) and a.get('action') and a.get('symbol')]
+            _dropped = len(alerts) - len(_entry)
+            if _dropped:
+                logger.debug(f"WEBHOOK: ignored {_dropped} non-entry payload(s) | {json.dumps(data)[:120]}")
+            if not _entry:
+                return jsonify({'status': 'ignored', 'reason': 'non_entry_payload',
+                                'dropped': _dropped}), 200
+            alerts = _entry
+
+            # Log raw webhook data from TradingView at source (entry alerts only)
+            log_alert(alert=(alerts if isinstance(data, list) else alerts[0]),
+                      status='received', details={'source': 'tradingview'})
+            logger.info(f"WEBHOOK: Received {len(alerts)} alert(s) | raw_data={json.dumps(alerts)[:200]}")
             
             # CIRCUIT BREAKER: Check broker API rate limiter
             try:
