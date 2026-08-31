@@ -462,10 +462,18 @@ No closed trades.
                 lowest_prem = min(entry_prem, current_prem)
             # Peak PROFIT % so far — action-aware (a SHORT's profit-peak is the LOWEST premium).
             peak_pct = (((entry_prem - lowest_prem) if trade.get('action') == 'SELL' else (highest_prem - entry_prem)) / entry_prem * 100) if entry_prem else 0.0
-            # TRIAL_SL status: armed once peak profit >= ARM%; then the floor locks at (peak - GAP)%.
-            _tarm = OptionsTradingConfig.TRIAL_SL_ARM_PCT; _tgap = OptionsTradingConfig.TRIAL_SL_GAP_PCT
-            if OptionsTradingConfig.TRIAL_SL_ENABLED and trade.get('action') == 'SELL' and peak_pct >= _tarm:
-                trail_status = f"YES@{peak_pct - _tgap:.1f}%"   # exits if profit falls to this floor
+            # TRIAL_SL status: read the position's ACTUAL armed state, not a guess from config.
+            # The old check required action == 'SELL', so in BUY mode (every live bot) it could
+            # never report YES; it also recomputed the floor from config instead of showing the
+            # real locked stop. trial_sl_price / last_trailing_sl_price IS the level that exits.
+            _trail_on = bool(trade.get('trial_sl_enabled') or trade.get('trailing_sl_activated'))
+            _trail_px = trade.get('trial_sl_price')
+            if _trail_px in (None, 0):
+                _trail_px = trade.get('last_trailing_sl_price')
+            if _trail_on and _trail_px:
+                trail_status = f"YES ({float(_trail_px):.2f})"   # premium level that triggers the exit
+            elif _trail_on:
+                trail_status = "YES"
             else:
                 trail_status = "NO"
             qty = trade.get('quantity', 0)
@@ -507,7 +515,7 @@ No closed trades.
             # live_pnl CSVs are debuggable per-strategy without joining alerts.jsonl.
             _ec = trade.get('entry_context') or {}
             strategy = str(_ec.get('entry_type') or _ec.get('tv_setup_label') or '-')[:12]
-            line = f"OPN | {underlying:<10} | {strategy:<12} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {trail_status:>9}"
+            line = f"OPN | {underlying:<10} | {strategy:<12} | {option_symbol:<24} | {alert_price:>9.0f} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {trail_status:>13}"
             csv_lines.append(line)
         
         return "\n".join(csv_lines)
