@@ -37,7 +37,17 @@ class PremiumValidator:
     def __init__(self):
         self.name = "PremiumValidator"
         self.min_premium = float(os.getenv("ENTRY_FILTER_MIN_PREMIUM", "2.0"))
-        logger.info(f"{self.name}: Initialized | Min premium: ₹{self.min_premium}")
+        # Upper bound (2026-09-01). 0 = disabled. Measured over 603 CE trades / 12 sessions:
+        # premium <25 lost -170/trade (positive on 1 of 7 days) and 100+ lost -218/trade at a
+        # 30% win rate (positive on 0 of 5 days), while 25-100 made +184/trade and was positive
+        # on every day and on both bots. It is a GROSS effect -- charges are flat ~Rs91 across
+        # all bands -- so it is not a friction artifact. No alert indicator separated winners
+        # from losers (every AUC 0.47-0.57); the contract bought is what separates them.
+        self.max_premium = float(os.getenv("ENTRY_FILTER_MAX_PREMIUM", "0"))
+        logger.info(
+            f"{self.name}: Initialized | Premium band: ₹{self.min_premium}"
+            + (f" - ₹{self.max_premium}" if self.max_premium > 0 else " - unbounded")
+        )
     
     def validate(self, signal: Dict[str, Any], market_data: Dict[str, Any]) -> Tuple[bool, str]:
         """
@@ -53,10 +63,14 @@ class PremiumValidator:
         """
         entry_premium = market_data.get('entry_premium', 0)
         
-        if entry_premium >= self.min_premium:
-            return True, f"Premium ₹{entry_premium:.2f} >= ₹{self.min_premium} (sufficient liquidity)"
-        else:
+        if entry_premium < self.min_premium:
             return False, f"Premium ₹{entry_premium:.2f} < ₹{self.min_premium} (low liquidity, high gap risk)"
+        if self.max_premium > 0 and entry_premium >= self.max_premium:
+            # Tagged distinctly so the cost of this bound stays measurable: grep PREMIUM_BAND_HIGH.
+            return False, (f"PREMIUM_BAND_HIGH: ₹{entry_premium:.2f} >= ₹{self.max_premium} "
+                           f"(expensive contract, 30% win rate historically)")
+        return True, (f"Premium ₹{entry_premium:.2f} within band "
+                      f"₹{self.min_premium}-" + (f"₹{self.max_premium}" if self.max_premium > 0 else "inf"))
 
 # =============================================================================
 # VALIDATOR 1: MARKET STRUCTURE (PCR + OI Buildup)
