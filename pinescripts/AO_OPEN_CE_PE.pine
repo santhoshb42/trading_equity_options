@@ -28,6 +28,7 @@ fireBar     = input.int(2, "Fire on bar N of the session (1-min: 2 = 09:16)", mi
 useCE       = input.bool(true,  "Enable CE (long calls)",  group="Trigger")
 usePE       = input.bool(true,  "Enable PE (long puts)",   group="Trigger")
 useAo       = input.bool(true,  "Require AO improving (CE) / falling (PE)",   group="Conditions")
+aoMode      = input.string("is green/red", "   AO test", options=["is green/red","just turned"], group="Conditions", tooltip="TradingView colours the AO bar from diff = ao - ao[1]: green when diff > 0. 'is green/red' matches that colour on the firing bar. 'just turned' uses ta.crossover(diff,0) -- the bar where the colour FLIPS -- which is what the built-in AO alertcondition sends. 'just turned' is strictly rarer: it also demands the 09:15 bar was the opposite colour.")
 useMacd     = input.bool(true,  "Require MACD hist improving (CE) / falling (PE)", group="Conditions")
 useVwap     = input.bool(true,  "Require close above VWAP (CE) / below VWAP (PE)", group="Conditions")
 alertWindow = input.session("0915-1430", "Safety window (exchange time)", group="Bot")
@@ -75,8 +76,13 @@ aoDeltaAvg = ta.sma(math.abs(ao - ao[1]), 30)
 inWindow = not na(time(timeframe.period, alertWindow))
 onBar    = barOfDay == fireBar and inWindow
 
-aoUp   = not useAo   or ao   > ao[1]
-aoDn   = not useAo   or ao   < ao[1]
+// TradingView's built-in AO colours the bar from diff = ao - ao[1] (green when diff > 0);
+// its alertcondition fires on ta.crossover(diff, 0), i.e. the bar the colour FLIPS on.
+// "is green/red" = the colour on the firing bar. "just turned" = the flip itself, which
+// additionally requires the previous (09:15) bar to have been the opposite colour.
+aoDiff = ao - ao[1]
+aoUp   = not useAo or (aoMode == "just turned" ? ta.crossover(aoDiff, 0)  : aoDiff > 0)
+aoDn   = not useAo or (aoMode == "just turned" ? ta.crossunder(aoDiff, 0) : aoDiff < 0)
 macdUp = not useMacd or hist > hist[1]
 macdDn = not useMacd or hist < hist[1]
 vwUp   = not useVwap or close > vwapV
