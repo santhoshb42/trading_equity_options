@@ -1,0 +1,143 @@
+//@version=6
+indicator(title="AO Open — CE/PE (bot) v1", shorttitle="AO Open v1", overlay=false)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONE decision, once per day, on the SECOND bar of the session.
+//
+// Compare that bar with the opening bar (09:16 vs 09:15 on a 1-MINUTE chart) and fire if:
+//     CE : AO improving   AND MACD histogram improving   AND close ABOVE VWAP
+//     PE : AO falling     AND MACD histogram falling     AND close BELOW VWAP
+//
+// There is NO zero-cross, NO arm/follow-through state machine, NO pullback and NO
+// MOM_CONTINUATION here. AO_IGNITION could not do this by retiming: its trigger is
+// ta.crossover(ao, 0), so it only ever fires when AO crosses zero -- retiming that to
+// 09:16 would have produced almost nothing. Hence a separate script.
+//
+// CHART: 1-MINUTE. "fire on bar N" is bar-count based, so on a 3-min chart bar 2 is
+// 09:18 vs 09:15 instead. Set the timeframe deliberately.
+//
+// CAVEAT worth knowing: VWAP resets daily, so on bar 2 it is the average of two bars.
+// "close > vwap" here is close to "this bar beat the opening bar's typical price" --
+// a much weaker statement than it would be at 11:00. Toggle useVwap to test without it.
+//
+// ALERT SETUP: "Any alert() function call". There are no named conditions, deliberately.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ---------------- Inputs ----------------
+fireBar     = input.int(2, "Fire on bar N of the session (1-min: 2 = 09:16)", minval=2, maxval=20, group="Trigger")
+useCE       = input.bool(true,  "Enable CE (long calls)",  group="Trigger")
+usePE       = input.bool(true,  "Enable PE (long puts)",   group="Trigger")
+useAo       = input.bool(true,  "Require AO improving (CE) / falling (PE)",   group="Conditions")
+useMacd     = input.bool(true,  "Require MACD hist improving (CE) / falling (PE)", group="Conditions")
+useVwap     = input.bool(true,  "Require close above VWAP (CE) / below VWAP (PE)", group="Conditions")
+alertWindow = input.session("0915-1430", "Safety window (exchange time)", group="Bot")
+
+macdFast    = input.int(12, "MACD fast",   group="Conditions")
+macdSlow    = input.int(26, "MACD slow",   group="Conditions")
+macdSignal  = input.int(9,  "MACD signal", group="Conditions")
+vwapBandMult  = input.float(1.25, "VWAP band width (x std-dev)", minval=0.25, step=0.05, group="Bot")
+vwapSlopeLook = input.int(20, "VWAP slope window (bars, telemetry only)", minval=1, group="Bot")
+
+// ---------------- Indicators ----------------
+ao   = ta.sma(hl2, 5) - ta.sma(hl2, 34)
+[macdLine, sigLine, hist] = ta.macd(close, macdFast, macdSlow, macdSignal)
+rsiV = ta.rsi(close, 14)
+[vwapV, vwapUpper, vwapLower] = ta.vwap(hlc3, timeframe.change("D"), vwapBandMult)
+[dmiP, dmiM, adxV] = ta.dmi(14, 14)
+volAvg   = ta.sma(volume, 20)
+volRatio = (na(volAvg) or volAvg == 0) ? na : volume / volAvg
+avgRange = ta.sma(high - low, 14)
+
+// ---------------- Session bar counter ----------------
+newDay = timeframe.change("D")
+var int barOfDay = 0
+barOfDay := newDay ? 1 : barOfDay + 1
+
+var float dayOpen = na
+if newDay
+    dayOpen := open
+prevDayClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+
+// Per-session VWAP slope reference (vwap[N] would bleed into yesterday early in the day).
+var vwHist = array.new_float(0)
+if newDay
+    array.clear(vwHist)
+array.push(vwHist, vwapV)
+if array.size(vwHist) > vwapSlopeLook + 1
+    array.shift(vwHist)
+vwapRef = array.size(vwHist) > 1 ? array.get(vwHist, 0) : na
+
+aoDayScale = ta.highest(math.abs(ao), 30)
+aoDelta    = ao - ao[1]
+aoDeltaAvg = ta.sma(math.abs(ao - ao[1]), 30)
+
+// ---------------- The trigger ----------------
+inWindow = not na(time(timeframe.period, alertWindow))
+onBar    = barOfDay == fireBar and inWindow
+
+aoUp   = not useAo   or ao   > ao[1]
+aoDn   = not useAo   or ao   < ao[1]
+macdUp = not useMacd or hist > hist[1]
+macdDn = not useMacd or hist < hist[1]
+vwUp   = not useVwap or close > vwapV
+vwDn   = not useVwap or close < vwapV
+
+// One alert per symbol per day, per side.
+var bool firedCE = false
+var bool firedPE = false
+if newDay
+    firedCE := false
+    firedPE := false
+
+ceFire = useCE and onBar and not firedCE and aoUp and macdUp and vwUp
+peFire = usePE and onBar and not firedPE and aoDn and macdDn and vwDn
+if ceFire
+    firedCE := true
+if peFire
+    firedPE := true
+
+// ---------------- Plots ----------------
+plot(ao, "AO", color=ao >= 0 ? color.new(color.teal, 0) : color.new(color.red, 0), style=plot.style_columns)
+plot(hist, "MACD hist", color=color.new(color.gray, 40))
+hline(0, "zero", color=color.new(color.gray, 70))
+plotshape(ceFire, title="CE", style=shape.triangleup,   location=location.bottom, color=color.lime, size=size.small, text="CE", textcolor=color.white)
+plotshape(peFire, title="PE", style=shape.triangledown, location=location.top,    color=color.red,  size=size.small, text="PE", textcolor=color.white)
+bgcolor(ceFire ? color.new(color.lime, 80) : peFire ? color.new(color.red, 85) : na, title="Fire")
+
+// ---------------- Alert payload ----------------
+// entry_type = AO_OPEN so these stay SEPARABLE from the running AO_IGNITION in the trade
+// record. Field-for-field identical to AO_IGNITION / RSI_BURN so tools/alert_trade_join.py
+// and the window/shadow evaluators score it with no changes.
+fmt(x) => str.tostring(x, "#.##")
+vwZ          = (na(vwapLower) or vwapBandMult == 0) ? na : (close - vwapV) / ((vwapV - vwapLower) / vwapBandMult)
+dayChgPct    = na(prevDayClose) ? na : (close - prevDayClose) / prevDayClose * 100.0
+vwapSlopePct = (na(vwapRef) or vwapRef == 0) ? na : (vwapV - vwapRef) / vwapRef * 100.0
+premDistPct  = (na(vwapV) or vwapV == 0) ? na : (close - vwapV) / vwapV * 100.0
+aoRatio      = (na(aoDayScale) or aoDayScale == 0) ? na : ao / aoDayScale
+aoForce      = (na(aoDeltaAvg) or aoDeltaAvg == 0) ? na : aoDelta / aoDeltaAvg
+
+// PE MUST send action=SELL + original_action=BUY_PUT. The PE bot rejects action=BUY outright
+// ("PE only strategy: BUY action (CE) rejected") -- verified live. SELL is the DIRECTION
+// (bearish); the bot still BUYS a put. This mirrors AO_IGNITION's peJson exactly.
+mkJson(sideStr, labelStr) =>
+    actStr = sideStr == "PE" ? '"action":"SELL","original_action":"BUY_PUT"' : '"action":"BUY"'
+    '{"symbol":"' + syminfo.ticker + '",' + actStr + ',"option_side":"' + sideStr + '"' +
+     ',"entry_type":"AO_OPEN","trigger":"open_bar","bars_since_cross":"0"' +
+     ',"price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL"' +
+     ',"ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsiV) + '","macd_hist":"' + fmt(hist) +
+     '","vwap":"' + fmt(vwapV) + '","vwap_upper":"' + fmt(vwapUpper) + '","vwap_lower":"' + fmt(vwapLower) +
+     '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
+     '","vwap_dist_pct":"' + fmt(premDistPct) + '","vwap_slope_bars":"' + str.tostring(vwapSlopeLook) +
+     '","day_change_pct":"' + fmt(dayChgPct) + '","prev_close":"' + fmt(prevDayClose) +
+     '","day_open":"' + fmt(dayOpen) +
+     '","ao_ratio":"' + fmt(aoRatio) + '","ao_force":"' + fmt(aoForce) +
+     '","ao_day_scale":"' + fmt(aoDayScale) + '","ao_delta":"' + fmt(aoDelta) +
+     '","adx":"' + fmt(adxV) + '","adx_slope":"' + fmt(adxV - adxV[3]) +
+     '","rsi_slope":"' + fmt(rsiV - rsiV[3]) + '","macd_slope":"' + fmt(hist - hist[1]) +
+     '","vol_ratio":"' + fmt(volRatio) + '","atr_pct":"' + fmt(avgRange / close * 100) +
+     '","tv_setup_label":"' + labelStr + '","reentry_context_active":"false"}'
+
+if ceFire
+    alert(mkJson("CE", "AO_OPEN_CE"), alert.freq_once_per_bar_close)
+if peFire
+    alert(mkJson("PE", "AO_OPEN_PE"), alert.freq_once_per_bar_close)
