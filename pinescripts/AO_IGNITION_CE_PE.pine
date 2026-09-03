@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v54 [3-min, bar-0]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v55 [3-min, bar-0, 0915 window]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -283,7 +283,12 @@ pmcNeedOpenDown = input.bool(true, "   require the stock FELL in its opening 15 
 cooldownMin = input.int(30, "Cooldown minutes (per side)", minval=1, group="Logic")
 useCooldown = input.bool(true, "Enforce cooldown", group="Logic")
 minGapBars  = input.int(10, "Min candles between ANY two alerts", minval=0, group="Logic")
-alertWindow = input.session("0930-1430", "Alert window (exchange time)", group="Logic")
+alertWindow = input.session("0915-1430", "Alert window (exchange time)", group="Logic")
+// v55: MOM_CONT's opening-move reference is now INDEPENDENT of alertWindow. It used to capture
+// the first bar INSIDE alertWindow, so opening the window to 09:15 would have made px0930 equal
+// the day open and silently stopped "opened down" from ever being true -- killing MOM_CONT
+// without anyone changing a MOM_CONT setting.
+pmcRefWindow = input.session("0930-1430", "   MOM_CONT opening-move reference window", group="PE MOM_CONT")
 showLabels  = input.bool(true, "Show labels", group="Visuals")
 labelSize   = input.string("small", "Label size", options=["tiny","small","normal","large"], group="Visuals")
 dbgData   = input.bool(true, "INSPECTOR: publish every gate + number to the DATA WINDOW", group="Debug",
@@ -366,12 +371,12 @@ pbNewHighCE = not usePbNewHigh or na(ceLegPeak[1]) or ceLegPeak[1] <= 0 or ao > 
 ceResume = ceResumeRaw and pbAdxOK and pbLegCE and pbNewHighCE
 peResume = peResumeRaw and pbAdxOK and pbLegPE
 // ── PE MOM_CONTINUATION trigger (v44). Mirror of the CE pullback, on the short side.
-// px0930 = close of the FIRST bar inside the alert window, captured per day. Tied to alertWindow so
-// it follows if the window is changed rather than hard-coding 09:30.
+// px0930 = close of the FIRST bar inside pmcRefWindow (default 0930), captured per day. Deliberately
+// NOT tied to alertWindow any more -- see the v55 note above.
 var float px0930 = na
 if timeframe.change("D")
     px0930 := na
-pmcInWin = not na(time(timeframe.period, alertWindow))
+pmcInWin = not na(time(timeframe.period, pmcRefWindow))
 if pmcInWin and na(px0930)
     px0930 := close
 pmcOpenDown = not pmcNeedOpenDown or (not na(px0930) and not na(dayOpen) and px0930 < dayOpen and close < px0930)
