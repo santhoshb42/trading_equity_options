@@ -95,3 +95,6 @@ nohup.out
 *.backup.*
 *.startup_*
 tools/universe_study/data/
+
+# Shadow-test raw candle cache (36MB+, regenerable from the broker)
+tools/wick_shadow_candles/
