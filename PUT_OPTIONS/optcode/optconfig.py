@@ -820,6 +820,9 @@ class OptionsTradingConfig:
     # market_detector returns 5.0 or 10.0 with no env hook, so capping via BASE alone could
     # not pin the arm point. Set to 0 to restore the dynamic behaviour.
     TRIAL_SL_FORCE_ARM_PCT = float(os.getenv("OPTIONS_TRIAL_SL_FORCE_ARM_PCT", "0"))
+    # Reject an UPWARD single-poll premium jump larger than this (phantom/frozen LTP guard).
+    # 0 = disabled. Only 0.0012% of 1.02M measured ticks exceeded 100%.
+    MAX_TICK_JUMP_PCT = float(os.getenv("OPTIONS_MAX_TICK_JUMP_PCT", "100"))
 
     # PROGRESSIVE TRAILING GAP (2026-07-08, mirrored from CE): the trail gap WIDENS as the trade
     # proves itself, instead of a single fixed gap. Regime-change option trades are fat-tailed —

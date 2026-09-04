@@ -363,6 +363,35 @@ class OptionPosition:
     
     def update_market_data(self, current_premium: float, greeks: Dict[str, float], iv: float):
         """Update position with current market data"""
+        # PHANTOM-TICK GUARD (2026-09-04). AngelOne occasionally returns a frozen/garbage LTP far
+        # outside the real book. RADICO29SEP264450PE printed 348.65 on 63 consecutive ticks while
+        # the actual quote was bid 72.45 / ask 90.30 and the UNDERLYING had moved +0.16% (a PUT
+        # cannot gain 324% on an up-move). That spike set highest_premium, ratcheted TRIAL_SL to
+        # 343.72 and booked a fabricated +Rs79,423 -- 110% of that day's P&L.
+        #
+        # Measured over 1,022,602 consecutive-poll changes: p99.9 = 21%, p99.99 = 65%, and only
+        # 12 ticks (0.0012%) exceed 100%. So a >100% single-poll JUMP is not a market move.
+        #
+        # ASYMMETRIC ON PURPOSE: only implausible UPWARD spikes are rejected -- those are the ones
+        # that fabricate profit and poison the peak/trail. Large DOWNWARD moves are always accepted,
+        # because suppressing those would stop HARD_SL from firing on a genuine collapse.
+        try:
+            _prev = self.current_premium
+            _max_jump = OptionsTradingConfig.MAX_TICK_JUMP_PCT
+            if (_max_jump > 0 and _prev and _prev > 0 and current_premium and current_premium > 0
+                    and current_premium > _prev):
+                _jump = (current_premium - _prev) / _prev * 100.0
+                if _jump > _max_jump:
+                    self.phantom_ticks_rejected = getattr(self, 'phantom_ticks_rejected', 0) + 1
+                    logger.warning(
+                        f"PHANTOM_TICK_REJECTED: {self.symbol} | premium Rs{_prev:.2f} -> Rs{current_premium:.2f} "
+                        f"(+{_jump:.0f}% in one poll, cap {_max_jump:.0f}%) | tick DISCARDED, "
+                        f"peak/trail unchanged | rejected_so_far={self.phantom_ticks_rejected}"
+                    )
+                    return
+        except Exception:
+            pass
+
         self.current_premium = current_premium
         
         # Track highest premium reached (for trailing exit)
