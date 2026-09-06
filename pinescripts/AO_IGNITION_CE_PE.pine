@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v55 [3-min, bar-0, 0915 window]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v56 [3-min, bar-0, CE 0915-1030]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -283,7 +283,12 @@ pmcNeedOpenDown = input.bool(true, "   require the stock FELL in its opening 15 
 cooldownMin = input.int(30, "Cooldown minutes (per side)", minval=1, group="Logic")
 useCooldown = input.bool(true, "Enforce cooldown", group="Logic")
 minGapBars  = input.int(10, "Min candles between ANY two alerts", minval=0, group="Logic")
-alertWindow = input.session("0915-1430", "Alert window (exchange time)", group="Logic")
+alertWindow = input.session("0915-1430", "Alert window (exchange time) — PE + MOM_CONT", group="Logic")
+// CE-ONLY window (2026-09-04). Measured over 1,116 CE trades / 10 sessions: the 09:00 half-hour
+// is the only one that clears its break-even R:R (49% win, R:R 2.18, 15% of trades >= Rs2k vs
+// 2-6% in every later window), and entries after 10:30 cost -Rs29,915. PE keeps the full window
+// above -- this measurement is CE-only and PE was not tested.
+ceWindow = input.session("0915-1030", "   CE alert window (CE only)", group="Logic")
 // v55: MOM_CONT's opening-move reference is now INDEPENDENT of alertWindow. It used to capture
 // the first bar INSIDE alertWindow, so opening the window to 09:15 would have made px0930 equal
 // the day open and silently stopped "opened down" from ever being true -- killing MOM_CONT
@@ -507,9 +512,10 @@ var int lastCE     = na
 var int lastPE     = na
 var int lastAnyBar = na
 gapOk    = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
-inWindow = not na(time(timeframe.period, alertWindow))
+inWindow   = not na(time(timeframe.period, alertWindow))   // PE + MOM_CONT
+ceInWindow = not na(time(timeframe.period, ceWindow))      // CE only
 
-ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and inWindow
+ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow
 peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow
 
 if ceReady
