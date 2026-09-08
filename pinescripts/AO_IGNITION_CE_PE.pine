@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v59 [3-min, CE 0915-1030, open-AO arm]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v60 [3-min, CE 0915-1030, open-AO CE+PE]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -305,6 +305,7 @@ useBarBreakCE = input.bool(true,  "CE: signal candle must close ABOVE the previo
 // these stay separable from real zero-crosses in the trade record.
 useOpenBarAO  = input.bool(true, "CE: at the session open, accept AO POSITIVE instead of a zero-cross", group="Signal candle")
 openBarsCE    = input.int(1, "   ... for the first N bars of the session", minval=1, maxval=10, group="Signal candle")
+useOpenBarAOPE= input.bool(true, "PE: at the session open, accept AO NEGATIVE instead of a zero-cross", group="Signal candle")
 useGreenBarCE = input.bool(false, "CE: signal candle must also be GREEN (close > open)", group="Signal candle")
 // v55: MOM_CONT's opening-move reference is now INDEPENDENT of alertWindow. It used to capture
 // the first bar INSIDE alertWindow, so opening the window to 09:15 would have made px0930 equal
@@ -409,9 +410,10 @@ pmcRaw = usePeMomCont and ao < 0 and ao < ao[1] and ta.rising(ao, pmcFallBars)[1
 pmcOK  = pmcRaw and pmcAdxOK and pmcBandOK and pmcOpenDown and pmcLegOK
 var int barOfDayAO = 0
 barOfDayAO := timeframe.change("D") ? 1 : barOfDayAO + 1
-ceOpenAO = useOpenBarAO and barOfDayAO <= openBarsCE and ao > 0
+ceOpenAO = useOpenBarAO   and barOfDayAO <= openBarsCE and ao > 0
+peOpenAO = useOpenBarAOPE and barOfDayAO <= openBarsCE and ao < 0
 ceTrigger = ceCross or ceResume or ceOpenAO
-peTrigger = peCross or peResume
+peTrigger = peCross or peResume or peOpenAO
 var int ceArm = na
 var int peArm = na
 var string ceArmType = na    // "zero-cross" or "pullback" — carried to the entry label
@@ -424,7 +426,7 @@ if ceTrigger
     ceCrossBase := ao[1]
 if peTrigger
     peArm := bar_index
-    peArmType := peCross ? "zero-cross" : "pullback"
+    peArmType := peCross ? "zero-cross" : (peOpenAO ? "open-ao" : "pullback")
     peCrossBase := ao[1]
 if not na(ceArm) and (ao <= 0 or (bar_index - ceArm) > effArmWindowCE)   // AO flipped back, or window elapsed
     ceArm := na
@@ -525,7 +527,8 @@ ceIsOpenAO = ceArmType == "open-ao"
 // crossForce measures AO displacement THROUGH zero; an open-bar arm has no cross to measure,
 // exactly like a pullback, so it bypasses that test the same way.
 qualCE = fireAtCross ? (ceIsPullback or ceIsOpenAO or ceQualCross) : (aoExpandCE and dayExpandCE)
-qualPE = fireAtCross ? (peIsPullback or peQualCross) : (aoExpandPE and dayExpandPE)
+peIsOpenAO = peArmType == "open-ao"
+qualPE = fireAtCross ? (peIsPullback or peIsOpenAO or peQualCross) : (aoExpandPE and dayExpandPE)
 ceRaw = ceArmed and aoAccelCE and qualCE and macdBullOK and rsiBullOK and volOKce and vwapUpOK and vwapZoneCE and ceBandOK and ceMomOK and ceMacdOK and priceUpOK and rangeOKce and dayUpOK
 peRaw = peArmed and aoAccelPE and qualPE and macdBearOK and rsiBearOK and volOKpe and vwapDnOK and vwapZonePE and peMacdOK and peBandOK and peFallOK and priceDnOK and rangeOKpe and dayDnOK
 
@@ -598,7 +601,7 @@ fmt(x) => str.tostring(x, "#.##")
 // no way to score them apart. VWAP/upper/lower and the live gate values ride along so entry-zone
 // analysis no longer needs the underlying candles re-fetched afterwards.
 ceTrig = ceIsPullback ? "pullback" : ceIsOpenAO ? "open-ao" : "zero-cross"
-peTrig = peIsPullback ? "pullback" : "zero-cross"
+peTrig = peIsPullback ? "pullback" : peIsOpenAO ? "open-ao" : "zero-cross"
 common = '","vwap":"' + fmt(vwap) + '","vwap_upper":"' + fmt(vwapUpper) + '","vwap_lower":"' + fmt(vwapLower) +
          '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
          '","vwap_dist_pct":"' + fmt(premDistPct) + '","vwap_slope_bars":"' + str.tostring(vwapSlopeLook) +

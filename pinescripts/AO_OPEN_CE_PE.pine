@@ -1,3 +1,14 @@
+// ============================================================================
+// SUPERSEDED 2026-09-08 -- DO NOT LOAD ON A CHART.
+// TradingView allows only 2 indicators per watchlist alert setup, so this script was
+// folded into AO_IGNITION_CE_PE.pine v60. Everything below now lives there:
+//    CE open-bar arm : ceOpenAO (ao > 0 on the first N session bars) + aoAccelCE/macdBullOK/vwapZoneCE
+//    PE open-bar arm : peOpenAO (ao < 0 on the first N session bars) + aoAccelPE/macdBearOK/vwapZonePE
+// Toggles there: useOpenBarAO, useOpenBarAOPE, openBarsCE. Payload tags trigger="open-ao".
+// Kept only for reference/diffing. The two scripts to run are:
+//    AO_IGNITION_CE_PE.pine  (CE + PE)
+//    RSI_BURN_CE_PE.pine     (CE only)
+// ============================================================================
 //@version=6
 indicator(title="AO Open — CE/PE (bot) v1", shorttitle="AO Open v1", overlay=false)
 
