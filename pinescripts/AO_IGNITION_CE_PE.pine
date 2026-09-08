@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v56 [3-min, bar-0, CE 0915-1030]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v57 [3-min, CE 0915-1030 + bar-break]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -289,6 +289,15 @@ alertWindow = input.session("0915-1430", "Alert window (exchange time) — PE + 
 // 2-6% in every later window), and entries after 10:30 cost -Rs29,915. PE keeps the full window
 // above -- this measurement is CE-only and PE was not tested.
 ceWindow = input.session("0915-1030", "   CE alert window (CE only)", group="Logic")
+// SIGNAL-CANDLE GATE (2026-09-04 measurement, 90 CE trades). Every existing confirmation tests an
+// INDICATOR (AO, MACD, RSI, ADX, VWAP) -- none tests the price bar itself, and indicators lag, so a
+// bar can fire with AO/MACD still rising while the candle is red and closing on its low. Measured:
+//    signal close BELOW previous candle HIGH   41 trades  -Rs524/tr  29% win
+//    signal close ABOVE previous candle HIGH   49 trades  -Rs 85/tr  43% win
+//    signal bar RED (close<open)               31 trades  -Rs530/tr  29% win
+// Winners closed at 62.9% of the signal bar's range, losers at 25.0% -- the fade the user saw.
+useBarBreakCE = input.bool(true,  "CE: signal candle must close ABOVE the previous candle HIGH", group="Signal candle")
+useGreenBarCE = input.bool(false, "CE: signal candle must also be GREEN (close > open)", group="Signal candle")
 // v55: MOM_CONT's opening-move reference is now INDEPENDENT of alertWindow. It used to capture
 // the first bar INSIDE alertWindow, so opening the window to 09:15 would have made px0930 equal
 // the day open and silently stopped "opened down" from ever being true -- killing MOM_CONT
@@ -515,7 +524,9 @@ gapOk    = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 inWindow   = not na(time(timeframe.period, alertWindow))   // PE + MOM_CONT
 ceInWindow = not na(time(timeframe.period, ceWindow))      // CE only
 
-ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow
+barBreakCE = not useBarBreakCE or close > high[1]
+greenBarCE = not useGreenBarCE or close > open
+ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow and barBreakCE and greenBarCE
 peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow
 
 if ceReady

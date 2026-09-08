@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v4 0915-1030", shorttitle="RSI Burn CE v4", overlay=false)
+indicator(title="RSI Burn — CE (bot) v5 bar-break", shorttitle="RSI Burn CE v5", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -10,6 +10,9 @@ requireRisingRSI = input.bool(true, title="Require RSI Rising (momentum filter)"
 cooldownBars     = input.int(5, minval=0, title="Cooldown Bars Between Signals", group="Flame Settings")
 alertWindow      = input.session("0915-1030", "Alert window (exchange time)", group="Bot",
      tooltip="CE entries only 09:15-10:30 (2026-09-04). Over 1,116 CE trades / 10 sessions the 09:00 half-hour was the only window clearing its break-even R:R (49% win, R:R 2.18, 15% of trades >= Rs2k vs 2-6% later), and entries after 10:30 cost -Rs29,915. The bots still accept 0915-1430, so this Pine window is the binding constraint -- widen it here to test a longer session.")
+useBarBreak      = input.bool(true,  "Signal candle must close ABOVE the previous candle HIGH", group="Bot",
+     tooltip="Every other confirmation here is an INDICATOR (RSI/MACD/AO) and indicators lag, so a bar can fire while the candle itself is red and closing on its low. Measured over 90 CE trades on 2026-09-04: closing below the previous candle high lost Rs524/trade at 29% win, above it lost Rs85/trade at 43% win. Winners closed at 62.9% of the signal bar range, losers at 25.0%.")
+useGreenBar      = input.bool(false, "Signal candle must also be GREEN (close > open)", group="Bot")
 useDayOpenGate   = input.bool(true, "Fire only ABOVE the day open", group="Bot",
      tooltip="Blocks CE entries on a symbol trading below its own opening price. AO_IGNITION has carried an equivalent day-bias gate (prev close AND day open) since v35; RSI_BURN had none, so the two were not compared on equal terms.")
 minGapBars       = input.int(10, "Min candles between ANY two alerts", minval=0, group="Bot",
@@ -96,7 +99,9 @@ dayOpenOK = not useDayOpenGate or na(dayOpen) or close > dayOpen
 var int lastAnyBar = na
 gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 
-flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK
+barBreakOK = not useBarBreak or close > high[1]
+greenBarOK = not useGreenBar or close > open
+flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK and barBreakOK and greenBarOK
 if flameStart
     lastSignalBar := bar_index
     lastAnyBar    := bar_index
