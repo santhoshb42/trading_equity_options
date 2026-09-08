@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v57 [3-min, CE 0915-1030 + bar-break]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v58 [3-min, CE 0915-1030 + bar-break]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -524,7 +524,11 @@ gapOk    = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 inWindow   = not na(time(timeframe.period, alertWindow))   // PE + MOM_CONT
 ceInWindow = not na(time(timeframe.period, ceWindow))      // CE only
 
-barBreakCE = not useBarBreakCE or close > high[1]
+// FIRST BAR OF THE SESSION: high[1] is YESTERDAY's last bar, so close > high[1] would be a
+// cross-session GAP test, not a momentum test -- on a flat or gap-down open it blocks every
+// 09:15 alert. Exempt that bar; from the second bar on, the comparison is same-session.
+firstBarOfDay = timeframe.change("D")
+barBreakCE = not useBarBreakCE or firstBarOfDay or close > high[1]
 greenBarCE = not useGreenBarCE or close > open
 ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow and barBreakCE and greenBarCE
 peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow

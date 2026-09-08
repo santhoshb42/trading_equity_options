@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v5 bar-break", shorttitle="RSI Burn CE v5", overlay=false)
+indicator(title="RSI Burn — CE (bot) v6 bar-break", shorttitle="RSI Burn CE v6", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -99,7 +99,9 @@ dayOpenOK = not useDayOpenGate or na(dayOpen) or close > dayOpen
 var int lastAnyBar = na
 gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 
-barBreakOK = not useBarBreak or close > high[1]
+// First bar of the session: high[1] is yesterday's last bar -- a gap test, not momentum. Exempt it.
+firstBarOfDay = timeframe.change("D")
+barBreakOK = not useBarBreak or firstBarOfDay or close > high[1]
 greenBarOK = not useGreenBar or close > open
 flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK and barBreakOK and greenBarOK
 if flameStart
