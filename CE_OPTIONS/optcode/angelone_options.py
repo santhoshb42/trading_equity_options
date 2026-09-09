@@ -2274,15 +2274,63 @@ class AngelOneOptionsBroker:
                     self.pending_buy_orders_by_symbol.pop(tracked_symbol, None)
                 return False
         
-        # Timeout reached — attempt to cancel the order so it doesn't fill untracked
-        logger.error(f"BUY_CONFIRM: TIMEOUT | {symbol} | order_id={order_id} | waited {timeout}s | attempting cancel")
+        # ── TIMEOUT (A1 + A2, 2026-09-09) ────────────────────────────────────────────────
+        # A1: AngelOne reports a PARTIAL fill as an OPEN order with filledshares > 0, which matches
+        #     neither terminal set above, so the poll loop simply waits it out and lands here. The
+        #     old code cancelled and returned False -- ABANDONING a real, filled, STOP-LESS position
+        #     at the exchange with no local record until the EOD orphan sweep found it.
+        # A2: the cancel was fire-and-forget. A cancel legitimately FAILS when the order filled in
+        #     the interim, which is exactly the moment it matters. Now verified by re-reading status.
+        # Returning True hands control back to optapi's existing partial-fill guard, which sizes the
+        # position AND the stop-loss to filled_quantity.
+        _pre_filled = int((final_status or {}).get('filled_quantity') or 0)
+        logger.error(
+            f"BUY_CONFIRM: TIMEOUT | {symbol} | order_id={order_id} | waited {timeout}s | "
+            f"filled_so_far={_pre_filled}/{quantity} | cancelling remainder"
+        )
         if order_id:
             try:
-                cancel_params = {"variety": "NORMAL", "orderid": order_id}
-                self.smart_api.cancelOrder(order_id, "NORMAL")
-                logger.warning(f"BUY_CONFIRM: CANCEL_SENT | {symbol} | order_id={order_id} | prevents untracked open position")
+                _resp = self.smart_api.cancelOrder(order_id, "NORMAL")
+                logger.warning(f"BUY_CONFIRM: CANCEL_SENT | {symbol} | order_id={order_id} | resp={_resp}")
             except Exception as ce:
-                logger.error(f"BUY_CONFIRM: CANCEL_FAILED | {symbol} | order_id={order_id} | {str(ce)} | MANUAL CHECK REQUIRED")
+                # NOT fatal: the order may have filled, which is why the cancel failed. Verified below.
+                logger.error(f"BUY_CONFIRM: CANCEL_FAILED | {symbol} | order_id={order_id} | {str(ce)}")
+
+        # A2: never trust the cancel -- re-read the broker's own view of the order.
+        _post = {}
+        try:
+            _post = self.get_order_status(order_id, force_refresh=True, max_cache_age=0.0) or {}
+        except Exception as pe:
+            logger.error(f"BUY_CONFIRM: POST_CANCEL_STATUS_FAILED | {symbol} | order_id={order_id} | {str(pe)}")
+        _post_status = str(_post.get('status', '')).upper()
+        _post_filled = int(_post.get('filled_quantity') or _pre_filled or 0)
+
+        def _adopt(reason: str) -> bool:
+            pending_order['status'] = 'FILLED'
+            self.pending_buy_orders.pop(order_id, None)
+            if self.pending_buy_orders_by_symbol.get(tracked_symbol) == order_id:
+                self.pending_buy_orders_by_symbol.pop(tracked_symbol, None)
+            logger.error(
+                f"BUY_CONFIRM: {reason} | {symbol} | order_id={order_id} | filled={_post_filled}/{quantity} "
+                f"| status={_post_status} | ADOPTING position so it gets a stop-loss"
+            )
+            log_broker_action("BUY_CONFIRM_ADOPTED", symbol, {
+                'order_id': order_id, 'reason': reason,
+                'filled_quantity': _post_filled, 'requested_quantity': quantity,
+                'broker_status': _post_status,
+            })
+            return True
+
+        if _post_status in ['COMPLETE', 'FILLED', 'FULLY_FILLED']:
+            return _adopt("FILLED_DESPITE_CANCEL")
+        if _post_filled > 0:
+            return _adopt("PARTIAL_FILL_AT_TIMEOUT")
+
+        # Nothing filled: the cancel did its job, or the order was already dead.
+        self.pending_buy_orders.pop(order_id, None)
+        if self.pending_buy_orders_by_symbol.get(tracked_symbol) == order_id:
+            self.pending_buy_orders_by_symbol.pop(tracked_symbol, None)
+        logger.warning(f"BUY_CONFIRM: NO_FILL_CANCELLED | {symbol} | order_id={order_id} | status={_post_status}")
         return False
     
     def get_instrument_token(self, symbol: str, exchange: str = "NFO") -> Optional[str]:
