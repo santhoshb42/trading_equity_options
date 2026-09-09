@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v6 bar-break", shorttitle="RSI Burn CE v6", overlay=false)
+indicator(title="RSI Burn — CE (bot) v7 open-bar shape", shorttitle="RSI Burn CE v7", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -13,6 +13,8 @@ alertWindow      = input.session("0915-1030", "Alert window (exchange time)", gr
 useBarBreak      = input.bool(true,  "Signal candle must close ABOVE the previous candle HIGH", group="Bot",
      tooltip="Every other confirmation here is an INDICATOR (RSI/MACD/AO) and indicators lag, so a bar can fire while the candle itself is red and closing on its low. Measured over 90 CE trades on 2026-09-04: closing below the previous candle high lost Rs524/trade at 29% win, above it lost Rs85/trade at 43% win. Winners closed at 62.9% of the signal bar range, losers at 25.0%.")
 useGreenBar      = input.bool(false, "Signal candle must also be GREEN (close > open)", group="Bot")
+openBarMinClosePos = input.float(60, "Opening bar: close must be in the top N% of its range", minval=0, maxval=100, group="Bot",
+     tooltip="On the session opening bar there is no previous same-session bar to break, so the bar is judged on its own shape. Winners closed at 62.9% of the signal-bar range on 2026-09-08, losers at 25.0%.")
 useDayOpenGate   = input.bool(true, "Fire only ABOVE the day open", group="Bot",
      tooltip="Blocks CE entries on a symbol trading below its own opening price. AO_IGNITION has carried an equivalent day-bias gate (prev close AND day open) since v35; RSI_BURN had none, so the two were not compared on equal terms.")
 minGapBars       = input.int(10, "Min candles between ANY two alerts", minval=0, group="Bot",
@@ -101,7 +103,10 @@ gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 
 // First bar of the session: high[1] is yesterday's last bar -- a gap test, not momentum. Exempt it.
 firstBarOfDay = timeframe.change("D")
-barBreakOK = not useBarBreak or firstBarOfDay or close > high[1]
+// Opening bar: judged on its OWN shape (green + closing near its high) instead of being exempted.
+barClosePos = (high > low) ? (close - low) / (high - low) * 100.0 : 50.0
+openBarUpOK = close > open and barClosePos >= openBarMinClosePos
+barBreakOK = not useBarBreak or (firstBarOfDay ? openBarUpOK : close > high[1])
 greenBarOK = not useGreenBar or close > open
 flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK and barBreakOK and greenBarOK
 if flameStart
