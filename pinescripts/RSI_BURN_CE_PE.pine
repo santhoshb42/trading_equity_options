@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v8 gate visible", shorttitle="RSI Burn CE v8", overlay=false)
+indicator(title="RSI Burn — CE (bot) v9 settled-bar gate", shorttitle="RSI Burn CE v9", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -101,13 +101,24 @@ dayOpenOK = not useDayOpenGate or na(dayOpen) or close > dayOpen
 var int lastAnyBar = na
 gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 
-// First bar of the session: high[1] is yesterday's last bar -- a gap test, not momentum. Exempt it.
+// ── SETTLED-BAR GATE (v9, 2026-09-10) ─────────────────────────────────────────────────────────
+// Up to v8 this judged the CURRENT bar. Measured on 2026-09-10, the OHLC carried in the alert
+// matched NO real candle in the session -- the script is evaluated on a bar that has not finished
+// forming, so its "close" is the running maximum of the bar so far. A gate asking "did this close
+// above the previous high, near the top of its range" can only answer YES to a running maximum, so
+// it passed every fade it was built to block. Values at index [1] are settled and cannot be
+// revised, so the gate now reads the LAST COMPLETED bar. Cost: one bar of lag. On the session's
+// first bar there is no completed same-session bar, so the gate cannot pass there.
 firstBarOfDay = timeframe.change("D")
-// Opening bar: judged on its OWN shape (green + closing near its high) instead of being exempted.
-barClosePos = (high > low) ? (close - low) / (high - low) * 100.0 : 50.0
-openBarUpOK = close > open and barClosePos >= openBarMinClosePos
-barBreakOK = not useBarBreak or (firstBarOfDay ? openBarUpOK : close > high[1])
-greenBarOK = not useGreenBar or close > open
+sigWasFirstBar = firstBarOfDay[1]
+sigOpen  = open[1]
+sigHigh  = high[1]
+sigLow   = low[1]
+sigClose = close[1]
+barClosePos = (sigHigh > sigLow) ? (sigClose - sigLow) / (sigHigh - sigLow) * 100.0 : 50.0
+openBarUpOK = sigClose > sigOpen and barClosePos >= openBarMinClosePos
+barBreakOK = not useBarBreak or (firstBarOfDay ? false : (sigWasFirstBar ? openBarUpOK : sigClose > high[2]))
+greenBarOK = not useGreenBar or sigClose > sigOpen
 flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK and barBreakOK and greenBarOK
 if flameStart
     lastSignalBar := bar_index
@@ -165,8 +176,9 @@ ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' 
      ',"entry_type":"RSI_BURN","trigger":"rsi_flame","bars_since_cross":"0"' +
      ',"price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL"' +
      ',"ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(histLine) +
-     '","sig_open":"' + fmt(open) + '","sig_high":"' + fmt(high) + '","sig_low":"' + fmt(low) +
-     '","sig_close":"' + fmt(close) + '","bar_close_pos":"' + fmt(barClosePos) +
+     '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
+     '","sig_close":"' + fmt(sigClose) + '","bar_close_pos":"' + fmt(barClosePos) +
+     '","sig_bar_settled":"true","live_close":"' + fmt(close) +
      '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ok":"' + (barBreakOK ? 'true' : 'false') +
      '","use_bar_break":"' + (useBarBreak ? 'true' : 'false') +

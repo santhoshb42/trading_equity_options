@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v63 [3-min, CE 0915-1430, gate visible]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v64 [3-min, CE 0915-1430, SETTLED-bar gate]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -307,7 +307,7 @@ useBarBreakCE = input.bool(true,  "CE: signal candle must close ABOVE the previo
 // applies via ceRaw, so it must be positive AND rising. Tagged trigger="open-ao" in the payload so
 // these stay separable from real zero-crosses in the trade record.
 useOpenBarAO  = input.bool(true, "CE: at the session open, accept AO POSITIVE instead of a zero-cross", group="Signal candle")
-openBarsCE    = input.int(1, "   ... for the first N bars of the session", minval=1, maxval=10, group="Signal candle")
+openBarsCE    = input.int(2, "   ... for the first N bars of the session", minval=1, maxval=10, group="Signal candle")
 useOpenBarAOPE= input.bool(true, "PE: at the session open, accept AO NEGATIVE instead of a zero-cross", group="Signal candle")
 openBarMinClosePos = input.float(60, "   Opening bar: close must be in the top N% of its range", minval=0, maxval=100, group="Signal candle",
      tooltip="On the session OPENING bar there is no previous same-session bar to break, so the bar is judged on its own shape instead. Measured 2026-09-08: winners closed at 62.9% of the signal-bar range, losers at 25.0%. BANKBARODA 09-09 fired open-ao on a RED opening candle because that bar was exempted entirely -- this replaces that exemption.")
@@ -550,16 +550,30 @@ ceInWindow = not na(time(timeframe.period, ceWindow))      // CE only
 // cross-session GAP test, not a momentum test -- on a flat or gap-down open it blocks every
 // 09:15 alert. Exempt that bar; from the second bar on, the comparison is same-session.
 firstBarOfDay = timeframe.change("D")
-// OPENING BAR (v61). high[1] is YESTERDAY's last bar there, so `close > high[1]` is a gap test, not
-// momentum -- but exempting the bar outright removed ALL candle quality on the bar that fires most,
-// and BANKBARODA 2026-09-09 fired open-ao on a RED 09:15 candle. The opening bar is now judged on
-// its OWN shape: it must close green AND in the top openBarMinClosePos% of its own range.
-barClosePos = (high > low) ? (close - low) / (high - low) * 100.0 : 50.0
-openBarUpOK = close > open and barClosePos >= openBarMinClosePos
-openBarDnOK = close < open and barClosePos <= (100.0 - openBarMinClosePos)
-barBreakCE = not useBarBreakCE or (firstBarOfDay ? openBarUpOK : close > high[1])
-barBreakPE = not useBarBreakCE or (firstBarOfDay ? openBarDnOK : close < low[1])
-greenBarCE = not useGreenBarCE or close > open
+// ── SETTLED-BAR GATE (v64, 2026-09-10) ────────────────────────────────────────────────────────
+// Every version up to v63 judged the CURRENT bar. Measured on 2026-09-10, the OHLC carried in the
+// alert matched NO real candle in the session for any of 5 symbols checked -- the alert is
+// evaluated on a bar that has not finished forming, so its "close" is the running maximum. AMBER
+// 11:54: the alert reported o7251 h7257.5 l7251 c7257.5 (100% of range) while the candle actually
+// settled at 7253.00, having faded 4.5 points off that high -- 31% of range. A gate that asks
+// "did this close above the previous high, near the top of its range" can only answer YES to a
+// running maximum, so it passed every fade it was built to block. 8 of 22 alerts that day reported
+// a close exactly equal to their own high, which is what a running max looks like, not a candle.
+// Values at index [1] are settled and cannot be revised, so the gate now reads the LAST COMPLETED
+// bar. Cost: one bar of lag. On the session's FIRST bar there is no completed same-session bar to
+// judge, so the gate cannot pass there -- openBarsCE defaults to 2 so the open-AO arm survives into
+// bar 2, where bar[1] IS the opening bar and gets judged on its own shape as before.
+sigWasFirstBar = firstBarOfDay[1]
+sigOpen  = open[1]
+sigHigh  = high[1]
+sigLow   = low[1]
+sigClose = close[1]
+barClosePos = (sigHigh > sigLow) ? (sigClose - sigLow) / (sigHigh - sigLow) * 100.0 : 50.0
+openBarUpOK = sigClose > sigOpen and barClosePos >= openBarMinClosePos
+openBarDnOK = sigClose < sigOpen and barClosePos <= (100.0 - openBarMinClosePos)
+barBreakCE = not useBarBreakCE or (firstBarOfDay ? false : (sigWasFirstBar ? openBarUpOK : sigClose > high[2]))
+barBreakPE = not useBarBreakCE or (firstBarOfDay ? false : (sigWasFirstBar ? openBarDnOK : sigClose < low[2]))
+greenBarCE = not useGreenBarCE or sigClose > sigOpen
 ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow and barBreakCE and greenBarCE
 peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow and (not peOpenAO or barBreakPE)
 
@@ -615,8 +629,9 @@ fmt(x) => str.tostring(x, "#.##")
 // analysis no longer needs the underlying candles re-fetched afterwards.
 ceTrig = ceIsPullback ? "pullback" : ceIsOpenAO ? "open-ao" : "zero-cross"
 peTrig = peIsPullback ? "pullback" : peIsOpenAO ? "open-ao" : "zero-cross"
-common = '","sig_open":"' + fmt(open) + '","sig_high":"' + fmt(high) + '","sig_low":"' + fmt(low) +
-     '","sig_close":"' + fmt(close) + '","bar_close_pos":"' + fmt(barClosePos) +
+common = '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
+     '","sig_close":"' + fmt(sigClose) + '","bar_close_pos":"' + fmt(barClosePos) +
+     '","sig_bar_settled":"true","live_close":"' + fmt(close) +
      '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ce":"' + (barBreakCE ? 'true' : 'false') +
      '","use_bar_break":"' + (useBarBreakCE ? 'true' : 'false') +
@@ -835,8 +850,8 @@ if dbgTable and barstate.islast
     // opening candle firing open-ao could not be diagnosed from a screenshot. Now it is one row.
     r(16, (firstBarOfDay ? "OPEN-BAR shape" : "bar break"), useBarBreakCE, barBreakCE,
           (firstBarOfDay ? "OPEN-BAR shape" : "bar break"), useBarBreakCE, barBreakPE)
-    r(17, "sig O/C " + fmt(open) + "/" + fmt(close) + "  pos " + str.tostring(math.round(barClosePos)) + "%",
-          true, close > open, "first bar " + (firstBarOfDay ? "YES" : "no"), true, firstBarOfDay)
+    r(17, "settled O/C " + fmt(sigOpen) + "/" + fmt(sigClose) + "  pos " + str.tostring(math.round(barClosePos)) + "%",
+          true, sigClose > sigOpen, "first bar " + (firstBarOfDay ? "YES" : "no"), true, firstBarOfDay)
 
 // ─────────── DEBUG: why didn't this trigger fire? ───────────
 // Prints the gates that were FALSE on every raw AO trigger that produced no alert, with live numbers,
