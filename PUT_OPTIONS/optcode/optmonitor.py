@@ -998,7 +998,9 @@ class OptionPositionMonitor:
             os.getenv("OPTIONS_EARLY_PEAK_CUT_NEGATIVE_PCT", "0.0"))
         logger.info(
             f"EARLY_PEAK_CUT: enabled={self._early_peak_cut_enabled} | "
-            f"minutes={self._early_peak_cut_minutes} | peak_pct={self._early_peak_cut_peak_pct}"
+            f"minutes={self._early_peak_cut_minutes} | "
+            f"cut_at_or_below_pnl_pct={self._early_peak_cut_negative_pct} | "
+            f"peak_pct={self._early_peak_cut_peak_pct} (INERT since 2026-09-10 single-rule change)"
         )
         
         # Thread-safety: prevent concurrent close_position() calls for the same symbol.
@@ -3874,26 +3876,26 @@ class OptionPositionMonitor:
                 _peak_pct_v = peak_profit_pct * 100
                 _cur_pct_v = current_pnl_pct * 100
                 _due = hold_time_min >= self._early_peak_cut_minutes
-                # BRANCH A (original): never got going -- peak stayed under the floor.
-                _flat = _peak_pct_v < self._early_peak_cut_peak_pct
-                # BRANCH B (2026-08-31): peaked fine but is UNDERWATER now. Tagged separately in
-                # the exit reason so the two branches stay measurable against each other.
-                _underwater = (self._early_peak_cut_negative_enabled
-                               and _peak_pct_v >= self._early_peak_cut_peak_pct
-                               and _cur_pct_v < self._early_peak_cut_negative_pct)
-                if _due and (_flat or _underwater):
-                    _why = "FLAT" if _flat else "NEGATIVE"
+                # SINGLE RULE (2026-09-10). The two-branch form decided on PEAK, not on P&L, and
+                # left a dead zone between them: PGEL 2026-09-10 peaked +1.1% (so branch A's
+                # "peak < 1%" said it had got going) and sat at exactly 0.0% (so branch B's
+                # "P&L < 0" said it was not losing), so nothing protected it for a further five
+                # minutes. Peak is the wrong question -- an unarmed trade that is not in profit
+                # after the minute mark is the whole condition. Cost of dropping the peak floor,
+                # measured over 8 sessions: of 445 branch-A cuts only 21 booked a profit (+Rs2,537
+                # total); the other 424 were losses and are still cut here. `<=` rather than `<`
+                # so a trade sitting exactly at entry counts -- gross zero is a real loss once the
+                # ~Rs92/trade of charges is paid. Floor still env-tunable via
+                # OPTIONS_EARLY_PEAK_CUT_NEGATIVE_PCT; OPTIONS_EARLY_PEAK_CUT_PEAK_PCT is now inert.
+                _cut = _cur_pct_v <= self._early_peak_cut_negative_pct
+                if _due and _cut:
                     logger.warning(
-                        f"EARLY_PEAK_CUT_TRIGGERED[{_why}]: {symbol} | Hold: {hold_time_min:.1f}min | "
-                        f"Peak: +{_peak_pct_v:.2f}% (floor {self._early_peak_cut_peak_pct:.1f}%) | "
-                        f"Current: {_cur_pct_v:.2f}% | trail never armed"
+                        f"EARLY_PEAK_CUT_TRIGGERED: {symbol} | Hold: {hold_time_min:.1f}min | "
+                        f"Peak: +{_peak_pct_v:.2f}% | Current: {_cur_pct_v:.2f}% "
+                        f"(floor {self._early_peak_cut_negative_pct:.1f}%) | trail never armed"
                     )
-                    if _flat:
-                        _reason = (f"EARLY_PEAK_CUT (Peak +{_peak_pct_v:.1f}% < "
-                                   f"{self._early_peak_cut_peak_pct:.1f}% at {hold_time_min:.0f}min)")
-                    else:
-                        _reason = (f"EARLY_PEAK_CUT_NEG (Peak +{_peak_pct_v:.1f}% but "
-                                   f"{_cur_pct_v:.1f}% at {hold_time_min:.0f}min)")
+                    _reason = (f"EARLY_PEAK_CUT (Peak +{_peak_pct_v:.1f}%, "
+                               f"{_cur_pct_v:.1f}% at {hold_time_min:.0f}min, trail never armed)")
                     pnl = self.close_position(symbol, position.current_premium, _reason)
                     if pnl:
                         closed.append(pnl)
