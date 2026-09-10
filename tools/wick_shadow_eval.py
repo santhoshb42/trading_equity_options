@@ -184,6 +184,13 @@ def features(bars, day, tm):
     v20 = sma(vo, 20)
     return dict(
         bar_time=bars[idx][0], minute_of_session=idx,
+        # BREAK MARGIN (2026-09-10). The v61 gate only asks close > high[1] with NO margin, and on
+        # 09-10 ten losers cleared it by 0.04%-0.22% -- inside noise. A single session could not set
+        # a threshold (raw-% bands were non-monotone; range-normalised showed no separation at all),
+        # so both forms are logged here to be settled on multi-day data instead of guessed.
+        is_first_bar_of_day=(idx == 0),
+        break_margin_pct=(((c - bars[idx-1][2]) / bars[idx-1][2] * 100.0) if idx > 0 and bars[idx-1][2] else None),
+        break_rel_range=(((c - bars[idx-1][2]) / (h - l)) if idx > 0 and h > l else None),
         upper_wick_pct=((h - max(o, c)) / (h - l) * 100) if h > l else None,
         lower_wick_pct=((min(o, c) - l) / (h - l) * 100) if h > l else None,
         body_pct=(abs(c - o) / (h - l) * 100) if h > l else None,

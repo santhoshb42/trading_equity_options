@@ -2101,7 +2101,28 @@ class OptionPositionMonitor:
             # (+12.4% → +0.5%). Cap the modeled fill to a sane band around the LTP so PAPER P&L
             # reflects a realistic market order, not a stale quote. env OPTIONS_EXIT_SLIPPAGE_MAX_PCT.
             _is_short = getattr(position, 'action', 'BUY') == 'SELL'
-            _ref = ltp if ltp > 0 else float(intended_exit or 0.0)
+            # PHANTOM-LTP GUARD (2026-09-10). The cap below is anchored to the LTP -- but the LTP
+            # itself can be a stale/garbage print far outside the live book, in which case capping
+            # "around the LTP" is capping around the very number under suspicion. ULTRACEMCO on
+            # 2026-09-10: bid 230.90 / ask 285.05 with ltp 1293.00 booked a fabricated +Rs102,112
+            # exit, and the older phantom_quote_capped flag fired while STILL filling at 1289.12.
+            # The book is the trustworthy reference: if the LTP sits outside [bid, ask] by more
+            # than OPTIONS_EXIT_LTP_MAX_DEV_PCT, discard it and anchor to the mid instead.
+            _dev = float(os.getenv("OPTIONS_EXIT_LTP_MAX_DEV_PCT", "25")) / 100.0
+            _ltp_sane = (ltp > 0 and bid > 0 and ask > 0
+                         and (bid * (1.0 - _dev)) <= ltp <= (ask * (1.0 + _dev)))
+            if ltp > 0 and not _ltp_sane:
+                _mid = (bid + ask) / 2.0
+                meta['phantom_ltp_rejected'] = True
+                meta['phantom_ltp'] = round(ltp, 2)
+                meta['ltp_replaced_with_mid'] = round(_mid, 2)
+                logger.error(
+                    f"SLIPPAGE_EXIT: PHANTOM_LTP_REJECTED | {position.symbol} | ltp=Rs{ltp:.2f} outside "
+                    f"book [Rs{bid:.2f}, Rs{ask:.2f}] by >{_dev*100:.0f}% | anchoring to mid Rs{_mid:.2f}"
+                )
+                _ref = _mid
+            else:
+                _ref = ltp if ltp > 0 else float(intended_exit or 0.0)
             _cap = float(os.getenv("OPTIONS_EXIT_SLIPPAGE_MAX_PCT", "5.0")) / 100.0
             if _is_short:
                 _fill = min(ask, _ref * (1 + _cap)) if _ref > 0 else ask   # cover BUYS at ask, capped above LTP
