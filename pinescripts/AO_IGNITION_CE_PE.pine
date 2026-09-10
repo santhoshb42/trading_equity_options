@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v62 [3-min, CE 0915-1030, gate visible]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v63 [3-min, CE 0915-1430, gate visible]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -288,7 +288,10 @@ alertWindow = input.session("0915-1430", "Alert window (exchange time) — PE + 
 // is the only one that clears its break-even R:R (49% win, R:R 2.18, 15% of trades >= Rs2k vs
 // 2-6% in every later window), and entries after 10:30 cost -Rs29,915. PE keeps the full window
 // above -- this measurement is CE-only and PE was not tested.
-ceWindow = input.session("0915-1030", "   CE alert window (CE only)", group="Logic")
+// 2026-09-10: REOPENED to 1430 deliberately. The 1030 cut starved the sample while the signal-candle
+// gate is being debugged -- we need volume of alerts to see whether barBreakCE actually blocks the
+// red opening bars. Narrow this back to 0915-1030 once the gate is confirmed working.
+ceWindow = input.session("0915-1430", "   CE alert window (CE only)", group="Logic")
 // SIGNAL-CANDLE GATE (2026-09-04 measurement, 90 CE trades). Every existing confirmation tests an
 // INDICATOR (AO, MACD, RSI, ADX, VWAP) -- none tests the price bar itself, and indicators lag, so a
 // bar can fire with AO/MACD still rising while the candle is red and closing on its low. Measured:

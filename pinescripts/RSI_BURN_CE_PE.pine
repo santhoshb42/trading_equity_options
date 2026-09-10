@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v7 open-bar shape", shorttitle="RSI Burn CE v7", overlay=false)
+indicator(title="RSI Burn — CE (bot) v8 gate visible", shorttitle="RSI Burn CE v8", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -8,8 +8,8 @@ flameThreshold   = input.float(70, title="Flame Ignition Level (Overbought)", gr
 exitLevel        = input.float(65, title="Exit / Flame Fade Level", group="Flame Settings", tooltip="Signal fades when RSI drops back below this level")
 requireRisingRSI = input.bool(true, title="Require RSI Rising (momentum filter)", group="Flame Settings")
 cooldownBars     = input.int(5, minval=0, title="Cooldown Bars Between Signals", group="Flame Settings")
-alertWindow      = input.session("0915-1030", "Alert window (exchange time)", group="Bot",
-     tooltip="CE entries only 09:15-10:30 (2026-09-04). Over 1,116 CE trades / 10 sessions the 09:00 half-hour was the only window clearing its break-even R:R (49% win, R:R 2.18, 15% of trades >= Rs2k vs 2-6% later), and entries after 10:30 cost -Rs29,915. The bots still accept 0915-1430, so this Pine window is the binding constraint -- widen it here to test a longer session.")
+alertWindow      = input.session("0915-1430", "Alert window (exchange time)", group="Bot",
+     tooltip="2026-09-10: REOPENED to 14:30 while the signal-candle gate is being debugged -- the 10:30 cut starved the alert sample. Narrow back once the gate is confirmed. (2026-09-04). Over 1,116 CE trades / 10 sessions the 09:00 half-hour was the only window clearing its break-even R:R (49% win, R:R 2.18, 15% of trades >= Rs2k vs 2-6% later), and entries after 10:30 cost -Rs29,915. The bots still accept 0915-1430, so this Pine window is the binding constraint -- widen it here to test a longer session.")
 useBarBreak      = input.bool(true,  "Signal candle must close ABOVE the previous candle HIGH", group="Bot",
      tooltip="Every other confirmation here is an INDICATOR (RSI/MACD/AO) and indicators lag, so a bar can fire while the candle itself is red and closing on its low. Measured over 90 CE trades on 2026-09-04: closing below the previous candle high lost Rs524/trade at 29% win, above it lost Rs85/trade at 43% win. Winners closed at 62.9% of the signal bar range, losers at 25.0%.")
 useGreenBar      = input.bool(false, "Signal candle must also be GREEN (close > open)", group="Bot")
@@ -165,6 +165,12 @@ ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' 
      ',"entry_type":"RSI_BURN","trigger":"rsi_flame","bars_since_cross":"0"' +
      ',"price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL"' +
      ',"ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(histLine) +
+     '","sig_open":"' + fmt(open) + '","sig_high":"' + fmt(high) + '","sig_low":"' + fmt(low) +
+     '","sig_close":"' + fmt(close) + '","bar_close_pos":"' + fmt(barClosePos) +
+     '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
+     '","bar_break_ok":"' + (barBreakOK ? 'true' : 'false') +
+     '","use_bar_break":"' + (useBarBreak ? 'true' : 'false') +
+     '","day_open_ok":"' + (dayOpenOK ? 'true' : 'false') +
      '","vwap":"' + fmt(vwapV) + '","vwap_upper":"' + fmt(vwapUpper) + '","vwap_lower":"' + fmt(vwapLower) +
      '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
      '","vwap_dist_pct":"' + fmt(premDistPct) + '","vwap_slope_bars":"' + str.tostring(vwapSlopeLook) +
