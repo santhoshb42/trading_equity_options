@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v65 [3-min, CE 0915-1430, SETTLED-bar gate]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v66 [3-min, CE 0915-1430, SETTLED-bar gate, PE gated too]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -311,6 +311,8 @@ openBarsCE    = input.int(2, "   ... for the first N bars of the session", minva
 useOpenBarAOPE= input.bool(true, "PE: at the session open, accept AO NEGATIVE instead of a zero-cross", group="Signal candle")
 openBarMinClosePos = input.float(60, "   Opening bar: close must be in the top N% of its range", minval=0, maxval=100, group="Signal candle",
      tooltip="On the session OPENING bar there is no previous same-session bar to break, so the bar is judged on its own shape instead. Measured 2026-09-08: winners closed at 62.9% of the signal-bar range, losers at 25.0%. BANKBARODA 09-09 fired open-ao on a RED opening candle because that bar was exempted entirely -- this replaces that exemption.")
+useBarBreakPEAll = input.bool(true, "PE: apply the signal-candle gate to ALL PE triggers, not just open-AO", group="Signal candle",
+     tooltip="CE has always been gated on every trigger; PE was gated only on the open-AO path, so a zero-cross or mom-cont PE could fire on a bar that closed UP. ATHERENERG 2026-09-11 09:18 did exactly that -- settled bar 1640.30 -> 1643.90, closing UP at 46% of range with the gate reporting false -- and lost Rs10,561 across both PE bots, the worst PE item of the day. Replayed over that session this gate blocks 8 of the 19 ungated PE alerts carrying -Rs6,921; be aware ATHERENERG IS that number, and without it the gate blocks Rs3,640 of PROFIT. Untick to restore the old PE behaviour without a re-paste.")
 useGreenBarCE = input.bool(false, "CE: signal candle must also be GREEN (close > open)", group="Signal candle")
 // v55: MOM_CONT's opening-move reference is now INDEPENDENT of alertWindow. It used to capture
 // the first bar INSIDE alertWindow, so opening the window to 09:15 would have made px0930 equal
@@ -584,7 +586,7 @@ barBreakCE = not useBarBreakCE or (firstBarOfDay ? false : (sigWasFirstBar ? ope
 barBreakPE = not useBarBreakCE or (firstBarOfDay ? false : (sigWasFirstBar ? openBarDnOK : sigClose < low[2]))
 greenBarCE = not useGreenBarCE or sigClose > sigOpen
 ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow and barBreakCE and greenBarCE
-peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow and (not peOpenAO or barBreakPE)
+peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow and (useBarBreakPEAll ? barBreakPE : (not peOpenAO or barBreakPE))
 
 if ceReady
     lastCE     := time
@@ -644,6 +646,8 @@ common = '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '",
      '","sig_bar_settled":"true","live_close":"' + fmt(close) +
      '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ce":"' + (barBreakCE ? 'true' : 'false') +
+     '","bar_break_pe":"' + (barBreakPE ? 'true' : 'false') +
+     '","pe_gate_all":"' + (useBarBreakPEAll ? 'true' : 'false') +
      '","use_bar_break":"' + (useBarBreakCE ? 'true' : 'false') +
      '","vwap":"' + fmt(vwap) + '","vwap_upper":"' + fmt(vwapUpper) + '","vwap_lower":"' + fmt(vwapLower) +
          '","vwap_z":"' + fmt(vwZ) + '","vwap_slope_pct":"' + fmt(vwapSlopePct) +
