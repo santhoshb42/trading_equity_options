@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v64 [3-min, CE 0915-1430, SETTLED-bar gate]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v65 [3-min, CE 0915-1430, SETTLED-bar gate]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -568,6 +568,15 @@ sigOpen  = open[1]
 sigHigh  = high[1]
 sigLow   = low[1]
 sigClose = close[1]
+// MOMENTUM ACROSS THE SIGNAL BAR (v65, 2026-09-11). The bar-break gate only asks whether the close
+// cleared the previous bar's HIGH -- it says nothing about HOW FAR. Measured on 53 CE alerts /
+// 100 trades on 2026-09-11 this was the best entry-side separator found in this project, AUC 0.635
+// against 0.47-0.57 for every earlier candidate: alerts moving <=0.10% off the previous candle were
+// 31% win and net -Rs80, those above were 55% win and +Rs245/trade. NOT a gate -- the threshold was
+// unstable across nearby values (it inverts by 0.18%), so this rides along in the payload only,
+// to be judged over several sessions the way the wick test was.
+sigPrevClose = close[2]
+sigChgPct = (na(sigPrevClose) or sigPrevClose == 0) ? na : (sigClose - sigPrevClose) / sigPrevClose * 100.0
 barClosePos = (sigHigh > sigLow) ? (sigClose - sigLow) / (sigHigh - sigLow) * 100.0 : 50.0
 openBarUpOK = sigClose > sigOpen and barClosePos >= openBarMinClosePos
 openBarDnOK = sigClose < sigOpen and barClosePos <= (100.0 - openBarMinClosePos)
@@ -631,6 +640,7 @@ ceTrig = ceIsPullback ? "pullback" : ceIsOpenAO ? "open-ao" : "zero-cross"
 peTrig = peIsPullback ? "pullback" : peIsOpenAO ? "open-ao" : "zero-cross"
 common = '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
      '","sig_close":"' + fmt(sigClose) + '","bar_close_pos":"' + fmt(barClosePos) +
+     '","prev_candle_close":"' + fmt(sigPrevClose) + '","prev_candle_chg_pct":"' + fmt(sigChgPct) +
      '","sig_bar_settled":"true","live_close":"' + fmt(close) +
      '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ce":"' + (barBreakCE ? 'true' : 'false') +

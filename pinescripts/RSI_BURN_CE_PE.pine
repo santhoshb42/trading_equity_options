@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v9 settled-bar gate", shorttitle="RSI Burn CE v9", overlay=false)
+indicator(title="RSI Burn — CE (bot) v10 settled-bar gate", shorttitle="RSI Burn CE v10", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -115,6 +115,10 @@ sigOpen  = open[1]
 sigHigh  = high[1]
 sigLow   = low[1]
 sigClose = close[1]
+// MOMENTUM ACROSS THE SIGNAL BAR (v10, 2026-09-11). See the AO_IGNITION v65 note: best entry-side
+// separator measured so far (AUC 0.635 on 2026-09-11), carried for analysis only, gating nothing.
+sigPrevClose = close[2]
+sigChgPct = (na(sigPrevClose) or sigPrevClose == 0) ? na : (sigClose - sigPrevClose) / sigPrevClose * 100.0
 barClosePos = (sigHigh > sigLow) ? (sigClose - sigLow) / (sigHigh - sigLow) * 100.0 : 50.0
 openBarUpOK = sigClose > sigOpen and barClosePos >= openBarMinClosePos
 barBreakOK = not useBarBreak or (firstBarOfDay ? false : (sigWasFirstBar ? openBarUpOK : sigClose > high[2]))
@@ -178,6 +182,7 @@ ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' 
      ',"ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(histLine) +
      '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
      '","sig_close":"' + fmt(sigClose) + '","bar_close_pos":"' + fmt(barClosePos) +
+     '","prev_candle_close":"' + fmt(sigPrevClose) + '","prev_candle_chg_pct":"' + fmt(sigChgPct) +
      '","sig_bar_settled":"true","live_close":"' + fmt(close) +
      '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ok":"' + (barBreakOK ? 'true' : 'false') +
