@@ -1118,6 +1118,7 @@ def _build_position_entry_context(
         'setup_sequence': alert.get('setup_sequence'),
         'tv_trigger_flag': alert.get('tv_trigger_flag'),
         'tv_setup_label': alert.get('tv_setup_label'),
+        'prev_candle_chg_pct': alert.get('prev_candle_chg_pct'),
         'reentry_context_active': alert.get('reentry_context_active'),
         'is_reentry_setup': processed.get('is_reentry_setup'),
         'filter_inputs': filter_inputs,
