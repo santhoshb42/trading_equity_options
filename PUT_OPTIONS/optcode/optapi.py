@@ -2423,6 +2423,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         logger.debug(f"ALERT_PROCESS: SELECTED | contract={selected_contract.symbol} | type={contract_type} | ltp=₹{selected_contract.ltp:.2f}")
         
         # Check Liquidity (Minimum OI threshold)
+        # 2026-09-12: this gate has never rejected anything. angelone_options.py assigns every
+        # contract in the optimized chain a HARDCODED open_interest (250000 CE / 240000 PE) before
+        # add_contract(), so the comparison below is 250000 < 100000 -- always false. Kept only
+        # because it costs nothing and would work if the chain ever carried real OI; the gate that
+        # actually bites is MIN_OI_LOTS further down, on the OI fetched live from the broker.
         if SentimentConfig.CHECK_MIN_OI_ON_ENTRY:
             if selected_contract.open_interest < SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:
                 logger.warning(f"ALERT_PROCESS: LIQUIDITY_FAILED | symbol={symbol} | contract={selected_contract.symbol} | oi={selected_contract.open_interest:,.0f} < {SentimentConfig.MIN_OI_LIQUIDITY_THRESHOLD:,.0f}")
@@ -2573,6 +2578,29 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 f"| volume={live_volume:,} oi={live_oi:,} after {max(1, _LIQ_RETRIES)} tries — capping to 1 lot (trade kept, sized safe)"
             )
 
+        # REAL minimum-depth gate (2026-09-12). Expressed in LOTS, not contracts, because a raw OI
+        # number means nothing without the lot size -- BRITANNIA at OI 3,000 with a 125 lot is 24
+        # lots of depth, while OI 90,300 with a 1,075 lot is only 84. Measured over 182 entries on
+        # 2026-09-11 the thinnest book carried 24 lots and the median 721, so a floor of 10 rejects
+        # nothing seen in practice; it exists to stop the 1-lot cap floor from silently taking an
+        # outsized share of a pathologically thin book. 0 disables.
+        _min_oi_lots = int(os.getenv("OPTIONS_MIN_OI_LOTS", "10"))
+        if _min_oi_lots > 0 and live_oi > 0 and lot_size > 0:
+            _book_lots = live_oi // lot_size
+            if _book_lots < _min_oi_lots:
+                logger.warning(
+                    f"ALERT_PROCESS: LIQUIDITY_FAILED_DEPTH | symbol={symbol} | contract={selected_contract.symbol} "
+                    f"| oi={live_oi:,} lot_size={lot_size} | book={_book_lots} lots < {_min_oi_lots} minimum"
+                )
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f'Book depth {_book_lots} lots below the {_min_oi_lots}-lot minimum (OI={live_oi:,})',
+                    'stage': 'minimum_oi_depth_check',
+                    **contract_context,
+                }
+
         try: _entry_timing['t_liquidity'] = time.monotonic()
         except Exception: pass
         live_bid = float(liquidity_market_data.get('bid') or selected_contract.bid or 0.0)
@@ -2705,11 +2733,17 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         if lot_size > 0:
             if _liquidity_unconfirmed:
                 oi_max_lots = vol_max_lots = None  # bind for the LOT_CAP log below (real OI/vol couldn't be confirmed)
-                # 2026-08-17: MISSING data is NOT evidence of illiquidity. Forcing 1 lot here silently
-                # under-deployed the budget on perfectly liquid strikes. Default now: NO lot cap, size
-                # on budget — genuine illiquidity is already rejected upstream by the MIN_OI gate and
-                # the entry SPREAD gate (enforced). Set OPTIONS_UNCONFIRMED_LIQ_ONE_LOT=true to restore.
-                max_lots = 1 if os.getenv("OPTIONS_UNCONFIRMED_LIQ_ONE_LOT", "false").lower() == "true" else None
+                # 2026-09-12: default flipped back to 1 lot, because the code no longer matched its own
+                # log line ("capping to 1 lot (trade kept, sized safe)") -- the default was None, i.e.
+                # NO cap, and the liquidity check below is then skipped outright by the
+                # `or _liquidity_unconfirmed` break, so an unconfirmed strike sized on the FULL budget
+                # with nothing checking it. The 2026-08-17 reasoning that retired this ("missing data
+                # is not evidence of illiquidity") was answered by a different change on the same day:
+                # under cap mode 'oi' this flag now requires OI *and* volume to BOTH be absent, so the
+                # deep-OI/quiet-strike case it was protecting no longer reaches here. Both zero means
+                # we genuinely know nothing about the book. Set OPTIONS_UNCONFIRMED_LIQ_ONE_LOT=false
+                # to restore budget-sizing on unconfirmed strikes.
+                max_lots = None if os.getenv("OPTIONS_UNCONFIRMED_LIQ_ONE_LOT", "true").lower() == "false" else 1
             else:
                 _liq_pct = float(os.getenv("OPTIONS_LIQUIDITY_PARTICIPATION_PCT", "0.10"))
                 oi_max_lots  = max(1, int(live_oi     / lot_size * _liq_pct)) if live_oi     > 0 else None

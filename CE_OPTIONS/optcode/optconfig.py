@@ -380,6 +380,32 @@ class OptionsCapitalConfig:
         oi_participation = quantity / max(open_interest, 1)
         metrics['oi_participation'] = oi_participation
 
+        # PARTICIPATION BACKSTOP (2026-09-12). Until now this function computed oi_participation and
+        # volume_participation, stored the 10%/20% limits in metrics, and then returned True without
+        # ever comparing them -- an order at 500% of OI passed. The lot pre-cap in optapi.py was the
+        # ONLY participation guard, so any path that skipped it (notably the unconfirmed-liquidity
+        # path) sized with no ceiling at all. This is the real backstop it always claimed to be.
+        # The 1-lot exemption preserves the deliberate design: on a book too thin for even one lot to
+        # sit inside 10%, take one lot rather than reject -- that floor lives in the pre-cap too.
+        order_lots_int = int(round(order_lots))
+        if order_lots_int > 1 and oi_participation > limits['max_oi_participation']:
+            return (
+                False,
+                f"Order is {oi_participation * 100:.1f}% of OI, above the "
+                f"{limits['max_oi_participation'] * 100:.0f}% participation limit",
+                metrics,
+            )
+        # Volume participation stays ADVISORY on purpose: cap mode 'oi' sizes on depth because
+        # intraday CUMULATIVE volume is ~0 early-day and was strangling deep-OI winners to 1 lot
+        # (see the 2026-08-06 note in optapi.py). Recorded and logged, never a reject.
+        if (not metrics['volume_data_missing']
+                and metrics.get('volume_participation', 0) > limits['max_volume_participation']):
+            metrics['volume_advisory'] = True
+            metrics['volume_advisory_reason'] = (
+                f"Order is {metrics['volume_participation'] * 100:.1f}% of today's volume, above the "
+                f"{limits['max_volume_participation'] * 100:.0f}% advisory level"
+            )
+
         return True, "Liquidity check passed", metrics
     
     @classmethod
