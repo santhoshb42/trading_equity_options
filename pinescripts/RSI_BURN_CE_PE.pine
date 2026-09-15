@@ -113,7 +113,7 @@ gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 // bar completes, so close[0] is already final -- measured across 262 alerts on 2026-09-15 where the
 // bar's high differed from its close, the payload's close[0] matched that bar's CLOSE 80% of the
 // time and its HIGH 1%. Reading [1] judged a bar one older than necessary and let the whole next
-// candle play out before the alert landed. See the AO_IGNITION v67 note for the full measurement.
+// candle play out before the alert landed. See the AO_IGNITION v68 note for the full measurement.
 firstBarOfDay = timeframe.change("D")
 sigOpen  = open
 sigHigh  = high

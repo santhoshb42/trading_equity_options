@@ -106,7 +106,7 @@
 //
 // overlay=true. Bot JSON (action BUY=CE, SELL=PE). Route CE→CE bot, PE→PUT bot, "Once Per Bar Close".
 // ============================================================================
-indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v67 [3-min, CE 0915-1430, CE same-candle gate]", overlay=true, max_labels_count=500)
+indicator("AO Ignition — CE/PE (zero-cross + pullback + PE mom-cont) v68 [3-min, CE 0915-1430, same-candle gate both sides]", overlay=true, max_labels_count=500)
 
 // ─────────── AO (the trigger) ───────────
 aoFast = input.int(5,  "AO fast SMA", group="AO")
@@ -552,7 +552,9 @@ ceInWindow = not na(time(timeframe.period, ceWindow))      // CE only
 // cross-session GAP test, not a momentum test -- on a flat or gap-down open it blocks every
 // 09:15 alert. Exempt that bar; from the second bar on, the comparison is same-session.
 firstBarOfDay = timeframe.change("D")
-// ── SETTLED-BAR GATE (v64, 2026-09-10) ────────────────────────────────────────────────────────
+// ── SETTLED-BAR GATE (v64, 2026-09-10) — SUPERSEDED BY v68, KEPT AS HISTORY ───────────────────
+// DO NOT read the block below as current behaviour. Its conclusion was wrong and v68 reverses it;
+// it is retained only so the reasoning that led there is not repeated. Current logic is v68.
 // Every version up to v63 judged the CURRENT bar. Measured on 2026-09-10, the OHLC carried in the
 // alert matched NO real candle in the session for any of 5 symbols checked -- the alert is
 // evaluated on a bar that has not finished forming, so its "close" is the running maximum. AMBER
@@ -565,53 +567,42 @@ firstBarOfDay = timeframe.change("D")
 // bar. Cost: one bar of lag. On the session's FIRST bar there is no completed same-session bar to
 // judge, so the gate cannot pass there -- openBarsCE defaults to 2 so the open-AO arm survives into
 // bar 2, where bar[1] IS the opening bar and gets judged on its own shape as before.
-// ── CE MOVED BACK TO INDEX [0] (v67, 2026-09-15) ──────────────────────────────────────────────
-// The diagnosis above was wrong about the MECHANISM and cost CE an extra bar. `alert()` with
-// freq_once_per_bar_close fires AFTER the bar completes, so close[0] is already final at that
-// moment -- it is not a running maximum. Measured across 262 alerts on 2026-09-15 where the bar's
-// high differed from its close: the payload's close[0] equalled that bar's CLOSE 209 times (80%)
-// and its HIGH twice (1%). The AMBER case that prompted the [1] move generalised from one symbol.
-// Reading [1] therefore judged a bar one older than necessary, and the whole next candle had
-// already played out before the alert reached the bot: HCLTECH 2026-09-15 was judged on its 09:15
-// candle (+4.10%) while 09:16 ran another +1.14% and the alert only landed at 09:17. Across 326
-// alerts that day the move was already made before we could act by a median 0.12%, the signal was
-// fully spent or exceeded on 17% of them, and price had already reversed on 21%.
-// CE now reads index [0] -- the same candle it judges. PE is deliberately left on [1] until the
-// same measurement is repeated on that side. One bar of lag is irreducible: the candle must finish
-// before it can be judged, so entry is always at the next bar's open. This removes the second one.
-ceSigOpen  = open
-ceSigHigh  = high
-ceSigLow   = low
-ceSigClose = close
-ceBarClosePos = (ceSigHigh > ceSigLow) ? (ceSigClose - ceSigLow) / (ceSigHigh - ceSigLow) * 100.0 : 50.0
-ceOpenBarUpOK = ceSigClose > ceSigOpen and ceBarClosePos >= openBarMinClosePos
-ceSigPrevClose = close[1]
-ceSigChgPct = (na(ceSigPrevClose) or ceSigPrevClose == 0) ? na : (ceSigClose - ceSigPrevClose) / ceSigPrevClose * 100.0
-
-// PE still reads the previous bar (see the v64 note above). Left untouched on purpose.
-sigWasFirstBar = firstBarOfDay[1]
-sigOpen  = open[1]
-sigHigh  = high[1]
-sigLow   = low[1]
-sigClose = close[1]
-// MOMENTUM ACROSS THE SIGNAL BAR (v65, 2026-09-11). The bar-break gate only asks whether the close
-// cleared the previous bar's HIGH -- it says nothing about HOW FAR. Measured on 53 CE alerts /
-// 100 trades on 2026-09-11 this was the best entry-side separator found in this project, AUC 0.635
-// against 0.47-0.57 for every earlier candidate: alerts moving <=0.10% off the previous candle were
-// 31% win and net -Rs80, those above were 55% win and +Rs245/trade. NOT a gate -- the threshold was
-// unstable across nearby values (it inverts by 0.18%), so this rides along in the payload only,
-// to be judged over several sessions the way the wick test was.
-sigPrevClose = close[2]
-sigChgPct = (na(sigPrevClose) or sigPrevClose == 0) ? na : (sigClose - sigPrevClose) / sigPrevClose * 100.0
+// ── BOTH SIDES READ INDEX [0] (v68, 2026-09-15) ───────────────────────────────────────────────
+// The v64 diagnosis above was wrong about the MECHANISM and cost an extra bar on both sides.
+// alert() with freq_once_per_bar_close fires AFTER the bar completes, so close[0] is already final
+// at that moment -- it is not a running maximum. Measured on 2026-09-15 against real broker
+// candles, on bars where high and low both differed from the close:
+//     CE  116 testable  ->  close[0] == that bar's CLOSE 82%,  running max 2%
+//     PE  161 testable  ->  close[0] == that bar's CLOSE 78%,  running max 0%
+// The AMBER case that prompted the move to [1] generalised from a single symbol.
+// Reading [1] judged a bar one older than necessary, and the whole next candle played out before
+// the alert reached the bot. HCLTECH was judged on its 09:15 candle at +4.10% while 09:16 ran
+// another +1.14%, and the alert only landed at 09:17. Cost of that extra bar, same day:
+//     CE  n=127  move already made median +0.18%   signal spent 9%    already reversed 10%
+//     PE  n=199  move already made median +0.07%   signal spent 23%   already reversed 29%
+// PE was hurt proportionally more, which is why it follows CE here rather than waiting longer.
+// One bar of lag is irreducible -- a candle must finish before it can be judged, so entry is
+// always at the next bar's open. This removes the second, avoidable one.
+// On the session's FIRST bar there is no previous same-session bar to break, so the bar is judged
+// on its own shape. That also restores the 09:15 entries the [1] read had made impossible.
+sigOpen  = open
+sigHigh  = high
+sigLow   = low
+sigClose = close
 barClosePos = (sigHigh > sigLow) ? (sigClose - sigLow) / (sigHigh - sigLow) * 100.0 : 50.0
 openBarUpOK = sigClose > sigOpen and barClosePos >= openBarMinClosePos
 openBarDnOK = sigClose < sigOpen and barClosePos <= (100.0 - openBarMinClosePos)
-// CE judges the CURRENT (just-completed) bar. On the session's first bar there is no previous
-// same-session bar to break, so it is judged on its own shape -- which also restores 09:15 CE
-// entries that the [1] read had made impossible.
-barBreakCE = not useBarBreakCE or (firstBarOfDay ? ceOpenBarUpOK : ceSigClose > high[1])
-barBreakPE = not useBarBreakCE or (firstBarOfDay ? false : (sigWasFirstBar ? openBarDnOK : sigClose < low[2]))
-greenBarCE = not useGreenBarCE or ceSigClose > ceSigOpen
+// MOMENTUM ACROSS THE SIGNAL BAR (v65, 2026-09-11). The bar-break gate only asks whether the close
+// cleared the previous bar's HIGH/LOW -- it says nothing about HOW FAR. Measured on 53 CE alerts /
+// 100 trades on 2026-09-11 this was the best entry-side separator found in this project, AUC 0.635
+// against 0.47-0.57 for every earlier candidate: alerts moving <=0.10% off the previous candle were
+// 31% win and net -Rs80, those above were 55% win and +Rs245/trade. NOT a gate -- the threshold was
+// unstable across nearby values, so this rides along in the payload only.
+sigPrevClose = close[1]
+sigChgPct = (na(sigPrevClose) or sigPrevClose == 0) ? na : (sigClose - sigPrevClose) / sigPrevClose * 100.0
+barBreakCE = not useBarBreakCE or (firstBarOfDay ? openBarUpOK : sigClose > high[1])
+barBreakPE = not useBarBreakCE or (firstBarOfDay ? openBarDnOK : sigClose < low[1])
+greenBarCE = not useGreenBarCE or sigClose > sigOpen
 ceReady = ceRaw and (not useCooldown or na(lastCE) or (time - lastCE) >= cdMs) and gapOk and ceInWindow and barBreakCE and greenBarCE
 peReady = peRaw and (not useCooldown or na(lastPE) or (time - lastPE) >= cdMs) and gapOk and inWindow and (useBarBreakPEAll ? barBreakPE : (not peOpenAO or barBreakPE))
 
@@ -667,16 +658,12 @@ fmt(x) => str.tostring(x, "#.##")
 // analysis no longer needs the underlying candles re-fetched afterwards.
 ceTrig = ceIsPullback ? "pullback" : ceIsOpenAO ? "open-ao" : "zero-cross"
 peTrig = peIsPullback ? "pullback" : peIsOpenAO ? "open-ao" : "zero-cross"
-// Each side reports the bar IT judged: CE index 0, PE index 1. sig_bar_index makes that explicit
-// so analysis never has to guess which candle a payload describes.
-sigBlockCE = '","sig_open":"' + fmt(ceSigOpen) + '","sig_high":"' + fmt(ceSigHigh) + '","sig_low":"' + fmt(ceSigLow) +
-     '","sig_close":"' + fmt(ceSigClose) + '","bar_close_pos":"' + fmt(ceBarClosePos) +
-     '","prev_candle_close":"' + fmt(ceSigPrevClose) + '","prev_candle_chg_pct":"' + fmt(ceSigChgPct) +
-     '","sig_bar_settled":"true","sig_bar_index":"0","live_close":"' + fmt(close) + '"'
-sigBlockPE = '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
+// Both sides now judge the same bar (index 0), so one sig block serves both. sig_bar_index stays
+// in the payload so a record always states which candle it describes.
+sigBlock = '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
      '","sig_close":"' + fmt(sigClose) + '","bar_close_pos":"' + fmt(barClosePos) +
      '","prev_candle_close":"' + fmt(sigPrevClose) + '","prev_candle_chg_pct":"' + fmt(sigChgPct) +
-     '","sig_bar_settled":"true","sig_bar_index":"1","live_close":"' + fmt(close) + '"'
+     '","sig_bar_settled":"true","sig_bar_index":"0","live_close":"' + fmt(close) + '"'
 common = ',"first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ce":"' + (barBreakCE ? 'true' : 'false') +
      '","bar_break_pe":"' + (barBreakPE ? 'true' : 'false') +
@@ -691,13 +678,13 @@ common = ',"first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
          '","adx":"' + fmt(pbAdxV) + '","adx_slope":"' + fmt(pbAdxV - pbAdxV[adxExhaustLook]) +
          '","rsi_slope":"' + fmt(rsi - rsi[rsiSlopeBars]) + '","macd_slope":"' + fmt(hist - hist[1]) +
          '","vol_ratio":"' + fmt(volRatio) + '","atr_pct":"' + fmt(avgRange / close * 100) + '"'
-ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE","entry_type":"AO_IGNITION","trigger":"' + ceTrig + '","bars_since_cross":"' + str.tostring(nz(ceAge)) + '","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + sigBlockCE + common + ',"tv_setup_label":"AO_IGNITION_CE_' + (ceIsPullback ? "PB" : "ZC") + '","reentry_context_active":"false"}'
-peJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"AO_IGNITION","trigger":"' + peTrig + '","bars_since_cross":"' + str.tostring(nz(peAge)) + '","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + sigBlockPE + common + ',"tv_setup_label":"AO_IGNITION_PE_' + (peIsPullback ? "PB" : "ZC") + '","reentry_context_active":"false"}'
+ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE","entry_type":"AO_IGNITION","trigger":"' + ceTrig + '","bars_since_cross":"' + str.tostring(nz(ceAge)) + '","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + sigBlock + common + ',"tv_setup_label":"AO_IGNITION_CE_' + (ceIsPullback ? "PB" : "ZC") + '","reentry_context_active":"false"}'
+peJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"AO_IGNITION","trigger":"' + peTrig + '","bars_since_cross":"' + str.tostring(nz(peAge)) + '","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + sigBlock + common + ',"tv_setup_label":"AO_IGNITION_PE_' + (peIsPullback ? "PB" : "ZC") + '","reentry_context_active":"false"}'
 if ceReady
     alert(ceJson, alert.freq_once_per_bar_close)
 if peReady
     alert(peJson, alert.freq_once_per_bar_close)
-pmcJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"AO_MOMCONT","trigger":"momcont","bars_since_cross":"0","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + sigBlockPE + common + ',"tv_setup_label":"AO_MOMCONT_PE","reentry_context_active":"false"}'
+pmcJson = '{"symbol":"' + syminfo.ticker + '","action":"SELL","original_action":"BUY_PUT","option_side":"PE","entry_type":"AO_MOMCONT","trigger":"momcont","bars_since_cross":"0","price":"' + fmt(close) + '","score":"90","confidence":"90","market_trend":"NEUTRAL","ao":"' + fmt(ao) + '","rsi_value":"' + fmt(rsi) + '","macd_hist":"' + fmt(hist) + sigBlock + common + ',"tv_setup_label":"AO_MOMCONT_PE","reentry_context_active":"false"}'
 if pmcReady
     alert(pmcJson, alert.freq_once_per_bar_close)
 
@@ -897,8 +884,8 @@ if dbgTable and barstate.islast
     // opening candle firing open-ao could not be diagnosed from a screenshot. Now it is one row.
     r(16, (firstBarOfDay ? "OPEN-BAR shape" : "bar break"), useBarBreakCE, barBreakCE,
           (firstBarOfDay ? "OPEN-BAR shape" : "bar break"), useBarBreakCE, barBreakPE)
-    r(17, "CE bar[0] O/C " + fmt(ceSigOpen) + "/" + fmt(ceSigClose) + "  pos " + str.tostring(math.round(ceBarClosePos)) + "%",
-          true, ceSigClose > ceSigOpen, "PE bar[1] O/C " + fmt(sigOpen) + "/" + fmt(sigClose), true, sigClose < sigOpen)
+    r(17, "sig O/C " + fmt(sigOpen) + "/" + fmt(sigClose) + "  pos " + str.tostring(math.round(barClosePos)) + "%",
+          true, sigClose > sigOpen, "first bar " + (firstBarOfDay ? "YES" : "no"), true, firstBarOfDay)
 
 // ─────────── DEBUG: why didn't this trigger fire? ───────────
 // Prints the gates that were FALSE on every raw AO trigger that produced no alert, with live numbers,
