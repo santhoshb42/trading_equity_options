@@ -1,5 +1,5 @@
 //@version=6
-indicator(title="RSI Burn — CE (bot) v10 settled-bar gate", shorttitle="RSI Burn CE v10", overlay=false)
+indicator(title="RSI Burn — CE (bot) v11 same-candle gate", shorttitle="RSI Burn CE v11", overlay=false)
 
 // ---------------- Inputs ----------------
 rsiLengthInput   = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
@@ -109,19 +109,25 @@ gapOk = na(lastAnyBar) or (bar_index - lastAnyBar) >= minGapBars
 // it passed every fade it was built to block. Values at index [1] are settled and cannot be
 // revised, so the gate now reads the LAST COMPLETED bar. Cost: one bar of lag. On the session's
 // first bar there is no completed same-session bar, so the gate cannot pass there.
+// v11 (2026-09-15): moved back to index [0]. `alert()` with freq_once_per_bar_close fires AFTER the
+// bar completes, so close[0] is already final -- measured across 262 alerts on 2026-09-15 where the
+// bar's high differed from its close, the payload's close[0] matched that bar's CLOSE 80% of the
+// time and its HIGH 1%. Reading [1] judged a bar one older than necessary and let the whole next
+// candle play out before the alert landed. See the AO_IGNITION v67 note for the full measurement.
 firstBarOfDay = timeframe.change("D")
-sigWasFirstBar = firstBarOfDay[1]
-sigOpen  = open[1]
-sigHigh  = high[1]
-sigLow   = low[1]
-sigClose = close[1]
+sigOpen  = open
+sigHigh  = high
+sigLow   = low
+sigClose = close
 // MOMENTUM ACROSS THE SIGNAL BAR (v10, 2026-09-11). See the AO_IGNITION v65 note: best entry-side
 // separator measured so far (AUC 0.635 on 2026-09-11), carried for analysis only, gating nothing.
-sigPrevClose = close[2]
+sigPrevClose = close[1]
 sigChgPct = (na(sigPrevClose) or sigPrevClose == 0) ? na : (sigClose - sigPrevClose) / sigPrevClose * 100.0
 barClosePos = (sigHigh > sigLow) ? (sigClose - sigLow) / (sigHigh - sigLow) * 100.0 : 50.0
 openBarUpOK = sigClose > sigOpen and barClosePos >= openBarMinClosePos
-barBreakOK = not useBarBreak or (firstBarOfDay ? false : (sigWasFirstBar ? openBarUpOK : sigClose > high[2]))
+// On the session's first bar there is no previous same-session bar, so it is judged on its own
+// shape -- which also restores the 09:15 entries the [1] read had made impossible.
+barBreakOK = not useBarBreak or (firstBarOfDay ? openBarUpOK : sigClose > high[1])
 greenBarOK = not useGreenBar or sigClose > sigOpen
 flameStart = confirmOK and rsiHighEnough and momentumOK and cooldownOK and inWindow and gapOk and dayOpenOK and barBreakOK and greenBarOK
 if flameStart
@@ -183,7 +189,7 @@ ceJson = '{"symbol":"' + syminfo.ticker + '","action":"BUY","option_side":"CE"' 
      '","sig_open":"' + fmt(sigOpen) + '","sig_high":"' + fmt(sigHigh) + '","sig_low":"' + fmt(sigLow) +
      '","sig_close":"' + fmt(sigClose) + '","bar_close_pos":"' + fmt(barClosePos) +
      '","prev_candle_close":"' + fmt(sigPrevClose) + '","prev_candle_chg_pct":"' + fmt(sigChgPct) +
-     '","sig_bar_settled":"true","live_close":"' + fmt(close) +
+     '","sig_bar_settled":"true","sig_bar_index":"0","live_close":"' + fmt(close) +
      '","first_bar_of_day":"' + (firstBarOfDay ? 'true' : 'false') +
      '","bar_break_ok":"' + (barBreakOK ? 'true' : 'false') +
      '","use_bar_break":"' + (useBarBreak ? 'true' : 'false') +
