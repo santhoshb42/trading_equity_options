@@ -66,6 +66,11 @@ ENDPOINT_CLASS_PREFIXES = (
     ('oi_fetch', 'quote'),
     ('pcr_oi', 'quote'),
     ('historical', 'candle'),
+    # 2026-09-18 AUDIT: these two were LABELLED but their labels matched no prefix, so they fell
+    # into the 200/min 'default' bucket exactly like the unlabelled calls did. They are AngelOne
+    # order APIs (500/min class). LIVE-only paths, so this never bit in PAPER -- it would have.
+    ('get_order_book', 'order'),
+    ('get_trade_book', 'order'),
     ('place_order', 'order'),
     ('modify_order', 'order'),
     ('modify_sl', 'order'),
@@ -107,12 +112,37 @@ def _normalize_request_type(request_type: Optional[str]) -> str:
     return (request_type or "api_call").lower()
 
 
+_UNMAPPED_SEEN = set()
+
+
 def _endpoint_class(request_type: Optional[str]) -> str:
-    """Map a request_type to its AngelOne endpoint class for per-endpoint rate limiting."""
+    """Map a request_type to its AngelOne endpoint class for per-endpoint rate limiting.
+
+    RECURRENCE GUARD (2026-09-18). Falling through to 'default' is almost never intended: that
+    bucket is 6/s 200/min, a third of the real per-endpoint budget, and everything that lands in it
+    competes with everything else that lands in it. Six broker methods sat there unnoticed for
+    months because they called wait_for_call_permission() with no request_type at all -- the
+    limiter silently named them "api_call" and capped the whole bot's market-data traffic at
+    200/min. The visible symptom was not slow entries but a BLIND MONITOR: position polls queued
+    behind entry-path chain fetches and were rejected, so the 2s loop ran 110s and HARD_SLs could
+    not fire for up to 104s, exiting at -13% against an -8% stop.
+    Anything reaching 'default' now says so, once per distinct request_type, at WARNING.
+    """
     normalized = _normalize_request_type(request_type)
     for prefix, cls in ENDPOINT_CLASS_PREFIXES:
         if normalized.startswith(prefix):
             return cls
+    if normalized not in _UNMAPPED_SEEN:
+        _UNMAPPED_SEEN.add(normalized)
+        try:
+            logger.warning(
+                f"RATE_LIMITER: UNMAPPED_REQUEST_TYPE | request_type={normalized!r} -> 'default' "
+                f"({DEFAULT_ENDPOINT_LIMIT[0]}/s {DEFAULT_ENDPOINT_LIMIT[1]}/min). Either it was "
+                f"called with no request_type, or its label is missing from ENDPOINT_CLASS_PREFIXES. "
+                f"Add it -- the default bucket is a third of the real budget and is shared."
+            )
+        except Exception:
+            pass
     return 'default'
 
 
