@@ -1009,7 +1009,7 @@ class AngelOneOptionsBroker:
                     if not token:
                         continue
                     
-                    if not rate_limiter.wait_for_call_permission(timeout=2.0):
+                    if not rate_limiter.wait_for_call_permission(timeout=2.0, request_type="fetch_chain"):
                         continue
                     
                     try:
@@ -1036,7 +1036,7 @@ class AngelOneOptionsBroker:
                     if not token:
                         continue
                     
-                    if not rate_limiter.wait_for_call_permission(timeout=2.0):
+                    if not rate_limiter.wait_for_call_permission(timeout=2.0, request_type="fetch_chain"):
                         continue
                     
                     try:
@@ -2399,7 +2399,7 @@ class AngelOneOptionsBroker:
             rate_limiter = get_options_rate_limiter()
             
             # Wait for rate limit permission
-            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+            if not rate_limiter.wait_for_call_permission(timeout=5.0, request_type="ltp_fetch"):
                 logger.warning(f"LTP_FETCH: RATE_LIMITED | {symbol}")
                 return None
             
@@ -2484,7 +2484,7 @@ class AngelOneOptionsBroker:
             rate_limiter = get_options_rate_limiter()
             
             # Wait for rate limit permission
-            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+            if not rate_limiter.wait_for_call_permission(timeout=5.0, request_type="market_data"):
                 logger.warning(f"MARKET_DATA: RATE_LIMITED | {symbol}")
                 return None
             
@@ -2819,7 +2819,7 @@ class AngelOneOptionsBroker:
                         continue
                     
                     # Wait for rate limit
-                    if not rate_limiter.wait_for_call_permission(timeout=5.0):
+                    if not rate_limiter.wait_for_call_permission(timeout=5.0, request_type="oi_fetch"):
                         logger.warning(f"OI_FETCH: RATE_LIMITED | {symbol}")
                         oi_map[symbol] = None
                         continue
@@ -3377,7 +3377,7 @@ class AngelOneOptionsBroker:
 
             # Fetch historical data
             rate_limiter = get_options_rate_limiter()
-            if not rate_limiter.wait_for_call_permission(timeout=5.0):
+            if not rate_limiter.wait_for_call_permission(timeout=5.0, request_type="historical"):
                 logger.warning(f"HISTORICAL: RATE_LIMITED for {symbol}")
                 return None
             
