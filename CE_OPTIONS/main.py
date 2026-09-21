@@ -1123,7 +1123,19 @@ class OptionsTradingBot:
                             f"MONITOR_CYCLE: cycle_ms={_mon_cycle_ms:.0f} "
                             f"| positions={len(self.monitor.positions)} | interval={current_interval}s"
                         )
-                    time.sleep(current_interval)  # Adaptive monitoring interval (default 10s, can go to 8s or 20s)
+                    # DEADLINE SLEEP (2026-09-21). This used to sleep the FULL interval on top of
+                    # however long the cycle took, so the configured 2s was really 3-4s median and
+                    # 6-7s at p90 -- the cycle does ~1.3s of broker work (bulk LTP median 245ms but
+                    # a 1.6s tail, plus a per-position get_market_data when the stale-quote guard
+                    # fires) and then slept another full 2s regardless. That doubled the window in
+                    # which a stop can be breached without being seen. KAYNES29SEP263500PE on
+                    # 2026-09-21 went 33s between its last trail update at Rs86.70 and the stop
+                    # firing at Rs83.75, then filled at the Rs80.75 bid: a +5.9% locked profit
+                    # booked as -1.4%. Sleep to the DEADLINE instead, so cadence tracks the
+                    # configured interval instead of interval+work. The 0.25s floor keeps a fast
+                    # cycle from becoming a spin loop.
+                    _mon_elapsed = time.time() - _mon_cycle_t0
+                    time.sleep(max(0.25, current_interval - _mon_elapsed))
                 
                 except Exception as e:
                     import traceback
