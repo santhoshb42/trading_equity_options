@@ -350,7 +350,15 @@ class MarketSentiment:
             max_retries = SentimentConfig.PCR_RETRY_MAX_ATTEMPTS - 1  # -1 because initial fetch counts as attempt 1
             retry_delay = SentimentConfig.PCR_RETRY_DELAY_SECONDS
             
-            if SentimentConfig.PCR_RETRY_ENABLED and pcr is None:
+            # 2026-09-21: retry ONLY when the bulk fetch itself came back empty. fetch_pcr_ratio() is
+            # a single BULK call cached for 60s (pcr_cache_ttl), and the retries are 1s apart, so when
+            # the map is populated but simply lacks this symbol, attempts 2 and 3 re-read the SAME
+            # cached map and cannot succeed -- they just slept 2s on every such alert. The broker
+            # publishes PCR for ~174-206 names and the same ones are always absent (DMART, AMBER,
+            # SOLARINDS, ICICIGI...): 73 alerts paid this on 2026-09-21, and each retry was itself a
+            # bulk call the broker rate-denied 41 times that day. A populated map without the symbol
+            # is a definitive "no PCR for this name", so fall straight through to the default.
+            if SentimentConfig.PCR_RETRY_ENABLED and pcr is None and not pcr_map:
                 while retry_count < max_retries:
                     logger.debug(f"PCR_RETRY: {symbol} | attempt {retry_count + 2}/{SentimentConfig.PCR_RETRY_MAX_ATTEMPTS} | waiting {retry_delay}s")
                     time.sleep(retry_delay)
@@ -363,7 +371,8 @@ class MarketSentiment:
             if pcr is None:
                 # After all retries exhausted, still no data - use DEFAULT PCR (0.8 = neutral)
                 # This allows trades when broker API is unavailable, with neutral sentiment assumption
-                logger.warning(f"PCR_DATA_MISSING: {symbol} | no data after {SentimentConfig.PCR_RETRY_MAX_ATTEMPTS} attempts | using DEFAULT PCR")
+                logger.warning(f"PCR_DATA_MISSING: {symbol} | no data after {retry_count + 1} attempt(s) "
+                               f"({'bulk map empty' if not pcr_map else 'symbol not in broker PCR list'}) | using DEFAULT PCR")
                 pcr = 0.8  # Neutral PCR - allows entry
             elif retry_count > 0:
                 # Data arrived on retry - log it
