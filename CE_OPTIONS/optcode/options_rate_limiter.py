@@ -52,13 +52,13 @@ ENDPOINT_LIMITS = {
     # so these are account-wide budgets, not per-bot.
     'ltp':    (10, 490),   # getLtpData: 10/s, 500/min
     'quote':  (10, 490),   # getMarketData (LTP/OHLC/FULL): 10/s, 500/min
-    # 2026-09-21: per-second 3 -> 2. 3/s was EXACTLY AngelOne's documented getCandleData cap with
-    # no margin, and four processes coordinate through a file lock, so small timing races let
-    # bursts past 3 in a real second. The broker then rejected them itself: 337 HISTORICAL calls
-    # came back 'exceeding access rate' on 2026-09-21, 84 of them in 09:16-09:18, each costing
-    # a failed round trip plus a retry inside the entry path. The per-minute cap (178) already
-    # had margin and is unchanged.
-    'candle': (2, 178),    # getCandleData: 3/s, 180/min (run at 2/s for cross-process margin)
+    # 2026-09-22: per-second restored to 3 after a one-day trial at 2. Lowering it did NOT reduce the
+    # broker's 'exceeding access rate' rejections in the 09:15-09:20 burst (85 -> 92) and it made OUR
+    # limiter turn away 7 candle calls that had been served before (0 -> 7 RATE_LIMITED). The broker
+    # rejections are an AngelOne-side getCandleData fault: users report them on AngelOne's own forum at
+    # rates as low as one call per 5 minutes, unacknowledged. No client-side rate can stop them; the
+    # existing retry absorbs them. Do not lower this again without first showing a rate-driven cause.
+    'candle': (3, 178),    # getCandleData: 3/s, 180/min, 5000/h
     'order':  (19, 490),   # order APIs: 20/s, 500/min
 }
 DEFAULT_ENDPOINT_LIMIT = (6, 200)  # conservative cap for any unmapped request_type
