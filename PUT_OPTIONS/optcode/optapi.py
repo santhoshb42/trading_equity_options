@@ -21,8 +21,11 @@ from pathlib import Path
 
 # Per-bot concurrency cap: limits simultaneous broker-heavy alert threads to prevent OOM.
 # Threads start immediately (webhook returns 202 at once); only the broker work is gated.
-# Configurable via OPTIONS_ALERT_CONCURRENCY env var. Default 4 for 2GB VPS; raise on larger hosts.
-_ALERT_SEMAPHORE = threading.Semaphore(int(os.environ.get('OPTIONS_ALERT_CONCURRENCY', '4')))
+# Configurable via OPTIONS_ALERT_CONCURRENCY env var. 4 -> 6 on 2026-09-22: the host is 3.9GB and
+# the work is broker-bound, not memory-bound; 4 slots queued the 09:16 burst up to 26s (the only
+# OOM seen was an analysis script, not the bots). Broker rates are still capped by the shared
+# rate limiter, so more slots cannot exceed AngelOne's limits.
+_ALERT_SEMAPHORE = threading.Semaphore(int(os.environ.get('OPTIONS_ALERT_CONCURRENCY', '6')))
 
 try:
     from flask import Flask, request, jsonify

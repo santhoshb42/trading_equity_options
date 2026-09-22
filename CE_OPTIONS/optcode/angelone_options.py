@@ -49,6 +49,45 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # =============================================================================
+# Data-route HTTP timeout (2026-09-22)
+# =============================================================================
+# SmartConnect uses ONE instance-wide timeout (7s library default) for every route, so a stuck
+# quote/candle call held an alert slot for 7s; in the 09-22 open burst these stalls were mostly
+# CONNECT timeouts (TCP/TLS never came up), where waiting longer does not help and a fresh
+# attempt does. Data routes get (connect, read) = (2s, 3s); everything else - login, orders,
+# order/trade book - keeps the library default, so an order is never abandoned mid-flight
+# (LIVE duplicate-order risk). The override is per-thread, so concurrent calls cannot see each
+# other's value. OPTIONS_DATA_HTTP_READ_TIMEOUT=0 restores the library default for data too.
+# The monitor's bulk LTP uses requests.post directly with its own 5s and is NOT affected: a
+# slow price still beats no price for exits.
+_DATA_ROUTES = frozenset({"api.market.data", "api.candle.data", "api.ltp.data", "api.oi.data"})
+_DATA_CONNECT_TIMEOUT = float(os.getenv("OPTIONS_DATA_HTTP_CONNECT_TIMEOUT", "2"))
+_DATA_READ_TIMEOUT = float(os.getenv("OPTIONS_DATA_HTTP_READ_TIMEOUT", "3"))
+
+if SmartConnect:
+    class _RouteTimeoutSmartConnect(SmartConnect):
+        _route_timeout = threading.local()
+
+        @property
+        def timeout(self):
+            return getattr(self._route_timeout, "value", None) or self._base_timeout
+
+        @timeout.setter
+        def timeout(self, value):
+            self._base_timeout = value
+
+        def _request(self, route, method, parameters=None):
+            if route in _DATA_ROUTES and _DATA_READ_TIMEOUT > 0:
+                self._route_timeout.value = (_DATA_CONNECT_TIMEOUT, _DATA_READ_TIMEOUT)
+            try:
+                return super()._request(route, method, parameters)
+            finally:
+                self._route_timeout.value = None
+else:
+    _RouteTimeoutSmartConnect = None
+
+
+# =============================================================================
 # Utility: Timeout wrapper for broker API calls
 # =============================================================================
 
@@ -699,7 +738,7 @@ class AngelOneOptionsBroker:
         
         try:
             logger.debug("BROKER_AUTHENTICATE: Starting live authentication")
-            self.smart_api = SmartConnect(api_key=self.api_key)
+            self.smart_api = _RouteTimeoutSmartConnect(api_key=self.api_key)
             
             # Generate TOTP
             if self.totp_key:
