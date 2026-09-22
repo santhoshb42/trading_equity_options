@@ -2028,7 +2028,38 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.debug(f"ALERT_PROCESS: CHAIN_OK | contracts={len(chain.contracts)} | atm={chain.atm_strike}")
-        
+
+        # EARLY PREMIUM REJECT (2026-09-22). The hard premium floor on the contract we would buy is
+        # decided from this chain's LTPs, but used to be checked only AFTER candles + PCR + the
+        # filter, so a doomed alert held one of the 4 alert slots for ~6s during the open burst.
+        # Identical to minimum_premium_check below (same contract, same ltp, same floor).
+        # Only the hard floor moves here: the filter's premium vote reads the ATM *CE* ltp and is
+        # one vote of many, so on this side it does not always reject (6 PE-ITM trades passed it
+        # in Sept) - moving it would change outcomes.
+        # Skipped when the alert price is outside the chain's strikes (the stale-chain re-fetch
+        # below may change the contract). Never blocks on error - the later checks still run.
+        try:
+            _min_prem = float(os.getenv("ENTRY_FILTER_MIN_PREMIUM", "3.0"))
+            _strikes = [c.strike for c in chain.contracts.values() if c.contract_type == 'CE']
+            _in_range = bool(_strikes) and alert_price > 0 and min(_strikes) <= alert_price <= max(_strikes)
+            if _in_range and OptionsTradingConfig.STRATEGY_MODE != 'SELL_THETA':
+                _ece, _epe = chain.get_atm_contracts(alert_price, processed['strike_offset']) or (None, None)
+                _esel = _ece if processed['recommended_contract'] == 'CE' else _epe
+                if _esel is not None and _esel.ltp < _min_prem:
+                    _early_reason = f'Premium too low: ₹{_esel.ltp:.2f} < ₹{_min_prem} (low liquidity, high gap risk)'
+                    logger.warning(f"ALERT_PROCESS: EARLY_PREMIUM_REJECT | symbol={symbol} | {_early_reason}")
+                    return {
+                        'symbol': symbol,
+                        'timestamp': timestamp,
+                        'status': 'rejected',
+                        'reason': _early_reason,
+                        'stage': 'minimum_premium_check',
+                        'early_reject': True,
+                        **base_context,
+                    }
+        except Exception as _early_err:
+            logger.warning(f"ALERT_PROCESS: EARLY_PREMIUM_CHECK_ERROR | {symbol} | {_early_err}")
+
         # NEW: Comprehensive Entry Filter (PCR + Momentum + Trend + IV + Market Hours + DTE)
         if state['entry_filter']:
             try:

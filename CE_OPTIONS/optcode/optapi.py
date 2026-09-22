@@ -2081,7 +2081,47 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             }
         
         logger.debug(f"ALERT_PROCESS: CHAIN_OK | contracts={len(chain.contracts)} | atm={chain.atm_strike}")
-        
+
+        # EARLY PREMIUM REJECT (2026-09-22). The premium floor is decided from this chain's LTPs,
+        # but used to be checked only AFTER candles + PCR + the filter, so a doomed alert held one
+        # of the 4 alert slots for ~6s. In the 09-22 open burst these alerts took 39% of slot time
+        # and pushed queue waits to 26s. Both checks below read exactly what the later checks read:
+        #   1. filter premium vote (nearest-ATM CE ltp) - rejected 263/263 CE alerts in Sept
+        #   2. hard floor on the contract we would buy - identical to minimum_premium_check
+        # Skipped when the alert price is outside the chain's strikes (the stale-chain re-fetch
+        # below may change the contract). Never blocks on error - the later checks still run.
+        try:
+            _min_prem = float(os.getenv("ENTRY_FILTER_MIN_PREMIUM", "3.0"))
+            _ce_live = [c for c in chain.contracts.values() if c.contract_type == 'CE' and c.ltp > 0]
+            _strikes = [c.strike for c in chain.contracts.values() if c.contract_type == 'CE']
+            _in_range = bool(_strikes) and alert_price > 0 and min(_strikes) <= alert_price <= max(_strikes)
+            _early_reason, _early_stage = None, None
+            if state['entry_filter'] and _ce_live:
+                _spot = float(chain.atm_strike or 0)
+                _atm_ltp = min(_ce_live, key=lambda c: abs(c.strike - _spot)).ltp
+                if _atm_ltp < _min_prem:
+                    _early_reason = f"Premium ₹{_atm_ltp:.2f} < ₹{_min_prem} (low liquidity, high gap risk)"
+                    _early_stage = 'entry_filter'
+            if _early_reason is None and _in_range and OptionsTradingConfig.STRATEGY_MODE != 'SELL_THETA':
+                _ece, _epe = chain.get_atm_contracts(alert_price, processed['strike_offset']) or (None, None)
+                _esel = _ece if processed['recommended_contract'] == 'CE' else _epe
+                if _esel is not None and _esel.ltp < _min_prem:
+                    _early_reason = f'Premium too low: ₹{_esel.ltp:.2f} < ₹{_min_prem} (low liquidity, high gap risk)'
+                    _early_stage = 'minimum_premium_check'
+            if _early_reason:
+                logger.warning(f"ALERT_PROCESS: EARLY_PREMIUM_REJECT | symbol={symbol} | {_early_reason}")
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': _early_reason,
+                    'stage': _early_stage,
+                    'early_reject': True,
+                    **base_context,
+                }
+        except Exception as _early_err:
+            logger.warning(f"ALERT_PROCESS: EARLY_PREMIUM_CHECK_ERROR | {symbol} | {_early_err}")
+
         # NEW: Comprehensive Entry Filter (PCR + Momentum + Trend + IV + Market Hours + DTE)
         if state['entry_filter']:
             try:
