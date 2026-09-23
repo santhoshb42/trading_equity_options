@@ -355,8 +355,8 @@ No closed trades.
         
         # === SECTION 1: CLOSED TRADES ===
         csv_lines.append("=== CLOSED TRADES (Today) ===")
-        csv_lines.append("Sts | Underlying | Strategy     | Symbol                   | AlrtPx           | Time  | Entry    | Exit     | High     | Peak%  | Low      | Qty    | PnL      | Charges  | PnL%  | Dur   | Reason")
-        csv_lines.append("----+------------+--------------+--------------------------+------------------+-------+----------+----------+----------+--------+----------+--------+----------+----------+-------+-------+----------")
+        csv_lines.append("Sts | Underlying | Strategy         | Symbol                   | AlrtPx           | Time  | Entry    | Exit     | High     | Peak%  | Low      | Qty    | PnL      | Charges  | PnL%  | Dur   | Reason")
+        csv_lines.append("----+------------+------------------+--------------------------+------------------+-------+----------+----------+----------+--------+----------+--------+----------+----------+-------+-------+----------")
         
         # Sort closed trades by close time (most recent first)
         today_closed_sorted = sorted(today_closed, key=lambda x: x.get('closed_at', x.get('exit_time', '')), reverse=True)
@@ -433,7 +433,16 @@ No closed trades.
             # Already persisted on every record under entry_context; surfaced here so the
             # live_pnl CSVs are debuggable per-strategy without joining alerts.jsonl.
             _ec = trade.get('entry_context') or {}
-            strategy = str(_ec.get('entry_type') or _ec.get('tv_setup_label') or '-')[:12]
+            strategy = str(_ec.get('entry_type') or _ec.get('tv_setup_label') or '-')
+            # RSI_BURN carries its RSI at the alert, because that value is what decides whether the
+            # burn was worth taking: over 16 sessions RSI 75-80 lost Rs47K while 80+ made every rupee
+            # of its profit. Shown as "RSI_BURN 82.4" so the band is readable per trade in the CSV.
+            if strategy == 'RSI_BURN':
+                try:
+                    strategy = f"RSI_BURN {float(_ec.get('rsi_value')):.1f}"
+                except (TypeError, ValueError):
+                    pass
+            strategy = strategy[:16]
             # AlrtPx carries the signal candle's move off the PREVIOUS candle, in brackets, so the
             # CSV is a one-look snapshot: 1162 (+0.18%). Source is prev_candle_chg_pct from the Pine
             # payload (AO_IGNITION v65+ / RSI_BURN v10+). Absent on older alerts -> price only.
@@ -443,14 +452,14 @@ No closed trades.
             except (TypeError, ValueError):
                 _chgf = None
             alert_px_s = f"{alert_price:.0f}" + (f" ({_chgf:+.2f}%)" if _chgf is not None else "")
-            line = f"CLS | {underlying:<10} | {strategy:<12} | {option_symbol:<24} | {alert_px_s:>16} | {entry_time:>5} | {entry_prem:>8.2f} | {exit_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {pnl:>8.1f} | {charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8}"
+            line = f"CLS | {underlying:<10} | {strategy:<16} | {option_symbol:<24} | {alert_px_s:>16} | {entry_time:>5} | {entry_prem:>8.2f} | {exit_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {pnl:>8.1f} | {charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {exit_reason:<8}"
             csv_lines.append(line)
         
         # === SECTION 2: ONGOING TRADES ===
         csv_lines.append("")
         csv_lines.append("=== ONGOING TRADES (Live) ===")
-        csv_lines.append("Sts | Underlying | Strategy     | Symbol                   | AlrtPx           | Time  | Entry    | Curr     | High     | Peak%  | Low      | Qty    | UnPnL    | EstChrg  | PnL%  | Dur   | Trail")
-        csv_lines.append("----+------------+--------------+--------------------------+------------------+-------+----------+----------+----------+--------+----------+--------+----------+----------+-------+-------+----------")
+        csv_lines.append("Sts | Underlying | Strategy         | Symbol                   | AlrtPx           | Time  | Entry    | Curr     | High     | Peak%  | Low      | Qty    | UnPnL    | EstChrg  | PnL%  | Dur   | Trail")
+        csv_lines.append("----+------------+------------------+--------------------------+------------------+-------+----------+----------+----------+--------+----------+--------+----------+----------+-------+-------+----------")
         
         # Sort ongoing by entry time (oldest first)
         ongoing_sorted = sorted(ongoing_trades, key=lambda x: x.get('entry_time', ''))
@@ -523,7 +532,16 @@ No closed trades.
             # Already persisted on every record under entry_context; surfaced here so the
             # live_pnl CSVs are debuggable per-strategy without joining alerts.jsonl.
             _ec = trade.get('entry_context') or {}
-            strategy = str(_ec.get('entry_type') or _ec.get('tv_setup_label') or '-')[:12]
+            strategy = str(_ec.get('entry_type') or _ec.get('tv_setup_label') or '-')
+            # RSI_BURN carries its RSI at the alert, because that value is what decides whether the
+            # burn was worth taking: over 16 sessions RSI 75-80 lost Rs47K while 80+ made every rupee
+            # of its profit. Shown as "RSI_BURN 82.4" so the band is readable per trade in the CSV.
+            if strategy == 'RSI_BURN':
+                try:
+                    strategy = f"RSI_BURN {float(_ec.get('rsi_value')):.1f}"
+                except (TypeError, ValueError):
+                    pass
+            strategy = strategy[:16]
             # AlrtPx carries the signal candle's move off the PREVIOUS candle, in brackets, so the
             # CSV is a one-look snapshot: 1162 (+0.18%). Source is prev_candle_chg_pct from the Pine
             # payload (AO_IGNITION v65+ / RSI_BURN v10+). Absent on older alerts -> price only.
@@ -533,7 +551,7 @@ No closed trades.
             except (TypeError, ValueError):
                 _chgf = None
             alert_px_s = f"{alert_price:.0f}" + (f" ({_chgf:+.2f}%)" if _chgf is not None else "")
-            line = f"OPN | {underlying:<10} | {strategy:<12} | {option_symbol:<24} | {alert_px_s:>16} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {trail_status:>13}"
+            line = f"OPN | {underlying:<10} | {strategy:<16} | {option_symbol:<24} | {alert_px_s:>16} | {entry_time:>5} | {entry_prem:>8.2f} | {current_prem:>8.2f} | {highest_prem:>8.2f} | {peak_pct:>6.1f} | {lowest_prem:>8.2f} | {qty:>6d} | {unrealized_pnl:>8.1f} | {est_charges:>8.1f} | {pnl_pct:>5.1f} | {duration:>5} | {trail_status:>13}"
             csv_lines.append(line)
         
         return "\n".join(csv_lines)
