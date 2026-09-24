@@ -3013,6 +3013,27 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         if funds_rejection:
             return funds_rejection
         
+        # SHADOW (2026-09-24): where was the UNDERLYING at the moment we entered?
+        # The bots never look at spot again after the alert (underlying_entry_price is the alert
+        # price copied verbatim), so "should we skip a fill that is already going the wrong way?"
+        # cannot be answered from the records. This probe fetches spot for that answer ONLY -- it
+        # gates nothing. It starts HERE so the call overlaps with order placement (zero added
+        # entry latency) and is read back on a background thread after the position is in.
+        _spot_probe = {}
+        _spot_thread = None
+        if os.getenv("OPTIONS_LOG_SPOT_AT_ENTRY", "True").lower() == "true" and alert_price > 0:
+            def _probe_spot(_und=underlying):
+                try:
+                    _b = state['broker']
+                    _exch = _b._get_underlying_cash_exchange(_und) if hasattr(_b, '_get_underlying_cash_exchange') else 'NSE'
+                    _t0 = time.time()
+                    _spot_probe['spot'] = _b.get_ltp(_und, _exch)
+                    _spot_probe['ms'] = int((time.time() - _t0) * 1000)
+                except Exception as _pe:
+                    _spot_probe['err'] = str(_pe)[:80]
+            _spot_thread = threading.Thread(target=_probe_spot, daemon=True, name=f"spotprobe-{symbol}")
+            _spot_thread.start()
+
         logger.info(f"ALERT_PROCESS: PLACING_ORDER | contract={selected_contract.symbol} | qty={quantity} | order_type={entry_order_type} | price=₹{pricing_premium:.2f}")
         
         # Send order placement alert
@@ -3371,6 +3392,38 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             trend_strength=float(alert.get('trend_strength', 0) or 0),  # NEW: raw emaSpread %
             entry_context=entry_context,
         )
+
+
+        # SHADOW read-back of the entry-spot probe (see PLACING_ORDER above). Background so it can
+        # never delay order -> SL -> position; writes into entry_context, which is persisted and
+        # lands on the closed-trade record for tomorrow's comparison. Decides nothing.
+        if position_added and _spot_thread is not None:
+            def _bg_spot(_contract=selected_contract.symbol, _und=underlying, _side=contract_type,
+                         _alert_px=alert_price):
+                try:
+                    _spot_thread.join(timeout=8)
+                    _spot = _spot_probe.get('spot')
+                    if not _spot or _spot <= 0 or _alert_px <= 0:
+                        logger.debug(f"SPOT_AT_ENTRY: unavailable | {_und} | {_spot_probe.get('err', 'no ltp')}")
+                        return
+                    _drift = (float(_spot) - _alert_px) / _alert_px * 100.0
+                    # CE wants the underlying ABOVE the alert price, PE wants it BELOW.
+                    _my_way = None
+                    if OptionsTradingConfig.STRATEGY_MODE != 'SELL_THETA':
+                        _my_way = _drift > 0 if _side == 'CE' else _drift < 0
+                    _pos = state['monitor']._get_position(_contract)
+                    if _pos is not None and isinstance(getattr(_pos, 'entry_context', None), dict):
+                        _pos.entry_context.update({
+                            'spot_at_entry': round(float(_spot), 2),
+                            'spot_vs_alert_pct': round(_drift, 3),
+                            'spot_moving_my_way': _my_way,
+                            'spot_probe_ms': _spot_probe.get('ms'),
+                        })
+                    logger.info(f"SPOT_AT_ENTRY | {_und} | alert=₹{_alert_px:.2f} | spot=₹{float(_spot):.2f} | "
+                                f"drift={_drift:+.3f}% | side={_side} | moving_my_way={_my_way} | probe={_spot_probe.get('ms')}ms")
+                except Exception as _be:
+                    logger.debug(f"SPOT_AT_ENTRY: failed | {_und} | {str(_be)[:80]}")
+            threading.Thread(target=_bg_spot, daemon=True, name=f"spotlog-{symbol}").start()
 
         # BACKGROUND sector enrichment (peer-LTP fetch ~1s) — never blocks order→SL→position.
         # Attaches real sector_data to the position once ready; entry decision already made.
