@@ -1178,7 +1178,47 @@ def _build_position_entry_context(
         'is_reentry_setup': processed.get('is_reentry_setup'),
         'filter_inputs': filter_inputs,
         'filter_details': filter_details,
+        # MARKET REGIME AT ENTRY (2026-09-25). Stamped from the daemon snapshot the bots already
+        # read from disk (no broker call, no latency). GATES NOTHING - it is here so regime can be
+        # judged on forward outcomes instead of reconstructed from market_regime_history.jsonl.
+        # Fields carry both the LEVEL and the CHANGE: session/day net are levels; net_move_pct is
+        # NIFTY's last 15 min and short_window_net_move_pct its last 5 min, which is what a regime
+        # FLIP looks like while it happens (2026-09-25: BAD/NEUTRAL and drifting down until 13:30,
+        # GOOD at 14:15 - and the 14:00 hour made the whole day). `regime_age_s` says how old the
+        # snapshot was, so a stalled daemon is visible in the data rather than silently assumed.
+        **_regime_entry_stamp(),
     })
+
+
+def _regime_entry_stamp() -> Dict[str, Any]:
+    """Flatten the NIFTY regime snapshot for entry_context. Never raises, never blocks."""
+    try:
+        snap = _read_market_regime_snapshot()
+        if not snap:
+            return {'regime_trend': None, 'regime_stale': True}
+        age = None
+        try:
+            _c = str(snap.get('computed_at') or '')
+            if _c:
+                age = round((datetime.now(datetime.fromisoformat(_c).tzinfo)
+                             - datetime.fromisoformat(_c)).total_seconds(), 1)
+        except Exception:
+            age = None
+        return {
+            'regime_trend': snap.get('market_trend'),
+            'regime_session_net_pct': snap.get('session_net_pct'),
+            'regime_day_net_pct': snap.get('day_net_pct'),
+            'regime_net_15m_pct': snap.get('net_move_pct'),
+            'regime_net_5m_pct': snap.get('short_window_net_move_pct'),
+            'regime_efficiency_pct': snap.get('efficiency_pct'),
+            'regime_session_eff_pct': snap.get('session_eff_pct'),
+            'regime_session_health': snap.get('session_health'),
+            'regime_recovering': snap.get('recovering'),
+            'regime_entry_advice': snap.get('entry_advice'),
+            'regime_age_s': age,
+        }
+    except Exception:
+        return {'regime_trend': None, 'regime_stale': True}
 
 
 def _append_liquidity_decision_log(bot_type: str, payload: Dict[str, Any]) -> None:
