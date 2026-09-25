@@ -181,6 +181,87 @@ def _compute_session(candles):
     }
 
 
+
+# ---------------------------------------------------------------------------
+# NIFTY's OWN AO + MACD (2026-09-25)
+# ---------------------------------------------------------------------------
+# Added because the index-to-stock link is REAL and linear: measured over 3,638
+# trades, our underlyings move with NIFTY (beta 0.62 on CE, 1.49 on PE; same
+# direction 58-59% of the time), and P&L follows NIFTY's move DURING the trade
+# monotonically -- CE made +Rs2,411/trade when NIFTY rose >0.10% while the trade
+# was open and lost Rs389 when it fell; PE the mirror. What is NOT established is
+# whether any entry-time state PREDICTS the next few minutes of NIFTY, which is
+# what these series are logged to answer. Computed on 5-minute bars built from the
+# 1-minute candles the daemon already fetches - no extra broker call.
+_AO_FAST, _AO_SLOW = 5, 34
+_MACD_FAST, _MACD_SLOW, _MACD_SIGNAL = 12, 26, 9
+
+
+def _five_minute_bars(candles):
+    """Continuous 5-min bars (NOT reset per day - resetting hides every morning)."""
+    bars = []
+    for c in candles:
+        ts = c["timestamp"]
+        slot = (ts[:10], (int(ts[11:13]) * 60 + int(ts[14:16])) // 5)
+        if bars and bars[-1]["slot"] == slot:
+            b = bars[-1]
+            b["high"] = max(b["high"], c["high"])
+            b["low"] = min(b["low"], c["low"])
+            b["close"] = c["close"]
+        else:
+            bars.append({"slot": slot, "open": c["open"], "high": c["high"],
+                         "low": c["low"], "close": c["close"], "ts": ts})
+    return bars
+
+
+def _ema(values, n):
+    k = 2.0 / (n + 1)
+    e = None
+    out = []
+    for v in values:
+        e = v if e is None else v * k + e * (1 - k)
+        out.append(e)
+    return out
+
+
+def _compute_ao_macd(candles):
+    """AO (5/34 of median price) and MACD (12/26/9 of close) on 5-min bars."""
+    bars = _five_minute_bars(candles)
+    if len(bars) < _AO_SLOW + 2:
+        return {}
+    med = [(b["high"] + b["low"]) / 2 for b in bars]
+    close = [b["close"] for b in bars]
+    def sma(v, n, i):
+        return sum(v[i - n + 1:i + 1]) / n if i >= n - 1 else None
+    i = len(bars) - 1
+    ao = sma(med, _AO_FAST, i) - sma(med, _AO_SLOW, i)
+    ao_prev = (sma(med, _AO_FAST, i - 1) - sma(med, _AO_SLOW, i - 1)) if i >= _AO_SLOW else None
+    macd_line = [a - b for a, b in zip(_ema(close, _MACD_FAST), _ema(close, _MACD_SLOW))]
+    signal = _ema(macd_line, _MACD_SIGNAL)
+    return {
+        "nifty_ao": round(ao, 3),
+        "nifty_ao_rising": (ao_prev is not None and ao > ao_prev),
+        "nifty_ao_delta": round(ao - ao_prev, 3) if ao_prev is not None else None,
+        "nifty_macd": round(macd_line[-1], 3),
+        "nifty_macd_signal": round(signal[-1], 3),
+        "nifty_macd_hist": round(macd_line[-1] - signal[-1], 3),
+        "nifty_5m_bars": len(bars),
+    }
+
+
+def _minute_marks(candles):
+    """NIFTY's own recent movement, so the log reads without re-deriving it."""
+    if not candles:
+        return {}
+    last = candles[-1]["close"]
+    def chg(n):
+        if len(candles) <= n or candles[-1 - n]["close"] == 0:
+            return None
+        return round((last - candles[-1 - n]["close"]) / candles[-1 - n]["close"] * 100, 3)
+    return {"nifty_close": last, "nifty_chg_1m": chg(1), "nifty_chg_5m": chg(5),
+            "nifty_chg_15m": chg(15), "nifty_chg_30m": chg(30)}
+
+
 def _compute_regime(candles):
     """candles: list of dicts with open/high/low/close/timestamp, oldest first."""
     window = candles[-WINDOW_MINUTES:]
@@ -214,6 +295,8 @@ def _compute_regime(candles):
         "recovering": recovering,
         "entry_advice": entry_advice,
         **_compute_session(candles),
+        **_minute_marks(candles),
+        **_compute_ao_macd(candles),
         "last_candle_ts": window[-1]["timestamp"],
         "computed_at": datetime.now().astimezone().isoformat(),
     }

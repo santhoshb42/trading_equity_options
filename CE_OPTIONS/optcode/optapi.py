@@ -1163,6 +1163,21 @@ def _regime_entry_stamp() -> Dict[str, Any]:
             'regime_session_health': snap.get('session_health'),
             'regime_recovering': snap.get('recovering'),
             'regime_entry_advice': snap.get('entry_advice'),
+            # NIFTY's own AO/MACD and recent movement (daemon, 5-min bars). The index-to-stock
+            # link is real and linear - beta 0.62 on CE and 1.49 on PE over 3,638 trades - so
+            # these are stamped to test whether any entry-time state PREDICTS NIFTY's next few
+            # minutes, which is what actually pays: CE made +Rs2,411/trade when NIFTY rose >0.10%
+            # DURING the trade and lost Rs389 when it fell.
+            'nifty_close': snap.get('nifty_close'),
+            'nifty_chg_1m': snap.get('nifty_chg_1m'),
+            'nifty_chg_5m': snap.get('nifty_chg_5m'),
+            'nifty_chg_15m': snap.get('nifty_chg_15m'),
+            'nifty_chg_30m': snap.get('nifty_chg_30m'),
+            'nifty_ao': snap.get('nifty_ao'),
+            'nifty_ao_rising': snap.get('nifty_ao_rising'),
+            'nifty_ao_delta': snap.get('nifty_ao_delta'),
+            'nifty_macd': snap.get('nifty_macd'),
+            'nifty_macd_hist': snap.get('nifty_macd_hist'),
             'regime_age_s': age,
         }
     except Exception:
