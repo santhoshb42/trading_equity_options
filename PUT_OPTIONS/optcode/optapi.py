@@ -3404,7 +3404,10 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     _spot_thread.join(timeout=8)
                     _spot = _spot_probe.get('spot')
                     if not _spot or _spot <= 0 or _alert_px <= 0:
-                        logger.debug(f"SPOT_AT_ENTRY: unavailable | {_und} | {_spot_probe.get('err', 'no ltp')}")
+                        # WARNING, not debug: journald drops debug, so a missed probe used to be
+                        # invisible (4 of 116 on 2026-09-25 with no recoverable reason).
+                        logger.warning(f"SPOT_AT_ENTRY: unavailable | {_und} | spot={_spot} | "
+                                       f"err={_spot_probe.get('err', 'no ltp returned')} | probe_ms={_spot_probe.get('ms')}")
                         return
                     _drift = (float(_spot) - _alert_px) / _alert_px * 100.0
                     # CE wants the underlying ABOVE the alert price, PE wants it BELOW.
@@ -3422,7 +3425,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     logger.info(f"SPOT_AT_ENTRY | {_und} | alert=₹{_alert_px:.2f} | spot=₹{float(_spot):.2f} | "
                                 f"drift={_drift:+.3f}% | side={_side} | moving_my_way={_my_way} | probe={_spot_probe.get('ms')}ms")
                 except Exception as _be:
-                    logger.debug(f"SPOT_AT_ENTRY: failed | {_und} | {str(_be)[:80]}")
+                    logger.warning(f"SPOT_AT_ENTRY: failed | {_und} | {str(_be)[:120]}")
             threading.Thread(target=_bg_spot, daemon=True, name=f"spotlog-{symbol}").start()
 
         # BACKGROUND sector enrichment (peer-LTP fetch ~1s) — never blocks order→SL→position.
