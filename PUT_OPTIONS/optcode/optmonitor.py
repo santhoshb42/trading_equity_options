@@ -2741,7 +2741,26 @@ class OptionPositionMonitor:
         if not _breached:
             position.hard_sl_breach_ticks = 0
             position.hard_sl_first_breach_at = None
+            position.hard_sl_last_tick_at = None
             return False
+        # TICK = A NEW PRICE SAMPLE, NOT A CALL (fixed 2026-09-25). This guard is called TWICE
+        # per monitoring cycle on the SAME premium -- once from check_trailing_stop_losses and
+        # once from check_stop_losses -- so a single bad print used to reach 2/2 and fire inside
+        # one cycle. That is exactly what the guard exists to prevent: 42 of 351 stops since
+        # 09-15 (12%, -Rs38,181) were triggered by an LTP printed >4% BELOW the live bid, some
+        # only 2s after entry (APLAPOLLO 24.70 vs a 28.45 bid, underlying -0.068%). A second
+        # call within the same cycle is now ignored, so confirmation needs a genuinely new poll.
+        import time as _t_hsl
+        _min_gap = float(os.getenv("OPTIONS_HARD_SL_MIN_TICK_GAP_SECONDS", "1.0"))
+        _now_mono = _t_hsl.monotonic()
+        _last_at = getattr(position, 'hard_sl_last_tick_at', None)
+        if _last_at is not None and (_now_mono - _last_at) < _min_gap:
+            _ticks = getattr(position, 'hard_sl_breach_ticks', 0)
+            logger.info(f"HARD_SL_TICK_SKIPPED: {getattr(position,'symbol','?')} | same price sample "
+                        f"({_now_mono - _last_at:.2f}s since the last counted tick < {_min_gap}s) | "
+                        f"tick stays {_ticks}/{need_ticks}")
+            return False
+        position.hard_sl_last_tick_at = _now_mono
         _ticks = getattr(position, 'hard_sl_breach_ticks', 0) + 1
         position.hard_sl_breach_ticks = _ticks
         if _ticks < need_ticks:
