@@ -2890,6 +2890,37 @@ class AngelOneOptionsBroker:
             logger.error(f"OI_FETCH: BATCH ERROR | {str(e)}")
             return {symbol: None for symbol in symbols}
     
+    # ---- bulk-quote depth side-channel (2026-09-25) ----------------------------------------
+    # The monitor's 2s bulk price call now asks for mode FULL instead of LTP: SAME endpoint,
+    # SAME rate-limit class, SAME one call - it just returns the order book too (~950 bytes per
+    # symbol instead of ~120). The best bid/ask is stashed here so the HARD_SL check can refuse
+    # to count a tick whose LTP the book contradicts: 42 of 351 stops since 09-15 fired on a
+    # print >4% BELOW the live bid (APLAPOLLO 24.70 against a 28.45 bid). Nothing reads this to
+    # PRICE a trade - the stop still triggers on LTP. OPTIONS_BULK_QUOTE_MODE=LTP reverts.
+    def _record_quote_depth(self, symbol: str, item: Dict[str, Any]) -> None:
+        try:
+            dep = item.get('depth') or {}
+            bid = float(((dep.get('buy') or [{}])[0]).get('price') or 0)
+            ask = float(((dep.get('sell') or [{}])[0]).get('price') or 0)
+            if bid > 0 or ask > 0:
+                if not hasattr(self, '_quote_depth'):
+                    self._quote_depth, self._quote_depth_lock = {}, threading.Lock()
+                with self._quote_depth_lock:
+                    self._quote_depth[symbol] = (bid, ask, time.time())
+        except Exception:
+            pass
+
+    def get_quote_depth(self, symbol: str, max_age: float = 15.0):
+        """Best (bid, ask) seen for this symbol in the last `max_age` seconds, else None."""
+        row = None
+        if hasattr(self, '_quote_depth'):
+            with self._quote_depth_lock:
+                row = self._quote_depth.get(symbol)
+        if not row:
+            return None
+        bid, ask, ts = row
+        return None if (time.time() - ts) > max_age else (bid, ask)
+
     def get_ltp_bulk(self, symbols: List[str], exchange: str = "NFO") -> Dict[str, Optional[float]]:
         """
         Get LTP for multiple option symbols with intelligent caching and smart rate limiting.
@@ -2992,7 +3023,7 @@ class AngelOneOptionsBroker:
                             # Build request
                             import requests
                             request_data = {
-                                "mode": "LTP",
+                                "mode": os.getenv("OPTIONS_BULK_QUOTE_MODE", "FULL"),
                                 "exchangeTokens": {exchange.upper(): batch_tokens}
                             }
                             
@@ -3019,6 +3050,7 @@ class AngelOneOptionsBroker:
                                         for sym, tok in symbol_to_token.items():
                                             if tok == token and ltp > 0:
                                                 result[sym] = ltp
+                                                self._record_quote_depth(sym, item)
                                                 self.ltp_cache.set(sym, ltp)
                                                 fetched_count += 1
                                                 break
@@ -3055,6 +3087,7 @@ class AngelOneOptionsBroker:
                                                             for sym, tok in symbol_to_token.items():
                                                                 if tok == token and ltp > 0:
                                                                     result[sym] = ltp
+                                                                    self._record_quote_depth(sym, item)
                                                                     self.ltp_cache.set(sym, ltp)
                                                                     fetched_count += 1
                                                                     if sym in failed_symbols:
@@ -3109,6 +3142,7 @@ class AngelOneOptionsBroker:
                                                         for sym, tok in symbol_to_token.items():
                                                             if tok == token and ltp > 0:
                                                                 result[sym] = ltp
+                                                                self._record_quote_depth(sym, item)
                                                                 self.ltp_cache.set(sym, ltp)
                                                                 fetched_count += 1
                                                                 if sym in failed_symbols:

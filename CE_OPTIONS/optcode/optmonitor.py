@@ -2777,6 +2777,31 @@ class OptionPositionMonitor:
                         f"({_now_mono - _last_at:.2f}s since the last counted tick < {_min_gap}s) | "
                         f"tick stays {_ticks}/{need_ticks}")
             return False
+        # BOOK SANITY (2026-09-25): an LTP far BELOW the live bid is not a price anyone could
+        # sell at - it is a stale or odd-lot print. 42 of 351 stops since 09-15 fired on one
+        # (APLAPOLLO printed 24.70 while the book was 28.45/29.35 and the underlying had moved
+        # -0.068%); the 2-tick guard did not catch them because such prints REPEAT across polls
+        # (RADICO: 63 consecutive ticks of one stale value). The bid/ask comes free with the
+        # monitor's existing bulk quote (mode FULL) - no extra broker call, and the stop still
+        # TRIGGERS on LTP. Set OPTIONS_HARD_SL_BOOK_TOLERANCE_PCT=0 to disable.
+        _book_tol = float(os.getenv("OPTIONS_HARD_SL_BOOK_TOLERANCE_PCT", "4.0"))
+        if _book_tol > 0:
+            try:
+                _depth = self.broker.get_quote_depth(getattr(position, 'symbol', '')) if self.broker else None
+            except Exception:
+                _depth = None
+            if _depth:
+                _bid, _ask = _depth
+                _contradicted = (
+                    (_ask > 0 and prem > _ask * (1 + _book_tol / 100.0)) if _is_short
+                    else (_bid > 0 and prem < _bid * (1 - _book_tol / 100.0))
+                )
+                if _contradicted:
+                    logger.warning(
+                        f"HARD_SL_TICK_REJECTED: {getattr(position,'symbol','?')} | ltp Rs {prem:.2f} vs "
+                        f"book {_bid:.2f}/{_ask:.2f} | the print is >{_book_tol}% outside the book - not counted"
+                    )
+                    return False
         position.hard_sl_last_tick_at = _now_mono
         _ticks = getattr(position, 'hard_sl_breach_ticks', 0) + 1
         position.hard_sl_breach_ticks = _ticks
