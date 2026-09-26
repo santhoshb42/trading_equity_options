@@ -74,7 +74,10 @@ def load(d_from, d_to, use_history):
                        trend=ec.get("regime_trend"),
                        sess=ec.get("regime_session_net_pct"),
                        n15=ec.get("regime_net_15m_pct"),
-                       n5=ec.get("regime_net_5m_pct"))
+                       n5=ec.get("regime_net_5m_pct"),
+                       mx_dir=ec.get("nifty_macd_cross_dir"), mx_age=ec.get("nifty_macd_cross_age_min"),
+                       ax_dir=ec.get("nifty_ao_cross_dir"), ax_age=ec.get("nifty_ao_cross_age_min"),
+                       pts15=ec.get("nifty_pts_15m"))
             # "stamped" means the trade itself carried the regime, not that we joined it later.
             row["src"] = "stamp" if row["trend"] is not None else "none"
             if row["trend"] is None and hist.get(row["day"]):
@@ -142,6 +145,33 @@ def main():
         print(f"  {side} — daemon label")
         for lab in ("GOOD", "NEUTRAL", "BAD"):
             print(line(lab, [r for r in rs if r["trend"] == lab]))
+
+    # --- the after-10:00 question: can a NIFTY rise license CE (and a fall, PE)? ---
+    # 09:15-10:00 is profitable without index backing and is shown only for contrast.
+    print("\n  ==== NIFTY BACKING (log-only; compare MACD cross vs AO cross vs raw points) ====")
+    for wlabel, wfilt in (("09:15-10:00 (no backing needed)", lambda r: r["m"] < 600),
+                          ("AFTER 10:00 (the question)", lambda r: r["m"] >= 600)):
+        print(f"\n  --- {wlabel} ---")
+        for side in ("CE", "PE"):
+            want = "UP" if side == "CE" else "DOWN"
+            rs = [r for r in rows if r["side"] == side and wfilt(r)]
+            if not rs:
+                continue
+            print(f"   {side}: baseline {line('', rs).strip()}")
+            for tag, dirk, agek in (("MACD cross", "mx_dir", "mx_age"), ("AO cross", "ax_dir", "ax_age")):
+                for lo, hi in ((0, 15), (15, 30), (30, 60), (60, 9999)):
+                    g = [r for r in rs if r.get(dirk) == want and r.get(agek) is not None
+                         and lo <= float(r[agek]) < hi]
+                    if g:
+                        print(line(f"{tag} {want} {lo}-{hi if hi < 9999 else '+'}m", g))
+                wrong = [r for r in rs if r.get(dirk) and r.get(dirk) != want]
+                if wrong:
+                    print(line(f"{tag} pointing the other way", wrong))
+            for lo, hi, lab in ((5, 9999, "NIFTY +5pts or more"), (0, 5, "NIFTY 0 to +5pts"),
+                                (-5, 0, "NIFTY 0 to -5pts"), (-9999, -5, "NIFTY -5pts or worse")):
+                g = [r for r in rs if r.get("pts15") is not None and lo <= float(r["pts15"]) < hi]
+                if g:
+                    print(line(f"last 15m: {lab}", g))
 
     print("\n  per day, split by whether NIFTY was rising or falling at entry:")
     for d in sorted({r["day"] for r in rows}):

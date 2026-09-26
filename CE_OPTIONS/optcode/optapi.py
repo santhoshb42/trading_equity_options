@@ -1178,6 +1178,19 @@ def _regime_entry_stamp() -> Dict[str, Any]:
             'nifty_ao_delta': snap.get('nifty_ao_delta'),
             'nifty_macd': snap.get('nifty_macd'),
             'nifty_macd_hist': snap.get('nifty_macd_hist'),
+            # CROSS EVENTS + POINT MOVES (2026-09-26), for the after-10:00 question only:
+            # can a rise in NIFTY license CE entries (and a fall, PE)? The morning window
+            # 09:15-10:00 is profitable without any index backing and is NOT gated on this.
+            # Both directions are stamped so CE and PE can be compared on the same footing.
+            'nifty_macd_cross_dir': snap.get('nifty_macd_cross_dir'),
+            'nifty_macd_cross_age_min': snap.get('nifty_macd_cross_age_min'),
+            'nifty_ao_cross_dir': snap.get('nifty_ao_cross_dir'),
+            'nifty_ao_cross_age_min': snap.get('nifty_ao_cross_age_min'),
+            'nifty_pts_5m': snap.get('nifty_pts_5m'),
+            'nifty_pts_15m': snap.get('nifty_pts_15m'),
+            'nifty_pts_30m': snap.get('nifty_pts_30m'),
+            'nifty_pts_from_open': snap.get('nifty_pts_from_open'),
+            'nifty_pts_from_day_low': snap.get('nifty_pts_from_day_low'),
             'regime_age_s': age,
         }
     except Exception:

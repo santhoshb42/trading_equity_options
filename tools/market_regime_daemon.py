@@ -249,6 +249,97 @@ def _compute_ao_macd(candles):
     }
 
 
+
+# ---------------------------------------------------------------------------
+# NIFTY CROSS EVENTS + POINT MOVES (2026-09-26)
+# ---------------------------------------------------------------------------
+# Logged for the after-10:00 question only: 09:15-10:00 is profitable without any
+# index backing and is left alone. What is being tested is whether a RISE IN NIFTY
+# can license CE entries (and a fall, PE) after 10:00.
+#
+# Measured before building this, on 69 sessions of 15-min bars:
+#   - the STATE (AO>0, hist>0) predicts nothing: -0.0063% next 15 min against a
+#     -0.0035% baseline.
+#   - the CROSS does: MACD over its signal gives +0.0245% next 15 min (t 2.6),
+#     +0.0403% next 30 min (t 3.4), +0.0527% next 60 min (t 3.4), and holds in all
+#     four months. AO's zero-cross is similar but thinner (32 events).
+#   - on OUR trades it is NOT yet proven: only 17 crossings in September, positive
+#     on 7, and one event was 57% of the total. Hence log, do not gate.
+# Both directions are published so CE and PE can be compared on the same footing.
+_CROSS_TF_MINUTES = 15
+
+
+def _tf_bars(candles, minutes):
+    out = []
+    for c in candles:
+        ts = c["timestamp"]
+        slot = (ts[:10], (int(ts[11:13]) * 60 + int(ts[14:16])) // minutes)
+        if out and out[-1]["slot"] == slot:
+            b = out[-1]
+            b["high"] = max(b["high"], c["high"])
+            b["low"] = min(b["low"], c["low"])
+            b["close"] = c["close"]
+        else:
+            out.append({"slot": slot, "ts": ts, "high": c["high"], "low": c["low"],
+                        "close": c["close"],
+                        "min": int(ts[11:13]) * 60 + int(ts[14:16]), "day": ts[:10]})
+    return out
+
+
+def _cross_state(candles):
+    """Most recent MACD-vs-signal and AO-zero crossings on 15-min bars, with their age."""
+    bars = _tf_bars(candles, _CROSS_TF_MINUTES)
+    if len(bars) < _AO_SLOW + 2:
+        return {}
+    med = [(b["high"] + b["low"]) / 2 for b in bars]
+    close = [b["close"] for b in bars]
+    def sma(v, n, i):
+        return sum(v[i - n + 1:i + 1]) / n if i >= n - 1 else None
+    ao = [None if i < _AO_SLOW - 1 else sma(med, _AO_FAST, i) - sma(med, _AO_SLOW, i)
+          for i in range(len(bars))]
+    macd = [a - b for a, b in zip(_ema(close, _MACD_FAST), _ema(close, _MACD_SLOW))]
+    sig = _ema(macd, _MACD_SIGNAL)
+    last = {"macd": None, "ao": None}
+    for i in range(1, len(bars)):
+        if macd[i - 1] <= sig[i - 1] and macd[i] > sig[i]:
+            last["macd"] = (bars[i], "UP")
+        elif macd[i - 1] >= sig[i - 1] and macd[i] < sig[i]:
+            last["macd"] = (bars[i], "DOWN")
+        if ao[i] is not None and ao[i - 1] is not None:
+            if ao[i - 1] <= 0 < ao[i]:
+                last["ao"] = (bars[i], "UP")
+            elif ao[i - 1] >= 0 > ao[i]:
+                last["ao"] = (bars[i], "DOWN")
+    now = bars[-1]
+    out = {}
+    for key, tag in (("macd", "nifty_macd_cross"), ("ao", "nifty_ao_cross")):
+        if not last[key]:
+            out[f"{tag}_dir"] = None
+            out[f"{tag}_age_min"] = None
+            continue
+        bar, direction = last[key]
+        out[f"{tag}_dir"] = direction
+        # age only counts within the same session; a cross from a previous day is stale
+        out[f"{tag}_age_min"] = (now["min"] - bar["min"]) if bar["day"] == now["day"] else None
+    return out
+
+
+def _point_moves(candles):
+    """NIFTY's move in POINTS as well as percent - the user reads points."""
+    if not candles:
+        return {}
+    last = candles[-1]["close"]
+    out = {}
+    for n in (5, 15, 30):
+        out[f"nifty_pts_{n}m"] = (round(last - candles[-1 - n]["close"], 2)
+                                  if len(candles) > n else None)
+    today = [c for c in candles if c["timestamp"][:10] == candles[-1]["timestamp"][:10]]
+    if today:
+        out["nifty_pts_from_open"] = round(last - today[0]["open"], 2)
+        out["nifty_pts_from_day_low"] = round(last - min(c["low"] for c in today), 2)
+        out["nifty_pts_from_day_high"] = round(last - max(c["high"] for c in today), 2)
+    return out
+
 def _minute_marks(candles):
     """NIFTY's own recent movement, so the log reads without re-deriving it."""
     if not candles:
@@ -297,6 +388,8 @@ def _compute_regime(candles):
         **_compute_session(candles),
         **_minute_marks(candles),
         **_compute_ao_macd(candles),
+        **_cross_state(candles),
+        **_point_moves(candles),
         "last_candle_ts": window[-1]["timestamp"],
         "computed_at": datetime.now().astimezone().isoformat(),
     }
