@@ -148,11 +148,18 @@ def _net_move_pct(window):
     return (cl - op) / op * 100
 
 
-def _compute_session(candles):
+def _compute_session(candles, today=None):
     """H13.1: cumulative efficiency + net move from today's 09:30 to the latest bar.
     Unlike the trailing 15-min regime window, this is the day-quality signal —
-    it only strengthens or weakens gradually, so it's stable enough for sizing."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    it only strengthens or weakens gradually, so it's stable enough for sizing.
+
+    The 09:30 anchor and the >=3-row minimum are KEPT as they are: the PUT bearish arm
+    and regime sizing are calibrated on them. But they used to blank day_net_pct too,
+    which needs no anchor at all — the previous close is known and the 09:15 candle's
+    OPEN is the pre-open auction price, so the gap is measurable from the first bar of
+    the day (user, 2026-09-26). day_net_pct and the new open_* fields are therefore
+    computed from 09:15, and only session_* waits for 09:30."""
+    today = today or datetime.now().strftime("%Y-%m-%d")
     rows = [c for c in candles
             if c["timestamp"][:10] == today and c["timestamp"][11:16] >= "09:30"]
     # prev-day close (gap-inclusive day change) — a gap-down day looks flat to
@@ -160,9 +167,23 @@ def _compute_session(candles):
     # captures the gap so the PUT bearish arm doesn't miss gap-down selloff days.
     prev_rows = [c for c in candles if c["timestamp"][:10] < today]
     prev_close = prev_rows[-1]["close"] if prev_rows else None
+
+    # From 09:15, independent of the 09:30 session anchor.
+    all_today = [c for c in candles if c["timestamp"][:10] == today]
+    early = {}
+    if all_today:
+        day_open = all_today[0]["open"]          # 09:15 open == pre-open equilibrium price
+        last_close = all_today[-1]["close"]
+        if day_open:
+            early["open_net_pct"] = round((last_close - day_open) / day_open * 100, 3)
+        if prev_close:
+            early["day_net_pct"] = round((last_close - prev_close) / prev_close * 100, 3)
+            early["gap_pct"] = round((day_open - prev_close) / prev_close * 100, 3)
+        early["open_bars"] = len(all_today)
+
     if len(rows) < 3:
         return {"session_eff_pct": None, "session_net_pct": None,
-                "day_net_pct": None, "session_health": "NA"}
+                "day_net_pct": early.get("day_net_pct"), "session_health": "NA", **early}
     op = rows[0]["open"]
     cl = rows[-1]["close"]
     path = sum(abs(c["close"] - c["open"]) for c in rows)
@@ -178,6 +199,7 @@ def _compute_session(candles):
         "session_net_pct": round(net, 3),
         "day_net_pct": round(day_net, 3),
         "session_health": "HEALTHY" if healthy else "WEAK",
+        **early,
     }
 
 

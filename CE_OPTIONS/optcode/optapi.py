@@ -1156,6 +1156,10 @@ def _regime_entry_stamp() -> Dict[str, Any]:
             'regime_trend': snap.get('market_trend'),
             'regime_session_net_pct': snap.get('session_net_pct'),
             'regime_day_net_pct': snap.get('day_net_pct'),
+            # From 09:15, not 09:30: the first candle's OPEN is the pre-open auction price,
+            # so the gap and the move off the open are known from the first bar of the day.
+            'regime_open_net_pct': snap.get('open_net_pct'),
+            'regime_gap_pct': snap.get('gap_pct'),
             'regime_net_15m_pct': snap.get('net_move_pct'),
             'regime_net_5m_pct': snap.get('short_window_net_move_pct'),
             'regime_efficiency_pct': snap.get('efficiency_pct'),
