@@ -1093,6 +1093,24 @@ def _compact_entry_filter_inputs(
     return _compact_alert_details(inputs)
 
 
+
+def _entry_price_sides() -> Optional[set]:
+    """Which side the ENTRY path needs priced.
+
+    A BUY-mode bot buys exactly one side, so pricing the other is pure waste: bulk payload,
+    per-contract LTP retries, and the fabricated-premium fallback firing on contracts it can
+    never buy (the PE bot logged 12 USING_FALLBACK_PREMIUM lines for CE contracts on
+    2026-09-28, and that fake price fed its own premium filter).
+
+    SELL_THETA sells the OPPOSITE side, so it needs both - return None there and change
+    nothing. OPTIONS_CHAIN_PRICE_ONE_SIDE=false also restores both-side pricing.
+    """
+    if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+        return None
+    if os.getenv("OPTIONS_CHAIN_PRICE_ONE_SIDE", "True").lower() != "true":
+        return None
+    return {"CE"}
+
 def _build_position_entry_context(
     alert: Dict[str, Any],
     processed: Dict[str, Any],
@@ -2125,7 +2143,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         retry_delays = [1, 2, 4]  # exponential backoff: 1s, 2s, 4s
         
         for attempt in range(max_retries):
-            chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None, light=True)
+            chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price if alert_price > 0 else None, light=True, price_sides=_entry_price_sides())
             
             if chain:
                 if attempt > 0:
@@ -2511,7 +2529,7 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     logger.warning(f"ALERT_PROCESS: STALE_CHAIN | {underlying} | alert_price=₹{alert_price} | available_strikes=[₹{min_strike}-₹{max_strike}] | gap=₹{abs(gap)} | re-fetching with expanded range")
                     
                     # Fetch fresh chain to ensure we have the right strikes
-                    fresh_chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price, force_refresh=True, light=True)
+                    fresh_chain = state['broker'].fetch_option_chain(underlying, expiry, current_price=alert_price, force_refresh=True, light=True, price_sides=_entry_price_sides())
                     if fresh_chain:
                         chain = fresh_chain
                         logger.info(f"ALERT_PROCESS: CHAIN_REFRESHED | {underlying} | using fresh data for alert_price=₹{alert_price}")

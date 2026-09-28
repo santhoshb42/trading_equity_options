@@ -1097,7 +1097,7 @@ class AngelOneOptionsBroker:
             logger.error(f"PCR_CHAIN: ERROR for {underlying} {expiry} | {str(e)}")
             return None
     
-    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None, force_refresh: bool = False, light: bool = False) -> Optional[OptionChain]:
+    def fetch_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None, force_refresh: bool = False, light: bool = False, price_sides: Optional[set] = None) -> Optional[OptionChain]:
         """
         Fetch complete option chain for underlying and expiry.
         With rate limiting to prevent AngelOne API throttling.
@@ -1161,7 +1161,7 @@ class AngelOneOptionsBroker:
             # Always fetch real market data from AngelOne (even in PAPER mode)
             # PAPER mode only affects order placement, not market data
             try:
-                chain = self._fetch_from_angel(underlying, expiry, current_price=current_price, light=light)
+                chain = self._fetch_from_angel(underlying, expiry, current_price=current_price, light=light, price_sides=price_sides)
             except Exception as chain_error:
                 # Check if it's an auth error
                 error_str = str(chain_error).lower()
@@ -1194,7 +1194,14 @@ class AngelOneOptionsBroker:
             rate_limiter.record_call("fetch_chain", False)
             return None
     
-    def _fetch_from_angel(self, underlying: str, expiry: str, current_price: Optional[float] = None, light: bool = False) -> Optional[OptionChain]:
+    def _fetch_from_angel(self, underlying: str, expiry: str, current_price: Optional[float] = None, light: bool = False, price_sides: Optional[set] = None) -> Optional[OptionChain]:
+        # price_sides (2026-09-28): which side to actually PRICE. The contracts for both sides
+        # are still built (tokens, strikes) so nothing downstream changes shape, but the LTP
+        # fetch, the per-contract retry and the fabricated-premium fallback are skipped for the
+        # side this bot cannot trade. A BUY-mode bot uses exactly one side, yet the PE bot was
+        # fetching and FABRICATING prices for CE contracts (12 of them on 2026-09-28) that it
+        # will never buy - wasted retries and a fake price that fed its own premium filter.
+        # None = both sides, which is what SELL_THETA and every non-entry caller needs.
         """Fetch from AngelOne API OR instrument.json for real contracts - OPTIMIZED for ATM only
         
         OPTIMIZATION: Instead of fetching ALL 69+ contracts, only fetch the ATM strike (2 contracts: CE + PE)
@@ -1298,7 +1305,12 @@ class AngelOneOptionsBroker:
         logger.info(f"CHAIN_FETCH: Optimized fetch | {underlying} | ATM_strike={atm_strike} | fetching={len(atm_contracts_data_filtered)} contracts (strikes: {sorted(strikes_set)}) (skipped: {len(contracts_data) - len(atm_contracts_data_filtered)})")
         
         # OPTIMIZATION: Only bulk fetch the 2 ATM contracts
-        all_symbols = [cd['symbol'] for cd in atm_contracts_data_filtered]
+        _priced = [cd for cd in atm_contracts_data_filtered
+                   if not price_sides or cd.get('contract_type') in price_sides]
+        if price_sides and len(_priced) != len(atm_contracts_data_filtered):
+            logger.debug(f"CHAIN_FETCH: pricing {sorted(price_sides)} only | {underlying} | "
+                         f"{len(_priced)}/{len(atm_contracts_data_filtered)} contracts")
+        all_symbols = [cd['symbol'] for cd in _priced]
         ltps = {}
         
         if self.authenticated and all_symbols:
@@ -1327,6 +1339,7 @@ class AngelOneOptionsBroker:
         for contract_data in atm_contracts_data_filtered:
             symbol = contract_data['symbol']
             strike = contract_data.get('strike') or 0
+            _price_this = (not price_sides) or contract_data.get('contract_type') in price_sides
             
             contract = OptionContract(
                 underlying=contract_data['underlying'],
@@ -1339,6 +1352,13 @@ class AngelOneOptionsBroker:
             # Get token from instrument file
             contract.token = contract_data.get('token', '')
             
+            # Not our side: leave it unpriced (ltp stays 0) rather than retrying and then
+            # inventing a premium for a contract this bot cannot buy. get_atm_contracts still
+            # returns it, so the shape downstream is unchanged.
+            if not _price_this:
+                chain.add_contract(contract)
+                continue
+
             # Set LTP from bulk fetch result
             if symbol in ltps and ltps[symbol]:
                 ltp = ltps[symbol]
