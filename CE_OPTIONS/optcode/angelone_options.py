@@ -2475,6 +2475,12 @@ class AngelOneOptionsBroker:
             
             if ltp_data and ltp_data.get('status'):
                 ltp = float(ltp_data['data']['ltp'])
+                # A zero/negative "price" is not a price - it means the contract has not
+                # traded. Returning it lets callers treat 0.00 as real (sizing, stop maths,
+                # the entry-spot probe). None is the honest answer; callers all handle it.
+                if ltp <= 0:
+                    logger.warning(f"LTP_FETCH: broker returned ltp={ltp} | {symbol} | treating as no price")
+                    return None
                 logger.debug(f"LTP_FETCH: SUCCESS | {symbol} | ltp=₹{ltp:.2f}")
                 return ltp
             else:
