@@ -2151,21 +2151,24 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 )
                 fetch_results = {}
 
-                # 0. ENTRY PREMIUM from already-fetched chain (ATM CE ltp)
-                # Without this, PremiumValidator always sees ₹0.00 and rejects every trade.
-                # Use nearest-strike CE rather than exact atm_strike match — in PAPER mode
-                # chain.atm_strike is set to raw spot price (e.g. 304.55), not snapped to a
-                # real strike, so get_contract(atm_strike, 'CE') always returns None.
+                # 0. ENTRY PREMIUM from the already-fetched chain — the ATM **PE**, because this
+                # is the PUT bot and PE is the side it buys. It read the ATM *CE* until
+                # 2026-09-28: PremiumValidator was judging every PUT entry on a CALL's price,
+                # and when that call was dark it judged it on the chain's fabricated premium
+                # (SAGILITY29SEP2643CE booked at a fabricated Rs1.00 on 2026-09-28, which is
+                # below the Rs5 floor and votes to reject a PUT that may be perfectly liquid).
+                # Nearest-strike rather than an exact atm_strike match — in PAPER chain.atm_strike
+                # is the raw spot (e.g. 304.55), not snapped to a listed strike.
                 try:
-                    ce_contracts = [c for c in chain.contracts.values() if c.contract_type == 'CE' and c.ltp > 0]
-                    if ce_contracts:
+                    pe_contracts = [c for c in chain.contracts.values() if c.contract_type == 'PE' and c.ltp > 0]
+                    if pe_contracts:
                         spot_price = float(chain.atm_strike or 0)
-                        nearest_ce = min(ce_contracts, key=lambda c: abs(c.strike - spot_price))
-                        market_data['entry_premium'] = nearest_ce.ltp
-                        logger.debug(f"ENTRY_FILTER: entry_premium from nearest ATM CE | {underlying} | strike={nearest_ce.strike} | ltp=₹{nearest_ce.ltp:.2f}")
+                        nearest_pe = min(pe_contracts, key=lambda c: abs(c.strike - spot_price))
+                        market_data['entry_premium'] = nearest_pe.ltp
+                        logger.debug(f"ENTRY_FILTER: entry_premium from nearest ATM PE | {underlying} | strike={nearest_pe.strike} | ltp=₹{nearest_pe.ltp:.2f}")
                     else:
                         market_data['entry_premium'] = 0
-                        logger.debug(f"ENTRY_FILTER: no CE contracts with ltp>0 in chain | {underlying}")
+                        logger.debug(f"ENTRY_FILTER: no PE contracts with ltp>0 in chain | {underlying}")
                 except Exception as e:
                     market_data['entry_premium'] = 0
                     logger.debug(f"ENTRY_FILTER: entry_premium error | {underlying} | {str(e)[:40]}")
