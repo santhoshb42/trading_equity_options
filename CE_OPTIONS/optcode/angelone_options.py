@@ -2714,9 +2714,11 @@ class AngelOneOptionsBroker:
             return {symbol: None for symbol in symbols}
     
     # ---- bulk-quote depth side-channel (2026-09-25) ----------------------------------------
-    # The monitor's 2s bulk price call now asks for mode FULL instead of LTP: SAME endpoint,
-    # SAME rate-limit class, SAME one call - it just returns the order book too (~950 bytes per
-    # symbol instead of ~120). The best bid/ask is stashed here so the HARD_SL check can refuse
+    # Depth for the HARD_SL book-sanity check. It was briefly fetched by switching the monitor's
+    # 2s bulk call to mode FULL, but measured at equal position counts that cost ~25% on the
+    # median refresh and DOUBLED the p90 (1.41s -> 3.58s at 2 positions) - the wrong trade for the
+    # loop that watches stops. The bulk call is back on mode LTP and depth is fetched for ONE
+    # symbol only when a stop is actually breached (rare: 9 times on 2026-09-28), then cached. The best bid/ask is stashed here so the HARD_SL check can refuse
     # to count a tick whose LTP the book contradicts: 42 of 351 stops since 09-15 fired on a
     # print >4% BELOW the live bid (APLAPOLLO 24.70 against a 28.45 bid). Nothing reads this to
     # PRICE a trade - the stop still triggers on LTP. OPTIONS_BULK_QUOTE_MODE=LTP reverts.
@@ -2844,7 +2846,7 @@ class AngelOneOptionsBroker:
                             # Build request
                             import requests
                             request_data = {
-                                "mode": os.getenv("OPTIONS_BULK_QUOTE_MODE", "FULL"),
+                                "mode": os.getenv("OPTIONS_BULK_QUOTE_MODE", "LTP"),
                                 "exchangeTokens": {exchange.upper(): batch_tokens}
                             }
                             

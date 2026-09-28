@@ -2773,6 +2773,21 @@ class OptionPositionMonitor:
                 _depth = self.broker.get_quote_depth(getattr(position, 'symbol', '')) if self.broker else None
             except Exception:
                 _depth = None
+            if not _depth:
+                # No fresh depth for this symbol: fetch it for THIS ONE contract. Only happens on a
+                # breach tick, so it costs a call per stop event, not per monitor cycle.
+                try:
+                    _md = self.broker.get_market_data(getattr(position, 'symbol', ''), exchange="NFO") if self.broker else None
+                    if _md:
+                        _b, _a = float(_md.get('bid') or 0), float(_md.get('ask') or 0)
+                        if _b > 0 or _a > 0:
+                            _depth = (_b, _a)
+                            if hasattr(self.broker, '_record_quote_depth'):
+                                self.broker._record_quote_depth(
+                                    getattr(position, 'symbol', ''),
+                                    {'depth': {'buy': [{'price': _b}], 'sell': [{'price': _a}]}})
+                except Exception as _md_err:
+                    logger.debug(f"HARD_SL book check: depth fetch failed | {_md_err}")
             if _depth:
                 _bid, _ask = _depth
                 _contradicted = (
