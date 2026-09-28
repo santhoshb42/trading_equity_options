@@ -182,14 +182,6 @@ class OptionChainGenerator:
     
     def __init__(self):
         # Default spot prices - will be overridden by LTP when available
-        self.spot_prices = {
-            # Index underlyings
-            'BANKNIFTY': 47000,
-            'NIFTY': 23500,
-            'FINNIFTY': 22000,
-            'MIDCPNIFTY': 12000,
-            'NIFTYNXT50': 56000,
-        }
         
         # Dynamic strike intervals based on price range
         # Will be auto-calculated if not specified
@@ -245,11 +237,15 @@ class OptionChainGenerator:
         
         Returns: List of option contract symbols (CE and PE)
         """
-        # Use provided center_price (LTP from alert) or fall back to configured spot
-        if center_price and center_price > 0:
-            spot = center_price
-        else:
-            spot = self.spot_prices.get(underlying, 1000)  # Default fallback
+        # NO FABRICATED CENTRE (2026-09-28). This used to fall back to a hard-coded spot table
+        # (default Rs1000), which decides atm_strike - i.e. WHICH CONTRACTS we would trade. A
+        # made-up centre silently produces a chain around the wrong strikes. Without a real
+        # price there is no chain to generate; callers get an empty list and must handle it.
+        if not center_price or center_price <= 0:
+            logger.error(f"CHAIN_GEN: no real centre price for {underlying} - refusing to "
+                         f"generate a chain around a fabricated spot")
+            return []
+        spot = center_price
         
         # Calculate strike interval dynamically based on price
         interval = self._get_strike_interval(underlying, spot)

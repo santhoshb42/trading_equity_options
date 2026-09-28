@@ -575,23 +575,6 @@ class AngelOneOptionsBroker:
         self.pe_extractor = get_pe_extractor()
         
         # Mock spot prices for paper trading
-        self.spot_prices = {
-            # Index underlyings
-            'BANKNIFTY': 47000,
-            'NIFTY': 23500,
-            'FINNIFTY': 22000,
-            # Stock underlyings with realistic spot prices
-            'SAMMAANCAP': 150,      # ~6x strike (145)
-            'PAYTM': 1300,          # ~1.02x strike (1280)
-            'ANGELONE': 2550,       # At strike level
-            'MUTHOOTFIN': 3800,     # At strike level
-            'LTF': 310,             # At strike level
-            'HEROMOTOCO': 6200,     # ~1.03x strike (6000)
-            'KFINTECH': 1075,       # ~1.01x strike (1060)
-            'SHRIRAMFIN': 875,      # ~1.03x strike (850)
-            'HINDZINC': 540,        # ~1.03x strike (525)
-            'ABB': 5300,            # ~0.95x strike (5250)
-        }
         
         # Positions tracking
         self.option_positions: Dict[str, Dict[str, Any]] = {}  # {symbol: position_data}
@@ -1488,158 +1471,6 @@ class AngelOneOptionsBroker:
         logger.info(f"CHAIN_FETCH: Built OPTIMIZED chain | {underlying} | ATM_contracts={len(chain.contracts)} (instead of {len(contracts_data)}) | expiry={expiry}")
         return chain
     
-    def _create_mock_option_chain(self, underlying: str, expiry: str, current_price: Optional[float] = None) -> OptionChain:
-        """Create mock option chain for PAPER mode testing using real instrument.json data
-        
-        Strategy: Load all real contracts from instrument.json for current month,
-        then get_atm_contracts() will pick the nearest strike to current LTP.
-        
-        CRITICAL: If symbol is NOT in F&O (no real contracts available):
-        - Return EMPTY chain (not synthetic data)
-        - This will cause alert processing to skip the alert
-        - Non-F&O stocks should be skipped, not traded with fake data
-        
-        Args:
-            underlying: Stock or index symbol
-            expiry: Expiry date YYYY-MM-DD
-            current_price: Current market price (used by get_atm_contracts for selection)
-        """
-        chain = OptionChain(underlying, expiry)
-        
-        # Try to load real contracts from instrument.json
-        extractor = InstrumentCEExtractor()
-        contracts_data = extractor.build_real_option_chain(underlying, expiry, center_price=current_price)
-        
-        if not contracts_data:
-            # CRITICAL: Symbol is NOT in F&O - SKIP IT (don't generate synthetic data)
-            logger.warning(f"CHAIN_MOCK: {underlying} NOT in F&O - symbol has no real option contracts available")
-            logger.warning(f"CHAIN_MOCK: Skipping alert - returning EMPTY chain (no synthetic fallback)")
-            # Return empty chain - this will cause alert processing to fail chain validation
-            return chain
-        
-        # Mock spot prices for reference
-        spot_prices = {
-            'BANKNIFTY': 47000,
-            'NIFTY': 23500,
-            'FINNIFTY': 22000,
-            # Equity stocks with F&O
-            'ANGELONE': 1600,
-            'BALKRISIND': 2500,
-            'BSOFT': 650,
-            'CYIENT': 1800,
-            'GLENMARK': 1960,
-            'INOXWIND': 350,
-            'PAGEIND': 3200,
-            'PGEL': 280,
-            'SJVN': 80,
-        }
-        
-        # Use provided current_price or fall back to configured spot price
-        if current_price and current_price > 0:
-            spot = current_price
-        else:
-            spot = spot_prices.get(underlying, 20000)
-        
-        # Add contracts to chain
-        for contract_data in contracts_data:
-            # Extract strike from symbol
-            # Symbol format: UNDERLYING + DDMMMYY + STRIKE + TYPE
-            # Example: TECHM30DEC251600CE -> strike is 1600
-            # DDMMMYY = 7 chars (e.g., 30DEC25 = 2 digits + 3 letters + 2 digits)
-            symbol = contract_data['symbol']
-            
-            # Remove underlying name, date (DDMMMYY=7 chars), and type (CE/PE=2 chars)
-            underlying_prefix = symbol[:len(contract_data['underlying'])]
-            strike_portion = symbol[len(underlying_prefix):-2]  # Remove last 2 chars (CE/PE)
-            
-            # The strike portion is now like "30DEC251600"
-            # We need to remove the date part (first 7 chars: 30DEC25)
-            # and keep just the strike (1600)
-            if len(strike_portion) > 7:
-                strike_str = strike_portion[7:]  # Remove DDMMMYY (7 chars), keep strike
-                try:
-                    strike = float(strike_str)
-                except ValueError:
-                    strike = 0  # Fallback if parsing fails
-            else:
-                strike = 0
-            
-            contract = OptionContract(
-                underlying=contract_data['underlying'],
-                strike=strike,  # Proper strike value
-                expiry=contract_data['expiry'],
-                contract_type=contract_data['contract_type'],
-                symbol=contract_data['symbol']
-            )
-            
-            # Get token from instrument file if available
-            token = self.pe_extractor.get_token_for_symbol(contract_data['symbol'])
-            if token:
-                contract.token = token
-            
-            # Mock market data (simplified - not using strike for calcs)
-            base_premium = spot * 0.02
-            contract.ltp = base_premium
-            # Use dynamic IV instead of hardcoded 20
-            from .volatility_calculator import get_volatility_calculator
-            vol_calc = get_volatility_calculator()
-            contract.iv = vol_calc.get_dynamic_iv(contract_data['underlying'])
-            contract.open_interest = 10000
-            contract.volume = 1000
-            contract.bid = base_premium * 0.98
-            contract.ask = base_premium * 1.02
-            contract.last_updated = datetime.now().isoformat()
-            
-            # 🔴 ESTIMATE GREEKS using Black-Scholes (not hardcoded)
-            try:
-                # Calculate time to expiry
-                try:
-                    expiry_date = datetime.strptime(contract_data['expiry'], "%Y-%m-%d")
-                except ValueError:
-                    expiry_date = datetime.strptime(contract_data['expiry'], "%d-%b-%Y")
-                
-                today = datetime.now()
-                time_to_expiry = (expiry_date - today).days
-                if time_to_expiry < 0:
-                    time_to_expiry = 0
-                
-                # Estimate Greeks using Black-Scholes
-                estimated_greeks = estimate_greeks(
-                    underlying=contract_data['underlying'],
-                    strike=strike,
-                    spot=spot,
-                    contract_type=contract_data['contract_type'],
-                    time_to_expiry_days=max(1, time_to_expiry),
-                    iv=0.25  # Default 25% IV
-                )
-                
-                contract.delta = estimated_greeks.get('delta', 0.5 if contract_data['contract_type'] == 'CE' else -0.5)
-                contract.gamma = estimated_greeks.get('gamma', 0.05)
-                contract.theta = estimated_greeks.get('theta', -0.02)
-                contract.vega = estimated_greeks.get('vega', 0.1)
-                
-                logger.debug(f"CHAIN_MOCK: GREEKS_ESTIMATED | {symbol} | D={contract.delta:.3f} G={contract.gamma:.4f} T={contract.theta:.4f} V={contract.vega:.4f}")
-            except Exception as e:
-                logger.warning(f"CHAIN_MOCK: GREEKS_ESTIMATION_FAILED | {symbol} | {str(e)} | using defaults")
-                # Set reasonable defaults if estimation fails
-                if contract_data['contract_type'] == 'CE':
-                    contract.delta = 0.5
-                    contract.gamma = 0.05
-                    contract.theta = -0.02
-                    contract.vega = 0.1
-                else:
-                    contract.delta = -0.5
-                    contract.gamma = 0.05
-                    contract.theta = -0.02
-                    contract.vega = 0.1
-            
-            chain.add_contract(contract)
-        
-        chain.atm_strike = spot
-        chain.last_updated = datetime.now().isoformat()
-        logger.info(f"CHAIN_MOCK: Created chain for {underlying} with {len(chain.contracts)} contracts")
-        return chain
-    
     def _cache_chain(self, chain: OptionChain):
         """Cache chain to disk"""
         try:
@@ -2441,9 +2272,6 @@ class AngelOneOptionsBroker:
             # premium fix (d60ee51): no price is safer than an invented one - every caller
             # already handles None. OPTIONS_ALLOW_MOCK_PRICES=true restores the old behaviour
             # for offline testing only.
-            if os.getenv("OPTIONS_ALLOW_MOCK_PRICES", "False").lower() == "true":
-                logger.warning(f"LTP_FETCH: Not authenticated, returning MOCK | {symbol}")
-                return self._get_mock_ltp(symbol)
             re_authed = False
             try:
                 re_authed = bool(self.authenticate())
@@ -2495,35 +2323,6 @@ class AngelOneOptionsBroker:
             rate_limiter = get_options_rate_limiter()
             rate_limiter.record_call("ltp_fetch", False)
             return None
-    
-    def _get_mock_ltp(self, symbol: str) -> float:
-        """Generate mock LTP for paper trading"""
-        # For options contracts, extract strike and calculate realistic premium
-        parsed = OptionSymbolFormat.parse_symbol(symbol)
-        if parsed:
-            # Options contract
-            strike = parsed['strike']
-            contract_type = parsed['contract_type']
-            underlying = parsed['underlying']
-            
-            # Get mock spot price
-            spot = self.spot_prices.get(underlying, strike)
-            
-            # Calculate ITM/OTM offset
-            if contract_type == 'CE':
-                itm_offset = max(0, spot - strike)
-            else:  # PE
-                itm_offset = max(0, strike - spot)
-            
-            # Mock premium calculation
-            intrinsic = max(0, itm_offset)
-            time_value = 50 * (1 - min(abs(spot - strike) / spot, 0.5))
-            premium = intrinsic + time_value
-            
-            return premium
-        else:
-            # Underlying stock/index - return configured spot price
-            return self.spot_prices.get(symbol, 1000.0)
     
     def get_market_data(self, symbol: str, exchange: str = "NFO") -> Optional[Dict[str, Any]]:
         """
@@ -2951,11 +2750,9 @@ class AngelOneOptionsBroker:
         """
         Get LTP for multiple option symbols with intelligent caching and smart rate limiting.
         
-        OPTIMIZATION: 
-        1. Check LTP cache first (60s TTL to dramatically reduce API calls)
-        2. For uncached symbols: use getMarketData() in small batches (respects SmartAPI limits)
-        3. With 60s cache, uncached symbols per cycle = ~10% of positions
-        4. For 56 positions: ~5-6 uncached per cycle = can batch them efficiently
+        Every call fetches LIVE quotes in batches. NOTE: an ltp_cache is WRITTEN here but
+        never read by anything - exits must not act on a stale price, so there is no read path.
+        (The old docstring claimed a 60s cache with a ~90% hit rate; that was never true.)
         
         Args:
             symbols: List of option symbols (e.g., ["BANKNIFTY25JAN19800CE", "NIFTY25JAN18000CE"])
@@ -3218,24 +3015,6 @@ class AngelOneOptionsBroker:
             logger.error(f"BULK_MARKET_DATA: CRITICAL ERROR | {str(e)}")
             return result
     
-    def _get_mock_market_data(self, symbol: str) -> Dict[str, Any]:
-        """Generate mock market data for paper trading"""
-        ltp = self._get_mock_ltp(symbol)
-        
-        return {
-            'ltp': ltp,
-            'open': ltp * 0.99,
-            'high': ltp * 1.02,
-            'low': ltp * 0.98,
-            'close': ltp,
-            'volume': 100000,
-            'oi': 50000,  # Open Interest for options
-            'bid': ltp * 0.995,
-            'ask': ltp * 1.005,
-            'iv': 0.25,  # Dynamic IV (default 25%, will be overridden by volatility calculator)
-            'timestamp': datetime.now().isoformat()
-        }
-    
     def calculate_technical_indicators(self, symbol: str, exchange: str = "NSE", 
                                       period_rsi: int = 14, period_atr: int = 14) -> Optional[Dict[str, float]]:
         """
@@ -3258,8 +3037,8 @@ class AngelOneOptionsBroker:
             historical_data = self.get_historical_data(symbol, interval="FIVE_MINUTE", days_back=2, exchange=resolved_exchange)
             
             if not historical_data or len(historical_data) < max(period_rsi, period_atr) + 1:
-                logger.warning(f"INDICATORS: Insufficient data for {symbol}")
-                return self._get_mock_indicators()
+                logger.warning(f"INDICATORS: Insufficient data for {symbol} - returning no indicators")
+                return None
             
             # Extract OHLCV data
             closes = [candle['close'] for candle in historical_data]
@@ -3314,70 +3093,8 @@ class AngelOneOptionsBroker:
             
         except Exception as e:
             logger.error(f"INDICATORS: ERROR calculating for {symbol} | {str(e)}")
-            return self._get_mock_indicators()
+            return None
     
-    def get_underlying_technicals(self, underlying: str) -> Dict[str, Any]:
-        """
-        Get comprehensive technical analysis for underlying symbol.
-        
-        Args:
-            underlying: Underlying symbol (BANKNIFTY, NIFTY, FINNIFTY)
-            
-        Returns:
-            Dict with technical indicators and signals
-        """
-        try:
-            # Get indicators
-            indicators = self.calculate_technical_indicators(underlying)
-            if not indicators:
-                return {}
-            
-            # Generate trading signals
-            signals = {}
-            
-            # RSI signals
-            if 'rsi' in indicators:
-                rsi = indicators['rsi']
-                if rsi > 70:
-                    signals['rsi_signal'] = 'OVERBOUGHT'
-                elif rsi < 30:
-                    signals['rsi_signal'] = 'OVERSOLD'
-                else:
-                    signals['rsi_signal'] = 'NEUTRAL'
-            
-            # Price vs MA signals
-            if 'price_vs_sma20' in indicators:
-                pct = indicators['price_vs_sma20']
-                if pct > 2:
-                    signals['sma20_signal'] = 'ABOVE'
-                elif pct < -2:
-                    signals['sma20_signal'] = 'BELOW'
-                else:
-                    signals['sma20_signal'] = 'NEUTRAL'
-            
-            # ADX trend strength
-            if 'adx' in indicators:
-                adx = indicators['adx']
-                if adx > 25:
-                    signals['trend_strength'] = 'STRONG'
-                else:
-                    signals['trend_strength'] = 'WEAK'
-            
-            return {
-                'underlying': underlying,
-                'indicators': indicators,
-                'signals': signals,
-                'timestamp': datetime.now().isoformat()
-            }
-        
-        except Exception as e:
-            logger.error(f"UNDERLYING_TECHNICALS: ERROR for {underlying} | {str(e)}")
-            return {}
-    
-    # Shared cross-process candle cache (avoids 4× redundant getCandleData calls during bursts)
-    _SHARED_CANDLE_CACHE = Path("/tmp/angelone_options_candle_cache.json")
-    _SHARED_CANDLE_TTL = 300  # 5 min, matches in-process TTL
-
     def _read_shared_candle_cache(self, cache_key: str) -> Optional[List[Dict[str, Any]]]:
         """Read candle data from the shared cross-process file cache. Returns None on miss.
         No lock taken — a partial write yields a JSON error caught below, which is a safe miss."""
@@ -3533,54 +3250,6 @@ class AngelOneOptionsBroker:
             logger.error(f"HISTORICAL: ERROR for {symbol} | {str(e)}")
             return None
 
-    def _get_mock_historical_data(self, symbol: str, days_back: int = 2) -> List[Dict[str, Any]]:
-        """Generate mock historical data for paper trading"""
-        from datetime import datetime as dt, timedelta
-        
-        candles = []
-        base_price = self._get_mock_ltp(symbol)
-        current_time = dt.now()
-        
-        # Generate 5-minute candles for the specified days
-        num_candles = days_back * 77  # ~77 candles per day (9:15 to 15:30)
-        
-        for i in range(num_candles):
-            time_offset = timedelta(minutes=-5 * (num_candles - i))
-            candle_time = current_time + time_offset
-            
-            # Simulate price movement
-            import random
-            price_change = (random.random() - 0.5) * base_price * 0.01  # ±0.5% per candle
-            open_price = base_price + price_change * random.random()
-            close_price = open_price + price_change
-            high_price = max(open_price, close_price) * (1 + abs(random.random() * 0.002))
-            low_price = min(open_price, close_price) * (1 - abs(random.random() * 0.002))
-            volume = int(100000 + random.random() * 50000)
-            
-            candles.append({
-                'timestamp': candle_time.strftime("%Y-%m-%d %H:%M:%S"),
-                'open': round(open_price, 2),
-                'high': round(high_price, 2),
-                'low': round(low_price, 2),
-                'close': round(close_price, 2),
-                'volume': volume
-            })
-            
-            base_price = close_price
-        
-        return candles
-    
-    def _get_mock_indicators(self) -> Dict[str, float]:
-        """Return mock technical indicators"""
-        return {
-            'rsi': 50.0,
-            'atr': 50.0,
-            'sma_20': 18000.0,
-            'sma_50': 17800.0,
-            'adx': 20.0,
-            'calculated_at': datetime.now().isoformat()
-        }
-    
     def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
         """Calculate RSI (Relative Strength Index)"""
         if len(prices) < period + 1:
