@@ -2430,8 +2430,28 @@ class AngelOneOptionsBroker:
         # Only order placement is simulated
         
         if not self.authenticated:
-            logger.warning(f"LTP_FETCH: Not authenticated | {symbol}")
-            return self._get_mock_ltp(symbol)  # Fallback to mock if not authenticated
+            # NEVER fabricate a price (2026-09-28). This used to fall back to _get_mock_ltp,
+            # which returns a made-up number from a hard-coded table (MCX -> Rs1000, PAYTM ->
+            # Rs1300). On 2026-09-28, 4 of 33 trades recorded a fabricated spot because the
+            # session briefly flipped unauthenticated during a token refresh
+            # (_handle_invalid_token_error sets authenticated=False while it re-auths).
+            # It corrupted the entry-spot log, and this same call picks the ATM strike when an
+            # alert arrives without a price (optapi: spot = broker.get_ltp(...)), so a phantom
+            # Rs1000 could have chosen the wrong contract. Same principle as the synthetic
+            # premium fix (d60ee51): no price is safer than an invented one - every caller
+            # already handles None. OPTIONS_ALLOW_MOCK_PRICES=true restores the old behaviour
+            # for offline testing only.
+            if os.getenv("OPTIONS_ALLOW_MOCK_PRICES", "False").lower() == "true":
+                logger.warning(f"LTP_FETCH: Not authenticated, returning MOCK | {symbol}")
+                return self._get_mock_ltp(symbol)
+            re_authed = False
+            try:
+                re_authed = bool(self.authenticate())
+            except Exception as _auth_err:
+                logger.warning(f"LTP_FETCH: re-auth failed | {symbol} | {_auth_err}")
+            if not re_authed:
+                logger.warning(f"LTP_FETCH: Not authenticated, NO price returned | {symbol}")
+                return None
         
         try:
             # Get rate limiter
