@@ -2759,6 +2759,7 @@ class OptionPositionMonitor:
             position.hard_sl_breach_ticks = 0
             position.hard_sl_first_breach_at = None
             position.hard_sl_last_tick_at = None
+            position.hard_sl_last_tick_sample = None
             return False
         # TICK = A NEW PRICE SAMPLE, NOT A CALL (fixed 2026-09-25). This guard is called TWICE
         # per monitoring cycle on the SAME premium -- once from check_trailing_stop_losses and
@@ -2768,15 +2769,39 @@ class OptionPositionMonitor:
         # only 2s after entry (APLAPOLLO 24.70 vs a 28.45 bid, underlying -0.068%). A second
         # call within the same cycle is now ignored, so confirmation needs a genuinely new poll.
         import time as _t_hsl
-        _min_gap = float(os.getenv("OPTIONS_HARD_SL_MIN_TICK_GAP_SECONDS", "1.0"))
         _now_mono = _t_hsl.monotonic()
-        _last_at = getattr(position, 'hard_sl_last_tick_at', None)
-        if _last_at is not None and (_now_mono - _last_at) < _min_gap:
-            _ticks = getattr(position, 'hard_sl_breach_ticks', 0)
-            logger.info(f"HARD_SL_TICK_SKIPPED: {getattr(position,'symbol','?')} | same price sample "
-                        f"({_now_mono - _last_at:.2f}s since the last counted tick < {_min_gap}s) | "
-                        f"tick stays {_ticks}/{need_ticks}")
-            return False
+        _ticks_now = getattr(position, 'hard_sl_breach_ticks', 0)
+        _sym_hsl = getattr(position, 'symbol', '?')
+        # SAMPLE IDENTITY, NOT ELAPSED TIME (fixed 2026-10-02). The 09-25 fix used a 1.0s
+        # wall-clock gap as a PROXY for "a new price sample", but the two intra-cycle calls
+        # land a median 0.25s and a measured max 0.98s apart -- i.e. the 1.0s threshold sits
+        # right in the middle of that distribution. Over 09-29..10-01, 22 ticks were skipped
+        # (<1.0s) while 6 of 36 confirmed stops had both ticks ~1.00s apart and FOUR of those
+        # fired on an identical premium: one sample counted twice, which is exactly the bug the
+        # guard exists to stop (-Rs15,030 over the three sessions, incl TCS29SEP262040PE at
+        # -15.3% on an 8% stop). The gap only looked safe because the SKIPPED log is censored
+        # at 1.0s by construction, so the >=1.0s cases were invisible.
+        # position.last_updated is stamped once per price refresh in update_market_data, so it
+        # IS the sample id: two calls in one cycle see the same value and only the first counts.
+        # A frozen fallback price still advances it, which is correct -- a new poll is a new
+        # tick; the book-sanity veto below is what rejects a bad PRINT.
+        _sample = getattr(position, 'last_updated', None)
+        _last_sample = getattr(position, 'hard_sl_last_tick_sample', None)
+        if _sample is not None:
+            if _last_sample is not None and _last_sample == _sample:
+                logger.info(f"HARD_SL_TICK_SKIPPED: {_sym_hsl} | same price sample "
+                            f"(sample {_sample} already counted) | tick stays {_ticks_now}/{need_ticks}")
+                return False
+        else:
+            # No sample stamp on this position (older persisted record): fall back to the
+            # wall-clock gap. Kept only as a fallback -- it is the weaker test.
+            _min_gap = float(os.getenv("OPTIONS_HARD_SL_MIN_TICK_GAP_SECONDS", "1.0"))
+            _last_at = getattr(position, 'hard_sl_last_tick_at', None)
+            if _last_at is not None and (_now_mono - _last_at) < _min_gap:
+                logger.info(f"HARD_SL_TICK_SKIPPED: {_sym_hsl} | no sample stamp, falling back to "
+                            f"the clock ({_now_mono - _last_at:.2f}s < {_min_gap}s) | "
+                            f"tick stays {_ticks_now}/{need_ticks}")
+                return False
         # BOOK SANITY (2026-09-25): an LTP far BELOW the live bid is not a price anyone could
         # sell at - it is a stale or odd-lot print. 42 of 351 stops since 09-15 fired on one
         # (APLAPOLLO printed 24.70 while the book was 28.45/29.35 and the underlying had moved
@@ -2818,6 +2843,7 @@ class OptionPositionMonitor:
                     )
                     return False
         position.hard_sl_last_tick_at = _now_mono
+        position.hard_sl_last_tick_sample = _sample
         _ticks = getattr(position, 'hard_sl_breach_ticks', 0) + 1
         position.hard_sl_breach_ticks = _ticks
         if _ticks < need_ticks:
