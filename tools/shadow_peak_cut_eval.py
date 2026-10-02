@@ -26,7 +26,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BOTS = [("CE_OPTIONS", "ITM"), ("CE_OPTIONS", "OTM"), ("PUT_OPTIONS", "ITM"), ("PUT_OPTIONS", "OTM")]
 LOG = ROOT / "tools" / "shadow_peak_cut_log.jsonl"
-RULES = [(2, 0.0), (2, 1.0), (2, 2.0), (3, 1.0), (3, 2.0), (5, 2.0), (5, 3.0)]
+# 0% variants at 3/4/5 min added 2026-09-30 (user): "cut anything with no gain by minute M".
+RULES = [(2, 0.0), (2, 1.0), (2, 2.0),
+         (3, 0.0), (3, 1.0), (3, 2.0),
+         (4, 0.0), (4, 1.0), (4, 2.0),
+         (5, 0.0), (5, 2.0), (5, 3.0)]
 MARKS = sorted({m for m, _ in RULES})
 
 
