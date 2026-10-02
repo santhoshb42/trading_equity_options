@@ -81,6 +81,73 @@ def _read_market_regime_snapshot() -> Optional[dict]:
     return snapshot
 
 
+# ── CE side-mute on a decisive NIFTY down-move (2026-10-02) ───────────────────
+# MEASURED, not assumed: over 51 sessions (2026-07-22..10-01), dropping CE entries taken
+# after 10:00 while NIFTY was down more than 0.5% from the 09:15 open is worth +Rs171,853
+# (18 days, 634 trades, better 13 / worse 5, still +Rs73,838 without its best three days);
+# post-fix 09-23..10-01 it is +Rs56,359. The mirror rule (mute PE on an up-move) fired on
+# only 6 of 51 days for -Rs1,717 and is NOT implemented — July-September drifted down, so
+# a strongly-up market barely occurred and that half is untested. Muting FLAT markets was
+# measured and REJECTED (-Rs25,883 post-fix): the flat book is the friction floor, not a
+# loser. Before 10:00 nothing is muted — the morning window is the profitable one.
+#
+# DEFAULT IS SHADOW: it logs the verdict and stamps it on the trade, and takes the trade
+# anyway. Flip OPTIONS_CE_MUTE_NIFTY_DOWN=ENFORCE only after the forward test (~2026-10-09).
+_CE_MUTE_MODE = os.getenv("OPTIONS_CE_MUTE_NIFTY_DOWN", "SHADOW").strip().upper()
+_CE_MUTE_BAND = abs(float(os.getenv("OPTIONS_CE_MUTE_NIFTY_BAND", "0.5")))
+_CE_MUTE_FROM = os.getenv("OPTIONS_CE_MUTE_FROM_TIME", "10:00").strip()
+
+
+def _ce_nifty_mute_verdict() -> Dict[str, Any]:
+    """Would this CE entry be muted by the NIFTY down-move rule? Never raises.
+
+    FAILS OPEN on every miss (mode OFF, SELL_THETA, no/stale snapshot, bad band or
+    time, before the cutoff): `muted` False and a reason saying why. A stalled regime
+    daemon must never silently block the whole CE book — same contract as
+    _read_market_regime_snapshot. Reads that 3s-cached snapshot, so the gate and the
+    entry_context stamp always agree on one reading.
+    """
+    out = {'ce_mute_mode': _CE_MUTE_MODE, 'ce_mute_band': _CE_MUTE_BAND,
+           'muted': False, 'reason': 'not evaluated'}
+    try:
+        if _CE_MUTE_MODE == 'OFF':
+            out['reason'] = 'rule disabled'
+            return out
+        if OptionsTradingConfig.STRATEGY_MODE == 'SELL_THETA':
+            # A CE alert in SELL_THETA SELLS a put: the opposite exposure, so the
+            # measurement above does not apply to it.
+            out['reason'] = 'SELL_THETA (opposite exposure)'
+            return out
+        try:
+            _h, _m = (int(x) for x in _CE_MUTE_FROM.split(':')[:2])
+        except Exception:
+            _h, _m = 10, 0
+        _now = datetime.now()
+        if (_now.hour * 60 + _now.minute) < (_h * 60 + _m):
+            out['reason'] = f'before {_CE_MUTE_FROM} (morning window is not muted)'
+            return out
+        snap = _read_market_regime_snapshot()
+        if not snap:
+            out['reason'] = 'no fresh NIFTY snapshot - FAIL OPEN'
+            out['ce_mute_stale'] = True
+            return out
+        nifty = snap.get('day_net_pct')
+        if nifty is None:
+            out['reason'] = 'day_net_pct missing - FAIL OPEN'
+            return out
+        nifty = float(nifty)
+        out['ce_mute_nifty_pct'] = round(nifty, 3)
+        if nifty <= -_CE_MUTE_BAND:
+            out['muted'] = True
+            out['reason'] = f'NIFTY {nifty:+.2f}% <= -{_CE_MUTE_BAND}% after {_CE_MUTE_FROM}'
+        else:
+            out['reason'] = f'NIFTY {nifty:+.2f}% is not below -{_CE_MUTE_BAND}%'
+    except Exception as _e:
+        out['muted'] = False
+        out['reason'] = f'check failed ({_e}) - FAIL OPEN'
+    return out
+
+
 def _read_market_regime(fallback: str = "NEUTRAL") -> str:
     """Read the daemon's latest NIFTY regime. Fail-open to `fallback` (caller
     passes the alert's own market_trend field, itself defaulting to NEUTRAL)
@@ -1160,8 +1227,11 @@ def _regime_entry_stamp() -> Dict[str, Any]:
     """Flatten the NIFTY regime snapshot for entry_context. Never raises, never blocks."""
     try:
         snap = _read_market_regime_snapshot()
+        _mv = _ce_nifty_mute_verdict()
         if not snap:
-            return {'regime_trend': None, 'regime_stale': True}
+            return {'regime_trend': None, 'regime_stale': True,
+                    'ce_mute_would_skip': bool(_mv.get('muted')),
+                    'ce_mute_reason': _mv.get('reason')}
         age = None
         try:
             _c = str(snap.get('computed_at') or '')
@@ -1174,6 +1244,11 @@ def _regime_entry_stamp() -> Dict[str, Any]:
             'regime_trend': snap.get('market_trend'),
             'regime_session_net_pct': snap.get('session_net_pct'),
             'regime_day_net_pct': snap.get('day_net_pct'),
+            # The CE side-mute's verdict for THIS entry, recorded whether or not it is
+            # enforced, so the forward test reads the bot's own ledger.
+            'ce_mute_would_skip': bool(_mv.get('muted')),
+            'ce_mute_reason': _mv.get('reason'),
+            'ce_mute_mode': _mv.get('ce_mute_mode'),
             # From 09:15, not 09:30: the first candle's OPEN is the pre-open auction price,
             # so the gap and the move off the open are known from the first bar of the day.
             'regime_open_net_pct': snap.get('open_net_pct'),
@@ -1905,6 +1980,27 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         }
         
         logger.debug(f"ALERT_PROCESS: MAPPED | underlying={underlying} | action={action}")
+
+        # ── CE SIDE-MUTE: decisive NIFTY down-move (see _ce_nifty_mute_verdict) ──
+        # Placed BEFORE the sentiment/chain calls so that in ENFORCE mode it also frees
+        # an alert slot during the opening burst instead of paying for round-trips first.
+        _mute = _ce_nifty_mute_verdict()
+        if _mute.get('muted'):
+            if _mute['ce_mute_mode'] == 'ENFORCE':
+                logger.warning(f"ALERT_PROCESS: CE_MUTED_NIFTY_DOWN | symbol={symbol} | {_mute['reason']}")
+                return {
+                    'symbol': symbol,
+                    'timestamp': timestamp,
+                    'status': 'rejected',
+                    'reason': f"CE muted: {_mute['reason']}",
+                    'stage': 'ce_nifty_mute',
+                    **base_context,
+                }
+            # SHADOW: record what the rule WOULD have skipped, then trade as normal. The
+            # trade's own P&L becomes the evidence, so the decision is made on the bot's
+            # record rather than on an offline reconstruction.
+            logger.warning(f"ALERT_PROCESS: CE_MUTE_SHADOW | symbol={symbol} | {_mute['reason']} "
+                           f"| would have skipped this trade (mode=SHADOW, taking it)")
         
         # NEW: Check market sentiment (PCR + OI Buildup) for entry decision
         from .market_sentiment import get_market_sentiment

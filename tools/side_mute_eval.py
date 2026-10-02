@@ -28,8 +28,14 @@ fabricated prices deleted, one-sided chain pricing, PE premium side). A rule mea
 that boundary is measured on two different systems. This logs one row per (day, band, side)
 so the post-fix record stands on its own and is never re-argued from memory.
 
+SHADOW MODE IS LIVE from 2026-10-02 (CE bots only): the bot stamps its OWN verdict on every
+entry as entry_context.ce_mute_would_skip / ce_mute_reason and takes the trade anyway. Read
+that with --logged to score the rule on the bot's ledger instead of this tool's offline
+reconstruction; the two should agree, and --logged is the one that counts.
+
 Usage:
   python3 tools/side_mute_eval.py                    # today
+  python3 tools/side_mute_eval.py --logged <day>     # score the BOT's own stamp
   python3 tools/side_mute_eval.py --since 2026-09-29
   python3 tools/side_mute_eval.py --report           # the accumulated record
 """
@@ -129,6 +135,45 @@ def evaluate(day, series):
     return out
 
 
+def logged(days):
+    """Score the rule on the bot's own stamp (shadow mode), not on our reconstruction."""
+    print("\nBOT'S OWN SHADOW VERDICT (entry_context.ce_mute_would_skip, CE bots only)")
+    print("  the rule is ENFORCED only when ce_mute_mode says ENFORCE; otherwise these traded.\n")
+    grand_skip = grand_kept = 0.0
+    for day in days:
+        rows = []
+        for base, side in BOTS:
+            if side != "CE":
+                continue
+            try:
+                recs = json.load(open(ROOT / base / "data" / "option_pnl_history.json"))
+            except Exception:
+                continue
+            for r in recs:
+                if not isinstance(r, dict) or str(r.get("entry_time") or "")[:10] != day:
+                    continue
+                ec = r.get("entry_context") or {}
+                if "ce_mute_would_skip" not in ec:
+                    continue
+                rows.append((bool(ec["ce_mute_would_skip"]), float(r.get("pnl") or 0),
+                             ec.get("ce_mute_mode"), ec.get("ce_mute_reason")))
+        if not rows:
+            print(f"  {day}: no stamped CE trades (bot not restarted yet, or no trades)")
+            continue
+        sk = [r for r in rows if r[0]]
+        kp = [r for r in rows if not r[0]]
+        grand_skip += sum(r[1] for r in sk)
+        grand_kept += sum(r[1] for r in kp)
+        mode = rows[0][2]
+        print(f"  {day}  mode={mode}  stamped {len(rows)} CE trades")
+        print(f"     would-skip : n={len(sk):>3}  Rs{sum(r[1] for r in sk):>9,.0f}"
+              f"  ({sum(r[1] for r in sk)/max(len(sk),1):>+7,.0f}/tr)  <- the rule's claim")
+        print(f"     kept       : n={len(kp):>3}  Rs{sum(r[1] for r in kp):>9,.0f}"
+              f"  ({sum(r[1] for r in kp)/max(len(kp),1):>+7,.0f}/tr)")
+    print(f"\n  TOTAL would-skip Rs{grand_skip:,.0f} | kept Rs{grand_kept:,.0f}")
+    print(f"  Rule ships only if would-skip stays clearly NEGATIVE across sessions.\n")
+
+
 def report():
     if not LOG.exists():
         print("no log yet")
@@ -165,6 +210,9 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--report" in sys.argv:
         report()
+        return
+    if "--logged" in sys.argv:
+        logged(args or [datetime.date.today().isoformat()])
         return
     if "--since" in sys.argv:
         start = datetime.date.fromisoformat(args[0])
