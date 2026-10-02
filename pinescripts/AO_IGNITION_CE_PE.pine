@@ -1,6 +1,6 @@
 //@version=5
 // ============================================================================
-// AO Ignition — CE / PE  (zero-cross + pullback, multi-factor confirmed)  v19
+// AO Ignition — CE / PE  (zero-cross + pullback, multi-factor confirmed)  v68
 // ----------------------------------------------------------------------------
 // WHY: the VWAP-band break is a LATE signal — by the time price closes 2 SD above VWAP the move is
 // already extended, so we buy the FADE. The AO zero-line cross is the IGNITION of a new leg (the

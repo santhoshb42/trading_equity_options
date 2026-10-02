@@ -56,6 +56,7 @@ for name,bd in BOTS:
             label=a.get("tv_setup_label"), bars_since=f("bars_since_cross"),
             vwap_z=f("vwap_z"), vwap_slope_pct=f("vwap_slope_pct"), vwap_dist_pct=f("vwap_dist_pct"),
             day_change_pct=f("day_change_pct"), ao_ratio=f("ao_ratio"), ao_force=f("ao_force"),
+            ao_delta=f("ao_delta"), ao=f("ao"),   # ao_delta IS TradingView's AO colour: >0 green, <0 red
             adx=f("adx"), adx_slope=f("adx_slope"), rsi=f("rsi_value"), rsi_slope=f("rsi_slope"),
             macd_slope=f("macd_slope"), vol_ratio=f("vol_ratio"), atr_pct=f("atr_pct")))
 os.makedirs("/tmp/an",exist_ok=True)
