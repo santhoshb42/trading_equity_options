@@ -11,6 +11,14 @@ MEASURED OVER 51 SESSIONS (2026-07-22..10-01) before any forward test:
   +/-0.5%: Rs117,517 -> Rs287,653 (+170,136), better 16 days / worse 8, worst day improves
            -79,675 -> -62,682, still +72,121 after removing its best THREE days.
   +/-0.3%: +70,754 but acts on 42 of 51 days and is -34,209 without its best three — too tight.
+  FLAT-MUTE ("stop both sides after 10:00 when |NIFTY| < band", user 2026-10-02): REJECTED on
+  measurement, kept here only as a forward-test control. 51 sessions = +Rs108,931 but it acts on
+  43 of 51 days, is -Rs27,115 without its best THREE days, does not change the positive-day count
+  (24) or the worst day (-79,675), and post-fix (09-23..10-01) it is -Rs79,834, better 1 / worse 4.
+  The flat after-10:00 book is the friction floor (-Rs23/tr over 4,674 trades), not a loser, and
+  since the fixes it is the PROFITABLE cell (CE +Rs51/tr, PE +Rs312/tr) while CE-against-trend is
+  -Rs378/tr. Muting flat drags the directional rule from +59,073 to -20,761.
+
   THE WHOLE RESULT IS THE CE HALF: muting CE on 18 strong down-days = +Rs171,853 over 634
   trades; muting PE fired on only 6 up-days for -Rs1,717. July-September drifted down, so the
   PE half is effectively untested and must NOT be shipped on this evidence.
@@ -39,6 +47,8 @@ REGIME = ROOT / "tools" / "market_regime_history.jsonl"
 LOG = ROOT / "tools" / "side_mute_log.jsonl"
 BANDS = [0.3, 0.5, 0.7]
 GATE_FROM_MIN = 10 * 60          # the rule only applies after 10:00
+# "flat" is the rejected control: mute BOTH sides when the index has no direction at all.
+VARIANTS = ("CE", "PE", "both", "flat")
 
 
 def nifty_series():
@@ -94,13 +104,17 @@ def evaluate(day, series):
     book = sum(t["pnl"] for t in rows)
     out = []
     for band in BANDS:
-        for which in ("CE", "PE", "both"):
+        for which in VARIANTS:
             muted = []
             for t in rows:
                 if t["minute"] < GATE_FROM_MIN:
                     continue
                 nf = at(series, day, t["minute"])
                 if nf is None:
+                    continue
+                if which == "flat":
+                    if abs(nf) < band:
+                        muted.append(t)
                     continue
                 wrong = (t["side"] == "CE" and nf < -band) or (t["side"] == "PE" and nf > band)
                 if wrong and which in (t["side"], "both"):
@@ -129,7 +143,7 @@ def report():
     print("Ship only what is positive overall AND on most of the days it acts.\n")
     print(f"  {'band':>6} {'mutes':>6} {'acted':>6} {'muted':>6} {'delta':>12} {'better':>7} {'worse':>6}")
     for band in BANDS:
-        for which in ("CE", "PE", "both"):
+        for which in VARIANTS:
             sel = [r for r in rows if r["band"] == band and r["mutes"] == which]
             if not sel:
                 continue
