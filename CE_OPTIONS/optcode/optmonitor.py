@@ -1561,6 +1561,21 @@ class OptionPositionMonitor:
                 logger.warning(f"POSITION_CLOSE: INNER_NOT_FOUND | {symbol}")
                 return None
 
+            # ── THE EXIT PRICE WE DECIDED ON, captured BEFORE the broker can overwrite it ──
+            # (2026-10-03) In LIVE, exit_premium is replaced by the broker's average_price further
+            # down, and the slippage meta was then built FROM that same value, so intended_exit
+            # equalled the fill and LIVE exit slippage always measured as exactly zero. Worse, a
+            # broker-fired SL sets broker_managed_exit and skips the meta entirely - so the most
+            # expensive exit we have (MAZDOCK: SL trigger Rs92.20, fill Rs60.84, -34%) recorded
+            # nothing at all. Entry slippage was already captured properly (BUY_FILL_SLIPPAGE);
+            # the exit was the blind side, and the exit is where the money goes.
+            # This records only. It changes no price and no decision.
+            _decided_exit_px = float(exit_premium or 0.0)
+            try:
+                _dec_book = self.broker.get_quote_depth(symbol) if self.broker else None
+            except Exception:
+                _dec_book = None
+
             # FIX 3 (2026-08-08): if a PRIOR cover attempt already placed an exit order we couldn't
             # confirm, reconcile it BEFORE placing another. A second cover on an already-filled order
             # reverses the position (opens the opposite side). Only for manual LIVE exits.
@@ -1800,6 +1815,38 @@ class OptionPositionMonitor:
                     symbol=symbol,
                     **exit_slippage_meta,
                 )
+
+            # ── LIVE EXIT FILL vs THE PRICE WE DECIDED ON (records only) ──
+            # Logged for EVERY live exit, including a broker-managed SL fill, because that is the
+            # one we could never see. Paired with BUY_FILL_SLIPPAGE this gives the full round-trip
+            # cost of a real trade - the number the LIVE pilot exists to produce.
+            if OptionsTradingConfig.TRADING_MODE == "LIVE" and _decided_exit_px > 0:
+                try:
+                    _fill_px = float(exit_premium or 0.0)
+                    _slip_pct = ((_fill_px - _decided_exit_px) / _decided_exit_px * 100.0)
+                    _is_short_x = getattr(position, 'action', 'BUY') == 'SELL'
+                    # adverse = paid MORE to cover a short, or received LESS closing a long
+                    _adverse = (_slip_pct > 0) if _is_short_x else (_slip_pct < 0)
+                    _bid_x, _ask_x = (_dec_book if _dec_book else (0.0, 0.0))
+                    _rupees = (_fill_px - _decided_exit_px) * float(getattr(position, 'quantity', 0) or 0)
+                    logger.warning(
+                        f"EXIT_FILL_SLIPPAGE: {symbol} | reason={exit_reason} | "
+                        f"decided=Rs{_decided_exit_px:.2f} | fill=Rs{_fill_px:.2f} | "
+                        f"slippage={_slip_pct:+.2f}% ({'ADVERSE' if _adverse else 'favourable'}) | "
+                        f"Rs{_rupees:+,.0f} | book_at_decision={_bid_x:.2f}/{_ask_x:.2f} | "
+                        f"broker_managed={broker_managed_exit}"
+                    )
+                    log_event("EXIT_FILL_SLIPPAGE",
+                              f"Real exit fill vs decided price for {symbol}",
+                              symbol=symbol, exit_reason=exit_reason,
+                              decided_exit=round(_decided_exit_px, 2), fill=round(_fill_px, 2),
+                              slippage_pct=round(_slip_pct, 3), adverse=bool(_adverse),
+                              rupees=round(_rupees, 2),
+                              bid_at_decision=round(_bid_x, 2), ask_at_decision=round(_ask_x, 2),
+                              broker_managed=bool(broker_managed_exit),
+                              quantity=getattr(position, 'quantity', None))
+                except Exception as _xs:
+                    logger.warning(f"EXIT_FILL_SLIPPAGE: capture failed | {symbol} | {_xs}")
 
             # Now that the SELL is placed/filled, capture accurate live greeks for ML (off the
             # critical path). Best-effort — falls back to the cheap greeks set above on failure.

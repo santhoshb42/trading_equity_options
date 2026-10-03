@@ -50,6 +50,25 @@ check("no-real-book gate present (c9cc198)", "NO_REAL_BOOK_REJECTED" in api,
       "blocks a MARKET order into a fabricated ltp*0.98/1.02 book - the MAZDOCK -39% case")
 check("HARD_SL ticks keyed on the price sample (70eb053)", "hard_sl_last_tick_sample" in mon,
       "a wall-clock proxy let one print fire a stop; 4 of 36 stops did so over 09-29..10-01")
+check("LIVE exit slippage is captured", "EXIT_FILL_SLIPPAGE" in mon,
+      "without this the pilot measures NOTHING on exits: exit_premium is overwritten by the "
+      "broker fill and intended_exit was then read from that same value, so slippage logged as "
+      "exactly 0.00 - and a broker-fired SL skipped the record entirely")
+
+print("\n=== 1b. is slippage CONTROLLED or just accepted? ===")
+_et = os.environ.get("OPTIONS_ENTRY_ORDER_TYPE")
+e_pilot = env_of(PILOT) or {}
+_etype = e_pilot.get("OPTIONS_ENTRY_ORDER_TYPE", "MARKET")
+check(f"entry order type = {_etype}", _etype == "LIMIT",
+      "MARKET means we accept whatever the book gives - there is no price to tune. LIMIT at "
+      "ask+1 tick BOUNDS the entry cost; an unfilled order is cancelled after 30s and the entry "
+      "is simply skipped (no position, no orphan). Set OPTIONS_ENTRY_ORDER_TYPE=LIMIT",
+      fatal=False)
+check("exit order type", False,
+      "exit is hard-coded MARKET and the stop is STOPLOSS_MARKET - both uncontrolled by design. "
+      "Leave it: not getting out is worse than slipping. At 1 lot the rupee damage is small and "
+      "EXIT_FILL_SLIPPAGE now measures it. Revisit only once there is real data.",
+      fatal=False)
 
 print("\n=== 2. live positions and mode ===")
 for svc, d in BOTS.items():
