@@ -2944,6 +2944,41 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         # else we'd book a phantom cost basis (and in LIVE set the SL off a fake price). A real LTP
         # (e.g. GODREJPROP ₹71.25 vs strike*0.01=₹19, or PREMIERENE refreshed to ₹38) is far from the
         # fabricated value, so this only blocks truly-unpriceable contracts.
+        # ── NO REAL BOOK -> NO TRADE (2026-10-03) ───────────────────────────────────────────
+        # A synthetic spread means the chain had NO depth and fell back to ltp*0.98 / ltp*1.02.
+        # That fabricated book is always EXACTLY 4.00% wide, so it can never fail the 5% spread
+        # gate -- REJECTED_LIQUIDITY fired zero times in three sessions -- and the volume/OI check
+        # only caps to 1 lot. MAZDOCK27OCT262080PE on 2026-10-01 is the whole failure: volume=0
+        # oi=0, fake book 97.95/101.95, bought at 99.95, and 38s later the REAL book was
+        # 53.85/68.20 (a 21% spread) for -39.3% / -Rs8,944. The sister bot bought the 2100PE --
+        # a HIGHER strike, so necessarily DEARER -- at 68.20 on a real 1.18% book, which proves
+        # the 99.95 was a stale print.
+        # In LIVE this is a MARKET order into a book nobody is quoting, and every SL, trail and
+        # P&L is then derived from a price that never traded.
+        # WHY THE SYNTHETIC TEST AND NOT volume/OI: measured over 09-29..10-01 the 93
+        # synthetic-book contracts are a strict SUBSET of the 98 with volume=0 and oi=0 -- the
+        # fake quote appears precisely BECAUSE there is no book. Those 154 trades earned
+        # Rs9/trade (the friction floor) against Rs284/trade for real-book entries, so blocking
+        # them costs nothing. The 5 extra contracts that had no volume but a REAL book made
+        # +Rs10,523, so gating on volume/OI would throw away priceable trades.
+        # Applies in PAPER too, deliberately: PAPER is the forecast for LIVE and must not count
+        # trades LIVE should never place. Off switch OPTIONS_REQUIRE_REAL_BOOK=false.
+        if spread_is_synthetic and os.getenv("OPTIONS_REQUIRE_REAL_BOOK", "true").lower() == "true":
+            logger.warning(
+                f"ALERT_PROCESS: NO_REAL_BOOK_REJECTED | {selected_contract.symbol} | "
+                f"bid=₹{live_bid:.2f} ask=₹{live_ask:.2f} are ltp*0.98/ltp*1.02 of ₹{_ltp_ref:.2f} "
+                f"— the chain had no depth, so this spread is fabricated and the contract cannot be "
+                f"priced; volume={live_volume:,} oi={live_oi:,}"
+            )
+            return {
+                'symbol': symbol,
+                'timestamp': timestamp,
+                'status': 'rejected',
+                'reason': 'No real order book (synthetic bid/ask) — contract cannot be priced',
+                'stage': 'no_real_book',
+                **contract_context,
+            }
+
         _strike_pts = float(getattr(selected_contract, 'strike', 0) or 0)
         _fab_ltp = max(1.0, round(_strike_pts * 0.01, 2)) if _strike_pts > 0 else -1.0
         _ltp_is_fabricated = _fab_ltp > 0 and abs(_ltp_ref - _fab_ltp) < max(0.05, _fab_ltp * 0.02)
