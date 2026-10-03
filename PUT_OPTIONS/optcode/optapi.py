@@ -2927,6 +2927,23 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                     max_lots = max(_avail)
                 else:  # 'min' = legacy OI&volume intersection
                     max_lots = min(_avail)
+            # ── HARD LOT CAP for a LIVE pilot (2026-10-03) ───────────────────────────────
+            # OPTIONS_MAX_LOTS_PER_TRADE pins every entry to N lots regardless of premium.
+            # WHY NOT just lower OPTIONS_CAP_PER_TRADE: the budget is a RUPEE cap, so a cheap
+            # contract still gets several lots while a contract whose single lot costs more than
+            # the budget gets ZERO and is rejected outright. That biases the sample toward cheap
+            # options, which carry the widest percentage spreads - exactly the thing the pilot is
+            # trying to measure. A lot cap keeps the budget high enough that nothing is rejected
+            # for affordability while every trade is the same size. 0 = off (normal sizing).
+            _pilot_max_lots = int(os.getenv("OPTIONS_MAX_LOTS_PER_TRADE", "0") or 0)
+            if _pilot_max_lots > 0:
+                _before = max_lots
+                max_lots = _pilot_max_lots if not max_lots else min(max_lots, _pilot_max_lots)
+                logger.info(
+                    f"ALERT_PROCESS: PILOT_LOT_CAP | symbol={symbol} | contract={selected_contract.symbol} "
+                    f"| liquidity_lots={_before} | pilot_cap={_pilot_max_lots} | using={max_lots} lot(s)"
+                )
+
             if max_lots:
                 lot_cap_budget = max_lots * lot_size * pricing_premium
                 if lot_cap_budget < effective_budget:

@@ -17,10 +17,18 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PILOT = "pe-itm"                       # only bot positive at real fills, 6/7 post-fix days up
+PILOT = ["pe-itm", "pe-otm"]           # both PE bots: the two that are positive at real fills
+                                       # (PE-ITM +Rs156/tr, PE-OTM +Rs55/tr once the post-fix
+                                       # book is re-priced at the real bid/ask). CE is negative
+                                       # at real fills on both modes, so it stays PAPER.
 BOTS = {"ce-itm": "CE_OPTIONS/ITM", "ce-otm": "CE_OPTIONS/OTM",
         "pe-itm": "PUT_OPTIONS/ITM", "pe-otm": "PUT_OPTIONS/OTM"}
-MIN_FUNDS = 25000.0                    # a few 1-lot PE trades plus headroom
+# A single 1-lot PE trade costs a MEDIAN of Rs17,050 (191 real contracts, 09-30 & 10-01;
+# min Rs6,435, p90 Rs25,938, max Rs29,835). Both PE bots usually take the same signal, so one
+# alert consumes TWO lots ~ Rs34,100. Rs50,000 therefore buys only ~1-2 concurrent signal pairs,
+# which still produces plenty of fills because positions recycle within minutes - but below that
+# most alerts will simply be rejected NO_FUNDS and the sample will be thin.
+MIN_FUNDS = 50000.0
 
 ok = True
 def check(label, passed, detail="", fatal=True):
@@ -56,14 +64,14 @@ check("LIVE exit slippage is captured", "EXIT_FILL_SLIPPAGE" in mon,
       "exactly 0.00 - and a broker-fired SL skipped the record entirely")
 
 print("\n=== 1b. is slippage CONTROLLED or just accepted? ===")
-_et = os.environ.get("OPTIONS_ENTRY_ORDER_TYPE")
-e_pilot = env_of(PILOT) or {}
+e_pilot = env_of(PILOT[0]) or {}
 _etype = e_pilot.get("OPTIONS_ENTRY_ORDER_TYPE", "MARKET")
-check(f"entry order type = {_etype}", _etype == "LIMIT",
-      "MARKET means we accept whatever the book gives - there is no price to tune. LIMIT at "
-      "ask+1 tick BOUNDS the entry cost; an unfilled order is cancelled after 30s and the entry "
-      "is simply skipped (no position, no orphan). Set OPTIONS_ENTRY_ORDER_TYPE=LIMIT",
-      fatal=False)
+check(f"entry order type = {_etype}", _etype == "MARKET",
+      "MARKET is DELIBERATE. A LIMIT at ask+1 tick books the entry at the ASK while the position "
+      "is then marked at LTP/bid, so the trade opens down by the spread: median 1.90% against an "
+      "8% stop is 24% of the way to the stop before it breathes. See "
+      "project-instant-hard-sl-history - 06-26..06-30 ran 13-20% of trades stopping inside two "
+      "minutes. MARKET is also the honest thing to measure.")
 check("exit order type", False,
       "exit is hard-coded MARKET and the stop is STOPLOSS_MARKET - both uncontrolled by design. "
       "Leave it: not getting out is worse than slipping. At 1 lot the rupee damage is small and "
@@ -77,7 +85,7 @@ for svc, d in BOTS.items():
         check(f"{svc} running", False, "service is not up")
         continue
     mode = e.get("TRADING_MODE", "?")
-    want = "LIVE" if svc == PILOT else "PAPER"
+    want = "LIVE" if svc in PILOT else "PAPER"
     check(f"{svc} TRADING_MODE={mode}", True, f"(expected {want} once armed)", fatal=False)
     try:
         n = len(json.loads((ROOT / d / "data/option_positions.json").read_text()).get("positions") or [])
@@ -100,14 +108,28 @@ except Exception as e:
     check("funds readable", False, f"{e}")
 
 print("\n=== 4. pilot sizing ===")
-itm = (ROOT / "PUT_OPTIONS/tools/.env.itm")
-txt = itm.read_text() if itm.exists() else ""
-check("TRADING_MODE set in .env.itm, not the shared .env",
-      "TRADING_MODE" in txt,
-      "the shared .env is read by BOTH PE bots - setting it there arms pe-otm as well",
+# Both PE bots are the pilot, so the SHARED PUT env is the right place - it is read by pe-itm
+# and pe-otm and by nothing else. The trap only bites if you want ONE PE bot live: then it must
+# go in .env.<mode>, which loads second with override.
+shared = (ROOT / "PUT_OPTIONS/tools/.env")
+txt = shared.read_text() if shared.exists() else ""
+_itm = (ROOT / "PUT_OPTIONS/tools/.env.itm")
+_otm = (ROOT / "PUT_OPTIONS/tools/.env.otm")
+_stray = [f.name for f in (_itm, _otm)
+          if f.exists() and "TRADING_MODE" in f.read_text()]
+check("no stray TRADING_MODE in a per-mode env file", not _stray,
+      (f"{_stray} also sets it, and .env.<mode> loads AFTER .env with override - it would win "
+       f"silently. Remove it, or arm only through the file you intend.") if _stray else "",
+      fatal=bool(_stray))
+check("CE bots untouched by the PUT env", True,
+      "CE reads CE_OPTIONS/tools/.env, so arming the PUT env cannot take a CE bot live",
       fatal=False)
-check("OPTIONS_CAP_PER_TRADE pinned for the pilot", "OPTIONS_CAP_PER_TRADE" in txt,
-      "budget is the only size lever; there is no max-lots setting. Rs30,000 buys 3-4 PE lots",
+_lots = (env_of(PILOT[0]) or {}).get("OPTIONS_MAX_LOTS_PER_TRADE", "0")
+check(f"OPTIONS_MAX_LOTS_PER_TRADE = {_lots}", _lots not in ("0", "", None),
+      "pins every entry to N lots whatever the premium. Do NOT use OPTIONS_CAP_PER_TRADE for "
+      "this: a rupee cap gives a cheap contract several lots and REJECTS any contract whose one "
+      "lot exceeds the budget, biasing the sample toward cheap options - which carry the widest "
+      "percentage spreads, i.e. the very thing being measured. Leave the budget at Rs30,000.",
       fatal=False)
 
 print("\n" + ("READY to arm." if ok else "NOT READY - clear the FAILs above first."))
@@ -115,22 +137,28 @@ if "--arm" in sys.argv:
     print(f"""
 === commands to arm {PILOT} ONLY (run them yourself; this script never does) ===
 
-  echo "TRADING_MODE=LIVE"            >> {ROOT}/PUT_OPTIONS/tools/.env.itm
-  echo "OPTIONS_CAP_PER_TRADE=10000"  >> {ROOT}/PUT_OPTIONS/tools/.env.itm
-  systemctl restart {PILOT}
+  # Both PE bots go live, so set it in the SHARED PUT env - it is read by pe-itm and pe-otm
+  # and by nothing else (the CE bots read CE_OPTIONS/tools/.env).
+  echo "TRADING_MODE=LIVE"             >> {ROOT}/PUT_OPTIONS/tools/.env
+  echo "OPTIONS_MAX_LOTS_PER_TRADE=1"  >> {ROOT}/PUT_OPTIONS/tools/.env
+  systemctl restart pe-itm pe-otm
 
 === then CONFIRM from /proc, because .env lies and .env.itm overrides it ===
 
   python3 {__file__}
 
-  Expect exactly one LIVE: {PILOT}. If any other bot reads LIVE, stop and revert:
-  sed -i '/^TRADING_MODE=LIVE/d' {ROOT}/PUT_OPTIONS/tools/.env.itm && systemctl restart {PILOT}
+  Expect LIVE on pe-itm and pe-otm, PAPER on ce-itm and ce-otm. To revert:
+  sed -i '/^TRADING_MODE=LIVE/d;/^OPTIONS_MAX_LOTS_PER_TRADE=1/d' {ROOT}/PUT_OPTIONS/tools/.env
+  systemctl restart pe-itm pe-otm
 
 === what to read after the first session ===
 
-  grep BUY_FILL_SLIPPAGE   {ROOT}/PUT_OPTIONS/ITM/logs/$(date +%%F)/optbot.log
-  grep BUY_CONFIRMATION    {ROOT}/PUT_OPTIONS/ITM/logs/$(date +%%F)/optbot.log
-  grep NO_REAL_BOOK_REJECTED {ROOT}/PUT_OPTIONS/ITM/logs/$(date +%%F)/optbot.log
+  D=$(date +%F)
+  grep -h BUY_FILL_SLIPPAGE    {ROOT}/PUT_OPTIONS/{{ITM,OTM}}/logs/$D/optbot.log
+  grep -h EXIT_FILL_SLIPPAGE   {ROOT}/PUT_OPTIONS/{{ITM,OTM}}/logs/$D/optbot.log
+  grep -h PILOT_LOT_CAP        {ROOT}/PUT_OPTIONS/{{ITM,OTM}}/logs/$D/optbot.log
+  grep -h NO_FUNDS             {ROOT}/PUT_OPTIONS/{{ITM,OTM}}/logs/$D/optbot.log
+  grep -h NO_REAL_BOOK_REJECTED {ROOT}/PUT_OPTIONS/{{ITM,OTM}}/logs/$D/optbot.log
 
   BUY_FILL_SLIPPAGE is the whole point: real fill vs the price we decided on. That one number
   settles whether the PAPER edge is real. 07-03 benchmark: -Rs182/trade real vs +Rs241 claimed.
