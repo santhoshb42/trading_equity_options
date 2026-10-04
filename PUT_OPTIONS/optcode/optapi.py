@@ -3358,6 +3358,11 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
         _entry_ideal_ltp = float(selected_contract.ltp or pricing_premium or 0.0)
         _real_ask = float(live_ask or 0.0)
         _real_bid = float(live_bid or 0.0)
+        # Carried out of the LIVE confirmation block above so they reach the PERMANENT trade
+        # record, not just the 7-day logs: what we ASKED for, how long the fill took, and the
+        # order id to tie a row back to the broker's own contract note.
+        _live_order_price = locals().get('pricing_premium')
+        _live_confirm_ms = locals().get('_buy_confirm_ms')
         entry_slippage_meta = {
             'ideal_ltp': round(_entry_ideal_ltp, 2),
             'real_bid': round(_real_bid, 2),
@@ -3465,6 +3470,13 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
             round((actual_entry_premium - _entry_ideal_ltp) / _entry_ideal_ltp * 100, 3)
             if _entry_ideal_ltp > 0 else 0.0
         )
+        if OptionsTradingConfig.TRADING_MODE == "LIVE":
+            entry_slippage_meta['live_order_price'] = (
+                round(float(_live_order_price), 2) if _live_order_price else None)
+            entry_slippage_meta['live_confirm_ms'] = (
+                round(float(_live_confirm_ms)) if _live_confirm_ms is not None else None)
+            entry_slippage_meta['live_order_id'] = order_id
+            entry_slippage_meta['live_quantity'] = quantity
         try:
             if isinstance(entry_context, dict):
                 entry_context['entry_slippage'] = entry_slippage_meta

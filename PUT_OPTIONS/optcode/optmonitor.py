@@ -1824,6 +1824,23 @@ class OptionPositionMonitor:
                         f"Rs{_rupees:+,.0f} | book_at_decision={_bid_x:.2f}/{_ask_x:.2f} | "
                         f"broker_managed={broker_managed_exit}"
                     )
+                    # PERSIST IT. The logs that carry EXIT_FILL_SLIPPAGE are deleted after 7
+                    # days by the Sunday cron, and the trade record is the only permanent store.
+                    # exit_slippage_meta is None on a broker-managed SL fill (the model is skipped
+                    # for those), which is exactly the exit we most need to measure - so create it.
+                    if exit_slippage_meta is None:
+                        exit_slippage_meta = {'mode': 'LIVE', 'applied': False, 'reason': exit_reason}
+                    exit_slippage_meta.update({
+                        'live_decided_exit': round(_decided_exit_px, 2),
+                        'live_fill': round(_fill_px, 2),
+                        'live_slippage_pct': round(_slip_pct, 3),
+                        'live_adverse': bool(_adverse),
+                        'live_rupees': round(_rupees, 2),
+                        'live_bid_at_decision': round(_bid_x, 2),
+                        'live_ask_at_decision': round(_ask_x, 2),
+                        'live_broker_managed': bool(broker_managed_exit),
+                        'live_quantity': getattr(position, 'quantity', None),
+                    })
                     log_event("EXIT_FILL_SLIPPAGE",
                               f"Real exit fill vs decided price for {symbol}",
                               symbol=symbol, exit_reason=exit_reason,
