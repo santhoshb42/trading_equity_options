@@ -28,7 +28,8 @@ BOTS = {"ce-itm": "CE_OPTIONS/ITM", "ce-otm": "CE_OPTIONS/OTM",
 # alert consumes TWO lots ~ Rs34,100. Rs50,000 therefore buys only ~1-2 concurrent signal pairs,
 # which still produces plenty of fills because positions recycle within minutes - but below that
 # most alerts will simply be rejected NO_FUNDS and the sample will be thin.
-MIN_FUNDS = 50000.0
+MIN_FUNDS = 18000.0          # HARD floor: one median 1-lot PE trade (Rs17,050) + buffer.
+COMFORT_FUNDS = 50000.0      # below this, expect frequent NO_FUNDS rejections
 
 ok = True
 def check(label, passed, detail="", fatal=True):
@@ -103,7 +104,12 @@ try:
     f = get_options_broker().get_funds_snapshot() or {}
     cash = float(f.get("available_cash") or f.get("net") or 0)
     check(f"available cash Rs{cash:,.2f}", cash >= MIN_FUNDS,
-          f"need at least Rs{MIN_FUNDS:,.0f} - a rejected order teaches us nothing about fills")
+          f"below Rs{MIN_FUNDS:,.0f} not even one median lot (Rs17,050) is affordable")
+    check(f"funding headroom", cash >= COMFORT_FUNDS,
+          f"Rs{cash:,.0f} holds ~{cash/17050:.1f} concurrent 1-lot positions. Both PE bots usually "
+          f"take the SAME signal (~Rs34,100 a pair), so expect NO_FUNDS rejections once one pair "
+          f"is open - that is the funds guard working, not a fault. Fills still accumulate "
+          f"because positions recycle in minutes.", fatal=False)
 except Exception as e:
     check("funds readable", False, f"{e}")
 
