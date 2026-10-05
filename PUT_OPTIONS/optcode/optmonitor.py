@@ -1811,6 +1811,24 @@ class OptionPositionMonitor:
             if OptionsTradingConfig.TRADING_MODE == "LIVE" and _decided_exit_px > 0:
                 try:
                     _fill_px = float(exit_premium or 0.0)
+                    # A BROKER-FIRED STOP IS PRICED OFF ITS TRIGGER, NOT OFF THE FILL
+                    # (2026-10-05). For broker_managed_exit the caller hands us exit_premium
+                    # ALREADY SET to the broker's average_price, so _decided_exit_px captured at
+                    # the top of this function is the fill itself and every stop logged exactly
+                    # 0.00% slippage - the one exit we most need to measure, recording nothing.
+                    # On 10-05 the six stops really slipped -2.30%, -2.11%, -1.34%, -0.30%,
+                    # -0.13% and +0.19%, worth -Rs976, all invisible. The price the DECISION was
+                    # made at is the trigger we set, so use that.
+                    _dec_px = _decided_exit_px
+                    if broker_managed_exit:
+                        _trig = getattr(position, 'trial_sl_price', None) or getattr(position, 'hard_sl_price', None)
+                        try:
+                            _trig = float(_trig or 0.0)
+                        except Exception:
+                            _trig = 0.0
+                        if _trig > 0:
+                            _dec_px = _trig
+                    _decided_exit_px = _dec_px
                     _slip_pct = ((_fill_px - _decided_exit_px) / _decided_exit_px * 100.0)
                     _is_short_x = getattr(position, 'action', 'BUY') == 'SELL'
                     # adverse = paid MORE to cover a short, or received LESS closing a long
@@ -4855,19 +4873,46 @@ class OptionPositionMonitor:
                 tracker = self._ltp_freeze = {}
             now = time.time()
             prev = tracker.get(symbol)
+
+            # THE BOOK, FROM CACHE - NOT AN API CALL (2026-10-05). This used to call
+            # get_market_data(symbol) for ONE symbol, inside the per-position loop, every cycle.
+            # On 10-05 that was 4,723 single-symbol /quote calls across the four bots: an option
+            # that has not traded for 20s is completely normal, so most positions tripped it at
+            # once, serially, against a 10/s quote limit. 473 "exceeding access rate" rejections
+            # followed and the monitor cycle blew out to 75s, 95s, 124s and 274s during the 09:17
+            # burst. Nothing is checked during a stall, so EARLY_PEAK_CUT fired at 7-8min instead
+            # of 5 (42 of 108 cuts late, median -5.95% at 7min vs -2.85% on time).
+            # get_quote_depth is a pure cache read of the depth the monitor's own bulk quote
+            # already recorded (OPTIONS_BULK_QUOTE_MODE=FULL), so this costs nothing.
+            _depth = self.broker.get_quote_depth(symbol) if self.broker else None
+            bid, ask = _depth if _depth else (0.0, 0.0)
+
             if prev is None or abs(current_ltp - prev[0]) > 1e-9:
-                tracker[symbol] = (current_ltp, now)   # LTP printed a new value -> trust it
+                # A NEW PRINT. This used to be trusted unconditionally - "LTP printed a new value
+                # -> trust it" - which is backwards: a frozen price is inert, while a wild new
+                # print is exactly what poisons highest_premium and ratchets the trail onto a
+                # price nobody can trade at. GODFRYPHLP27OCT261880CE on 2026-10-05 printed
+                # Rs118.10 while the book was 60.05/75.50; the trail locked to Rs113.22 and the
+                # stop then fired against the real Rs68.38 for -Rs3,873, booked as a +45% peak
+                # that never existed. Reject a print far outside the live book and keep the last
+                # believable premium; the tracker is deliberately NOT advanced, so a print that
+                # turns out to be real is accepted as soon as the book catches up to it.
+                _tol = float(os.getenv("OPTIONS_PHANTOM_LTP_TOLERANCE_PCT", "25")) / 100.0
+                if _tol > 0 and bid > 0 and ask > 0 and prev is not None:
+                    if current_ltp > ask * (1 + _tol) or current_ltp < bid * (1 - _tol):
+                        logger.warning(
+                            f"PHANTOM_LTP_IGNORED: {symbol} | print Rs{current_ltp:.2f} is outside "
+                            f"the book {bid:.2f}/{ask:.2f} by >{_tol*100:.0f}% | keeping "
+                            f"Rs{prev[0]:.2f} - not letting it set the peak or move the trail"
+                        )
+                        return prev[0]
+                tracker[symbol] = (current_ltp, now)
                 return current_ltp
             frozen_secs = now - prev[1]
             if frozen_secs < OptionsTradingConfig.STALE_QUOTE_SECONDS:
                 return current_ltp                     # frozen, but not long enough yet
-            md = self.broker.get_market_data(symbol, "NFO") if self.broker else None
-            if not md:
-                return current_ltp
-            bid = md.get("bid") or 0.0
-            ask = md.get("ask") or 0.0
             if bid <= 0 or ask <= 0:
-                return current_ltp
+                return current_ltp                     # no cached book this cycle - fail open
             mark = (bid + ask) / 2.0
             div_pct = (mark - current_ltp) / current_ltp * 100.0 if current_ltp else 0.0
             # Direction-aware (2026-08-08): the ADVERSE move differs by side — a LONG is hurt when the
