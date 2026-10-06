@@ -3567,21 +3567,39 @@ def _process_options_alert(alert: Dict[str, Any], state: Dict[str, Any]) -> Dict
                 entry_slippage_meta['phantom_ask_rejected'] = True
                 entry_slippage_meta['applied'] = False
             else:
-                # SYMMETRY WITH THE EXIT CAP (2026-08-17): the ask is a QUOTE, not a traded price. An
-                # inflated/stale ask books a phantom cost basis exactly like a phantom bid books a
-                # phantom exit. Cap the modeled BUY fill to a sane band ABOVE the last real trade
-                # (LTP). env OPTIONS_ENTRY_ASK_MAX_PCT (default 1.0%).
-                _acap = float(os.getenv("OPTIONS_ENTRY_ASK_MAX_PCT", "1.0")) / 100.0
+                # CALIBRATED AGAINST REAL LIVE FILLS (2026-10-05). The PE pilot gave 19 real
+                # broker fills and they say this model was wrong in two ways.
+                #
+                # 1. THE CAP WAS TIGHTER THAN A NORMAL SPREAD. It clamped the modelled fill at
+                #    ltp + 1.0%, but the median FULL spread on the contracts we actually trade is
+                #    1.53% (p90 3.59%), so the real ask sits ~0.76% above LTP by construction and
+                #    the cap bit on 13 of 19 fills. Measured over 09-29..10-01 that optimism was
+                #    worth Rs319/trade - more than the entire edge PAPER was reporting. The cap is
+                #    now a PHANTOM guard only (25%, matching the exit-side phantom threshold), so
+                #    a genuinely wide real book is modelled, not flattered.
+                #
+                # 2. A MARKET ORDER DOES NOT FILL AT THE ASK. 15 of 19 real fills were WORSE than
+                #    the ask, median +0.46% above it (p90 +1.41%) - the book moves in the ~360ms
+                #    between decision and fill, and size walks it. The model booked exactly the
+                #    ask and so understated every entry.
+                #
+                # Net effect on the measured day: real fills were +1.45% vs LTP median; this
+                # model now produces ask + 0.46%, which reproduces that.
+                # OPTIONS_ENTRY_IMPACT_PCT=0 reverts to booking flat at the ask.
+                _acap = float(os.getenv("OPTIONS_ENTRY_ASK_MAX_PCT", "25.0")) / 100.0
                 if _entry_ideal_ltp > 0 and _real_ask > _entry_ideal_ltp * (1 + _acap):
                     actual_entry_premium = round(_entry_ideal_ltp * (1 + _acap), 2)
                     entry_slippage_meta['ask_capped'] = True
                     logger.warning(
                         f"ENTRY_ASK_CAPPED: {selected_contract.symbol} | ask ₹{_real_ask:.2f} is "
                         f"{(_real_ask / _entry_ideal_ltp - 1) * 100:.1f}% above ltp ₹{_entry_ideal_ltp:.2f} "
-                        f"— booking at ₹{actual_entry_premium:.2f}"
+                        f"— phantom, booking at ₹{actual_entry_premium:.2f}"
                     )
                 else:
-                    actual_entry_premium = _real_ask
+                    _impact = float(os.getenv("OPTIONS_ENTRY_IMPACT_PCT", "0.46")) / 100.0
+                    actual_entry_premium = round(_real_ask * (1 + _impact), 2)
+                    entry_slippage_meta['impact_pct'] = round(_impact * 100, 3)
+                    entry_slippage_meta['modelled_on'] = 'ask+impact'
                 entry_slippage_meta['applied'] = True
         else:
             # STALE-LTP GUARD (PAPER): AngelOne's LTP is the last-traded price and goes stale on

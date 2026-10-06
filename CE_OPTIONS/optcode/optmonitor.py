@@ -2151,8 +2151,13 @@ class OptionPositionMonitor:
         }
         if OptionsTradingConfig.TRADING_MODE == "LIVE":
             return meta  # LIVE already books the real broker average_price
+        # CACHED DEPTH, NOT AN API CALL (2026-10-05) - the monitor's own bulk quote already
+        # recorded bid/ask for every position this cycle (OPTIONS_BULK_QUOTE_MODE=FULL).
         try:
-            md = self.broker.get_market_data(position.symbol, "NFO") if self.broker else None
+            _d = self.broker.get_quote_depth(position.symbol) if self.broker else None
+            md = {'bid': _d[0], 'ask': _d[1]} if _d else None
+            if md is None and self.broker:           # exits are rare; one call is acceptable here
+                md = self.broker.get_market_data(position.symbol, "NFO")
         except Exception as e:
             logger.debug(f"SLIPPAGE_EXIT: depth fetch failed | {position.symbol} | {str(e)[:60]}")
             md = None
@@ -2207,7 +2212,13 @@ class OptionPositionMonitor:
                 _ref = _mid
             else:
                 _ref = ltp if ltp > 0 else float(intended_exit or 0.0)
-            _cap = float(os.getenv("OPTIONS_EXIT_SLIPPAGE_MAX_PCT", "5.0")) / 100.0
+            # WIDENED 5.0 -> 25.0 (2026-10-05). A real LIVE exit on 10-05 filled at -5.00%
+            # (FORCEMOT27OCT2616750PE: decided Rs707.70, filled Rs672.35), i.e. right at the old
+            # cap, so the cap was clamping honest wide-book fills rather than only phantoms.
+            # Over 09-29..10-01 it capped 265 exits, 94% of them on a REAL book, worth
+            # Rs101,268 of understated cost. Phantom bids are handled separately by the
+            # PHANTOM_LTP_REJECTED guard, so this only needs to be a sanity bound.
+            _cap = float(os.getenv("OPTIONS_EXIT_SLIPPAGE_MAX_PCT", "25.0")) / 100.0
             if _is_short:
                 _fill = min(ask, _ref * (1 + _cap)) if _ref > 0 else ask   # cover BUYS at ask, capped above LTP
             else:
